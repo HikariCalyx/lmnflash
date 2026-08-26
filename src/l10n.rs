@@ -113,14 +113,21 @@ pub fn bundle_for(language: Language) -> Bundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluent::FluentResource;
+    use fluent_syntax::ast;
     use std::collections::HashSet;
 
-    fn message_ids(bundle: &Bundle) -> HashSet<String> {
-        bundle
-            .bundle
-            .messages
-            .iter()
-            .map(|(id, _)| id.to_string())
+    /// Collects the ids of all `Message` entries in an FTL source.
+    fn message_ids(source: &str) -> HashSet<String> {
+        let resource = FluentResource::try_new(source.to_owned())
+            .expect("invalid FTL source");
+
+        resource
+            .entries()
+            .filter_map(|entry| match entry {
+                ast::Entry::Message(message) => Some(message.id.name.to_string()),
+                _ => None,
+            })
             .collect()
     }
 
@@ -132,10 +139,10 @@ mod tests {
     /// lost newline that merges two FTL entries into one.
     #[test]
     fn all_bundles_define_the_same_messages() {
-        let en = bundle_for(Language::EnUs);
-        let zh = Bundle::new("zh-Hans", &[include_str!("../l10n/zh-Hans/app.ftl")]);
+        let en = message_ids(include_str!("../l10n/en-US/app.ftl"));
+        let zh = message_ids(include_str!("../l10n/zh-Hans/app.ftl"));
 
-        assert_eq!(message_ids(&en), message_ids(&zh));
+        assert_eq!(en, zh);
     }
 }
 

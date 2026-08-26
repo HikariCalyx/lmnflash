@@ -2656,6 +2656,7 @@ dependencies = [
  "directories",
  "embed-resource",
  "fluent",
+ "fluent-syntax",
  "iced",
  "open",
  "rsa",
