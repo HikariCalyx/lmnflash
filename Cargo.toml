@@ -1,0 +1,32 @@
+[package]
+name = "lmnflash"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio", "system", "image"] }
+fluent = "0.16"
+unic-langid = "0.9"
+wry = "0.50"
+winit = "0.30"
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+directories = "5"
+open = "5"
+rsa = { version = "0.9", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+sys-locale = "0.3"
+tokio = { version = "1", features = ["rt"] }
+
+[build-dependencies]
+embed-resource = "2"
+
+[profile.release]
+opt-level = 'z'     # Optimize for size
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to allow more optimizations
+panic = 'abort'     # Remove stack unwinding logic
+strip = true        # Automatically strip symbols from the binary

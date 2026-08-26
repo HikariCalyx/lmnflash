@@ -1,0 +1,78 @@
+# Localization strings for LMN Flash (en-US).
+app-title = LMN Flash
+
+mode-1 = Firmware Lookup
+mode-2 = Mode 2
+mode-3 = Mode 3
+
+login-dialog-title = LMN Flash — Log in
+login-prompt = Log in to look up firmware
+login-button = Log in
+login-button-hint = Left-click: built-in browser · Right-click: log in manually
+login-fetching = Fetching login URL…
+login-webview-open = Complete the login in the dialog window.
+login-manual-prompt = Log in with your browser, then paste the SoftwareFix://callback link:
+login-manual-placeholder = SoftwareFix://callback?Authorization=…
+login-open-browser = Open in browser
+login-copy-url = Copy URL
+login-url-label = Login URL
+login-submit = Confirm
+login-cancel = Cancel
+login-back = Back
+login-error = Login failed: { $error }
+login-webview-fallback = The built-in login window could not be opened; please log in with your browser instead.
+
+lookup-mode-row = ROW Smartphones
+lookup-mode-retcn = RETCN Smartphones
+lookup-mode-tablet = Tablets
+lookup-imei-label = IMEI
+lookup-imei-placeholder = 15-digit IMEI
+lookup-button = Look up
+lookup-fetching = Looking up firmware…
+imei-error-digits = IMEI must contain digits only
+imei-error-length = IMEI must be 14 or 15 digits
+imei-error-checksum = IMEI checksum is invalid
+
+tablet-sn-label = Serial number
+tablet-error-sn = Serial number is required
+tablet-copy-password = Copy extraction password
+cn-product-name = Product name
+cn-product-model = Product model
+cn-market-name = Market name
+cn-mtm-compat = Compatible MTM
+cn-latest-version = Latest version
+cn-id = Resource ID
+
+retcn-sn-label = Serial number
+retcn-model-label = XT model code
+retcn-fingerprint-label = Build fingerprint
+retcn-carrier-label = Carrier
+retcn-platform-label = Platform
+retcn-fsg-label = FSG version
+retcn-sim-label = SIM slots
+platform-qualcomm = Qualcomm
+platform-mediatek = MediaTek
+sim-single = Single SIM
+sim-dual = Dual SIM
+retcn-error-model = XT model code is required
+retcn-error-fingerprint = Build fingerprint is required
+retcn-error-carrier = Carrier is required
+retcn-error-sn = Serial number is required
+retcn-error-fsg = FSG version is required for Qualcomm
+fw-market-name = Market name
+fw-model-name = Model name
+fw-sale-model = Sale model
+fw-carrier = Carrier
+fw-publish-date = Publish date
+fw-rom-id = ROM resource ID
+fw-rom-match-id = ROM match ID
+fw-fingerprint = Fingerprint
+fw-comments = Comments
+fw-copy-uri = Copy Download URI
+fw-copy-tool = Copy Tool URI
+fw-copy-raw = Copy raw responselang-en = English
+lang-zh = 简体中文
+debug-info = Debug info
+debug-account = Account
+debug-token = Bearer token
+debug-uuid = Client UUID

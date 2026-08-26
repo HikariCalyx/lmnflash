@@ -1,0 +1,27 @@
+#include <winresrc.h>
+
+// ── Main application icon ──────────────────────────────────────────────────
+MAIN_ICON   ICON    "src/icon.ico"
+
+// ── Version info is generated dynamically by build.rs from Cargo.toml ──────
+
+// ── Windows 10/11 compatibility manifest (embedded as RT_MANIFEST) ──────────
+//
+// This declares DPI awareness and supported OS versions, preventing Windows
+// from applying legacy compatibility shims.
+//
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+// ── Custom RCDATA entries ──────────────────────────────────────────────────
+//
+// Syntax:
+//   <NAME>  RCDATA  "path/to/file"
+//
+// Read at runtime with:
+//   let hres = FindResourceW(hmodule, name, RT_RCDATA);
+//   let data = LockResource(LoadResource(hmodule, hres));
+//
+// ── Examples (uncomment and adjust paths as needed):
+//
+// EMBEDDED_CONFIG  RCDATA  "config/defaults.json"
+// SPLASH_PNG       RCDATA  "assets/splash.png"
