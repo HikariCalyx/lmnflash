@@ -19,9 +19,10 @@ impl Bundle {
             let resource = FluentResource::try_new((*source).to_owned())
                 .expect("failed to parse FTL resource");
 
-            bundle
-                .add_resource(resource)
-                .expect("failed to add FTL resource");
+            // Duplicate ids across sources (the English fallback resource)
+            // come back as `FluentError::Overriding`; the existing entry is
+            // kept and the error is informational, so it is safe to ignore.
+            let _ = bundle.add_resource(resource);
         }
 
         Self { bundle }
