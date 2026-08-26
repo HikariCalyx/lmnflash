@@ -70,7 +70,8 @@ fw-fingerprint = Fingerprint
 fw-comments = Comments
 fw-copy-uri = Copy Download URI
 fw-copy-tool = Copy Tool URI
-fw-copy-raw = Copy raw responselang-en = English
+fw-copy-raw = Copy raw response
+lang-en = English
 lang-zh = 简体中文
 debug-info = Debug info
 debug-account = Account

@@ -113,7 +113,6 @@ pub struct FirmwareInfo {
     pub fingerprint: String,
     pub rom_id: String,
     pub rom_uri: String,
-    pub tool_id: String,
     pub tool_uri: String,
     /// The raw API response, preserved for copying (like `--raw` in imeiget.sh).
     pub raw_json: String,
@@ -528,7 +527,6 @@ fn parse_firmware_item(item: &serde_json::Value, raw_json: String) -> FirmwareIn
         fingerprint: string(item, "fingerPrint"),
         rom_id: string(rom, "id"),
         rom_uri: string(rom, "uri"),
-        tool_id: string(tool, "id"),
         tool_uri: string(tool, "uri"),
         raw_json,
     }
