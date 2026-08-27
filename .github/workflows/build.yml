@@ -78,7 +78,6 @@ jobs:
             pkg-config
 
       - name: Build
-        working-directory: lmnflash
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Install UPX (Windows)
