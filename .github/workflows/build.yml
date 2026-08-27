@@ -29,13 +29,13 @@ jobs:
           - target: aarch64-pc-windows-msvc
             runner: windows-11-arm
             binary: lmnflash.exe
-          # Linux (eframe/egui + rusb/libusb + rfd/GTK3 deps installed below)
+          # Linux (iced + rusb/libusb + wry/WebKitGTK deps installed below)
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
             binary: lmnflash
             upx: true
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-24.04-arm
             binary: lmnflash
             upx: true
 
@@ -55,12 +55,13 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.runner }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ matrix.runner }}-${{ matrix.target }}-cargo-
 
-      # eframe/egui needs X11/Wayland headers; fastboot needs libusb;
-      # rfd needs GTK 3 for the file-picker dialog.
+      # iced needs X11/Wayland headers; fastboot needs libusb;
+      # wry's webview backend needs WebKitGTK 4.1 + libsoup3 + GTK 3
+      # (only available on Ubuntu 24.04+).
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -74,6 +75,8 @@ jobs:
             libxcb-xfixes0-dev \
             libxrandr-dev \
             libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
             libusb-1.0-0-dev \
             pkg-config
 
