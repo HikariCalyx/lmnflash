@@ -114,6 +114,11 @@ pub struct FirmwareInfo {
     pub rom_id: String,
     pub rom_uri: String,
     pub tool_uri: String,
+    /// File name taken from the download URL (percent-decoded).
+    pub file_name: String,
+    /// Download size as a human-readable string (e.g. "1.5 GB"); empty
+    /// when the server did not report one.
+    pub file_size: String,
     /// The raw API response, preserved for copying (like `--raw` in imeiget.sh).
     pub raw_json: String,
 }
@@ -130,6 +135,11 @@ pub struct CnTabletInfo {
     pub download_url: String,
     /// Derived from the `Last-Modified` header of the download URL.
     pub publish_date: String,
+    /// File name taken from the download URL (percent-decoded).
+    pub file_name: String,
+    /// Download size as a human-readable string (e.g. "1.5 GB"); empty
+    /// when the server did not report one.
+    pub file_size: String,
     /// Extraction (unzip) password for the firmware package.
     pub unzip_password: String,
 }
@@ -391,10 +401,16 @@ pub fn fetch_cn_tablet(sn: &str) -> Result<Option<CnTabletInfo>, String> {
         .join(", ");
 
     let download_url = string("download_url");
-    let publish_date = if download_url.is_empty() {
-        String::new()
+    let (publish_date, file_size) = if download_url.is_empty() {
+        (String::new(), String::new())
     } else {
-        fetch_last_modified(&agent, &download_url).unwrap_or_default()
+        match fetch_download_headers(&agent, &download_url) {
+            Ok(headers) => (
+                headers.last_modified,
+                headers.content_length.map(human_size).unwrap_or_default(),
+            ),
+            Err(_) => (String::new(), String::new()),
+        }
     };
 
     Ok(Some(CnTabletInfo {
@@ -404,8 +420,10 @@ pub fn fetch_cn_tablet(sn: &str) -> Result<Option<CnTabletInfo>, String> {
         mtm_compat,
         latest_version: string("latest_version"),
         id: string("id"),
-        download_url,
+        download_url: download_url.clone(),
         publish_date,
+        file_name: filename_from_url(&download_url),
+        file_size,
         unzip_password: CN_UNZIP_PASSWORD.to_string(),
     }))
 }
@@ -478,30 +496,139 @@ fn post_lookup(
     let mut info = parse_firmware_item(item, raw_json);
 
     // Fall back to the download URL's Last-Modified header when the API
-    // did not provide a publish date.
-    if info.publish_date.is_empty() && !info.rom_uri.is_empty() {
-        info.publish_date = fetch_last_modified(agent, &info.rom_uri).unwrap_or_default();
+    // did not provide a publish date; also read the download size.
+    if !info.rom_uri.is_empty() {
+        if let Ok(headers) = fetch_download_headers(agent, &info.rom_uri) {
+            if info.publish_date.is_empty() {
+                info.publish_date = headers.last_modified;
+            }
+
+            info.file_size = headers
+                .content_length
+                .map(human_size)
+                .unwrap_or_default();
+        }
     }
 
     Ok(info)
 }
 
-/// Reads the `Last-Modified` header of a download URL (HEAD first, falling
-/// back to a Range GET since some CDNs reject HEAD).
-fn fetch_last_modified(agent: &ureq::Agent, url: &str) -> Result<String, String> {
-    let response = match agent.head(url).call() {
-        Ok(response) => response,
-        Err(_) => agent
-            .get(url)
-            .set("Range", "bytes=0-0")
-            .call()
-            .map_err(|e| format!("download URL request failed: {e}"))?,
+/// Headers of interest read from a download URL.
+struct DownloadHeaders {
+    last_modified: String,
+    content_length: Option<u64>,
+}
+
+/// Reads the `Last-Modified` and `Content-Length` headers of a download URL
+/// (HEAD first, falling back to a Range GET since some CDNs reject HEAD).
+fn fetch_download_headers(
+    agent: &ureq::Agent,
+    url: &str,
+) -> Result<DownloadHeaders, String> {
+    let (is_head, response) = match agent.head(url).call() {
+        Ok(response) => (true, response),
+        Err(_) => (
+            false,
+            agent
+                .get(url)
+                .set("Range", "bytes=0-0")
+                .call()
+                .map_err(|e| format!("download URL request failed: {e}"))?,
+        ),
     };
 
-    Ok(response
+    let last_modified = response
         .header("Last-Modified")
         .unwrap_or_default()
-        .to_string())
+        .to_string();
+
+    let content_length = if is_head {
+        response
+            .header("Content-Length")
+            .and_then(|value| value.parse::<u64>().ok())
+    } else {
+        // A Range GET reports the full size in `Content-Range`
+        // (e.g. `bytes 0-0/123456`); `Content-Length` only covers the range.
+        response
+            .header("Content-Range")
+            .and_then(|value| value.rsplit('/').next())
+            .and_then(|total| total.parse::<u64>().ok())
+            .or_else(|| {
+                response
+                    .header("Content-Length")
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
+    };
+
+    Ok(DownloadHeaders {
+        last_modified,
+        content_length,
+    })
+}
+
+/// Extracts the file name from a download URL (percent-decoded).
+fn filename_from_url(url: &str) -> String {
+    let path = url.split('?').next().unwrap_or(url);
+    let name = path.rsplit('/').next().unwrap_or_default();
+
+    percent_decode(name)
+}
+
+/// Decodes percent escapes (`%20` etc.) in a URL component.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                output.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+
+        output.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Formats a byte count for display (e.g. `1.5 GB`).
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+
+    let mut value = bytes as f64;
+    let mut unit = 0;
+
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        return format!("{bytes} B");
+    }
+
+    let mut text = format!("{value:.2}");
+    if text.contains('.') {
+        text = text.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+
+    format!("{text} {}", UNITS[unit])
 }
 
 fn parse_firmware_item(item: &serde_json::Value, raw_json: String) -> FirmwareInfo {
@@ -516,6 +643,8 @@ fn parse_firmware_item(item: &serde_json::Value, raw_json: String) -> FirmwareIn
             .to_owned()
     };
 
+    let rom_uri = string(rom, "uri");
+
     FirmwareInfo {
         market_name: string(item, "marketName"),
         model_name: string(item, "modelName"),
@@ -526,8 +655,10 @@ fn parse_firmware_item(item: &serde_json::Value, raw_json: String) -> FirmwareIn
         rom_match_id: string(item, "romMatchId"),
         fingerprint: string(item, "fingerPrint"),
         rom_id: string(rom, "id"),
-        rom_uri: string(rom, "uri"),
+        rom_uri: rom_uri.clone(),
         tool_uri: string(tool, "uri"),
+        file_name: filename_from_url(&rom_uri),
+        file_size: String::new(),
         raw_json,
     }
 }
@@ -663,5 +794,30 @@ mod tests {
             interface_name(TABLET_ROW_ENDPOINT),
             "getNewResourceBySNinterface"
         );
+    }
+
+    #[test]
+    fn human_sizes_are_readable() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(3_221_225_472), "3 GB");
+        assert_eq!(human_size(1_099_511_627_776), "1 TB");
+    }
+
+    #[test]
+    fn extracts_file_name_from_url() {
+        assert_eq!(
+            filename_from_url(
+                "https://cdn.example.com/roms/SAVANNAH_RETAIL_10_ROM.zip?token=abc"
+            ),
+            "SAVANNAH_RETAIL_10_ROM.zip"
+        );
+        assert_eq!(
+            filename_from_url("https://cdn.example.com/roms/My%20ROM%2B1.zip"),
+            "My ROM+1.zip"
+        );
+        assert_eq!(filename_from_url(""), "");
     }
 }

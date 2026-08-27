@@ -1206,7 +1206,7 @@ fn cn_tablet_info_view<'a>(
     l10n: &'a l10n::Bundle,
     info: &firmware::CnTabletInfo,
 ) -> Element<'a, Message> {
-    let fields: [(&str, &str); 7] = [
+    let fields: [(&str, &str); 9] = [
         ("cn-product-name", &info.product_name),
         ("cn-product-model", &info.product_model),
         ("cn-market-name", &info.market_name),
@@ -1214,6 +1214,8 @@ fn cn_tablet_info_view<'a>(
         ("cn-latest-version", &info.latest_version),
         ("cn-id", &info.id),
         ("fw-publish-date", &info.publish_date),
+        ("fw-file-name", &info.file_name),
+        ("fw-file-size", &info.file_size),
     ];
 
     let copy_uri_button = if info.download_url.is_empty() {
@@ -1254,12 +1256,14 @@ fn firmware_info_view<'a>(
     l10n: &'a l10n::Bundle,
     info: &firmware::FirmwareInfo,
 ) -> Element<'a, Message> {
-    let fields: [(&str, &str); 9] = [
+    let fields: [(&str, &str); 11] = [
         ("fw-market-name", &info.market_name),
         ("fw-model-name", &info.model_name),
         ("fw-sale-model", &info.sale_model),
         ("fw-carrier", &info.carrier),
         ("fw-publish-date", &info.publish_date),
+        ("fw-file-name", &info.file_name),
+        ("fw-file-size", &info.file_size),
         ("fw-rom-id", &info.rom_id),
         ("fw-rom-match-id", &info.rom_match_id),
         ("fw-fingerprint", &info.fingerprint),
