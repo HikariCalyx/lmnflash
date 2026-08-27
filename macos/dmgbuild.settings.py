@@ -1,10 +1,10 @@
 format = "UDBZ"
-files = ["OSTRemote 3.app"]
+files = ["LMNFlash.app"]
 
-badge_icon = "OSTRemote 3.app/Contents/Resources/OSTRemote3.icns"
+badge_icon = "LMNFlash.app/Contents/Resources/lmnflash.icns"
 
 symlinks = {"Applications": "/Applications"}
-icon_locations = {"OSTRemote 3.app": (140, 120), "Applications": (500, 120)}
+icon_locations = {"LMNFlash.app": (140, 120), "Applications": (500, 120)}
 
 background = "builtin-arrow"
 

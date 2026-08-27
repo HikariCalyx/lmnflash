@@ -3,7 +3,7 @@ import os
 import semver
 import toml
 
-with open(os.path.join(os.path.dirname(__file__), "..", "ostremote3", "Cargo.toml")) as f:
+with open(os.path.join(os.path.dirname(__file__), "..", "Cargo.toml")) as f:
     cargo_toml = toml.load(f)
 
 
@@ -15,15 +15,15 @@ version = semver.Version.parse(cargo_toml["package"]["version"])
 		<key>CFBundleDevelopmentRegion</key>
 		<string>en</string>
 		<key>CFBundleExecutable</key>
-		<string>ostremote3</string>
+		<string>lmnflash</string>
 		<key>CFBundleIdentifier</key>
-		<string>com.hikaricalyx.ostremote3</string>
+		<string>com.hikaricalyx.lmnflash</string>
 		<key>CFBundleInfoDictionaryVersion</key>
 		<string>6.0</string>
 		<key>CFBundleName</key>
-		<string>OSTRemote 3</string>
+		<string>LMNFlash</string>
 		<key>CFBundleIconFile</key>
-		<string>OSTRemote3.icns</string>
+		<string>lmnflash.icns</string>
 		<key>CFBundlePackageType</key>
 		<string>APPL</string>
 		<key>CFBundleShortVersionString</key>
