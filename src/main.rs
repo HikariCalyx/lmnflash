@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod fastboot_info;
 mod firmware;
 mod l10n;
 mod login;
@@ -10,7 +11,7 @@ mod webview;
 
 use iced::widget::{
     button, column, container, horizontal_rule, mouse_area, pick_list, row,
-    stack, text, text_input,
+    stack, text, text_input, Space,
 };
 use iced::{Alignment, Element, Fill, Font, Size, Task};
 
@@ -195,6 +196,23 @@ enum RetcnField {
     FsgVersion,
 }
 
+/// State of the "fill from fastboot" feature.
+#[derive(Debug, Clone)]
+enum FastbootStatus {
+    Fetching,
+    Filled(String),
+    Error(String),
+}
+
+/// Modal state for choosing among multiple fastboot devices.
+#[derive(Debug, Clone, Default)]
+enum DevicePicker {
+    #[default]
+    Closed,
+    Fetching,
+    Open(Vec<String>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SimCount {
     #[default]
@@ -230,6 +248,8 @@ struct RetcnInput {
     platform: firmware::Platform,
     fsg_version: String,
     sim_count: SimCount,
+    fastboot_status: Option<FastbootStatus>,
+    device_picker: DevicePicker,
 }
 
 /// Inputs for the tablet lookup.
@@ -348,6 +368,11 @@ enum Message {
     RetcnPlatformSelected(firmware::Platform),
     RetcnSimCountSelected(SimCount),
     RetcnFieldChanged(RetcnField, String),
+    FastbootFillRequested,
+    FastbootDevicesFetched(Result<fastboot_info::DeviceList, String>),
+    FastbootDeviceSelected(String),
+    FastbootDevicePickerCancelled,
+    FastbootFillFinished(Result<(String, fastboot_info::DeviceInfo), String>),
     RetcnLookupRequested,
     TabletSnChanged(String),
     TabletLookupRequested,
@@ -527,6 +552,110 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::FastbootFillRequested => {
+            if !matches!(state.lookup.retcn.device_picker, DevicePicker::Closed) {
+                return Task::none();
+            }
+
+            state.lookup.retcn.device_picker = DevicePicker::Fetching;
+            state.lookup.retcn.fastboot_status = Some(FastbootStatus::Fetching);
+
+            Task::perform(
+                async {
+                    tokio::task::spawn_blocking(fastboot_info::list_devices)
+                        .await
+                        .unwrap_or_else(|e| {
+                            Err(format!("background task failed: {e}"))
+                        })
+                },
+                Message::FastbootDevicesFetched,
+            )
+        }
+        Message::FastbootDevicesFetched(result) => match result {
+            Ok(list) if list.supported.len() == 1 => {
+                state.lookup.retcn.device_picker = DevicePicker::Closed;
+                let serial = list.supported[0].clone();
+                start_fastboot_fill(serial)
+            }
+            Ok(list) if list.supported.len() > 1 => {
+                state.lookup.retcn.fastboot_status = None;
+                state.lookup.retcn.device_picker = DevicePicker::Open(list.supported);
+                Task::none()
+            }
+            Ok(list) => {
+                // No supported device: distinguish "nothing at all" from
+                // "only unsupported (non-Motorola) devices".
+                state.lookup.retcn.device_picker = DevicePicker::Closed;
+
+                let error_id = if list.total == 0 {
+                    "retcn-fill-fastboot-no-device"
+                } else {
+                    "retcn-fill-fastboot-unsupported-device"
+                };
+                state.lookup.retcn.fastboot_status =
+                    Some(FastbootStatus::Error(state.l10n.tr(error_id)));
+                Task::none()
+            }
+            Err(error) => {
+                state.lookup.retcn.device_picker = DevicePicker::Closed;
+                state.lookup.retcn.fastboot_status = Some(FastbootStatus::Error(error));
+                Task::none()
+            }
+        },
+        Message::FastbootDeviceSelected(serial) => {
+            state.lookup.retcn.device_picker = DevicePicker::Closed;
+            state.lookup.retcn.fastboot_status = Some(FastbootStatus::Fetching);
+            start_fastboot_fill(serial)
+        }
+        Message::FastbootDevicePickerCancelled => {
+            state.lookup.retcn.device_picker = DevicePicker::Closed;
+            state.lookup.retcn.fastboot_status = None;
+            Task::none()
+        }
+        Message::FastbootFillFinished(result) => {
+            match result {
+                Ok((serial, info)) => {
+                    // Only overwrite fields the device actually reported,
+                    // so partial data does not wipe user input.
+                    if !info.serial_number.is_empty() {
+                        state.lookup.retcn.serial_number = info.serial_number;
+                    }
+                    if !info.imei.is_empty() {
+                        state.lookup.imei_input = info.imei;
+                    }
+                    if !info.model.is_empty() {
+                        state.lookup.retcn.model = info.model;
+                    }
+                    if !info.carrier.is_empty() {
+                        state.lookup.retcn.carrier = info.carrier;
+                    }
+                    if !info.fingerprint.is_empty() {
+                        state.lookup.retcn.fingerprint = info.fingerprint;
+                    }
+                    if !info.fsg_version.is_empty() {
+                        state.lookup.retcn.fsg_version = info.fsg_version;
+                    }
+                    if let Some(platform) = info.platform {
+                        state.lookup.retcn.platform = platform;
+                    }
+                    if let Some(sim_count) = info.sim_count {
+                        state.lookup.retcn.sim_count = match sim_count {
+                            2 => SimCount::Dual,
+                            _ => SimCount::Single,
+                        };
+                    }
+
+                    state.lookup.retcn.fastboot_status =
+                        Some(FastbootStatus::Filled(serial));
+                }
+                Err(error) => {
+                    state.lookup.retcn.fastboot_status =
+                        Some(FastbootStatus::Error(error));
+                }
+            }
+
+            Task::none()
+        }
         Message::RetcnLookupRequested => request_retcn_lookup(state),
         Message::TabletSnChanged(input) => {
             state.lookup.tablet.serial_number = input;
@@ -687,6 +816,20 @@ fn request_lookup(state: &mut State) -> Task<Message> {
     )
 }
 
+/// Reads device info from the selected fastboot device in the background.
+fn start_fastboot_fill(serial: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                fastboot_info::read_device_info(&serial).map(|info| (serial, info))
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FastbootFillFinished,
+    )
+}
+
 /// Validates the RETCN form and starts a RETCN firmware lookup.
 fn request_retcn_lookup(state: &mut State) -> Task<Message> {
     let token = match &state.login {
@@ -826,7 +969,51 @@ fn view(state: &State) -> Element<'_, Message> {
     .padding(8)
     .width(Fill);
 
-    column![content_area, horizontal_rule(1), tab_bar].into()
+    let base = column![content_area, horizontal_rule(1), tab_bar];
+
+    // Device picker modal: shown when more than one fastboot device is
+    // connected. Clicks on the dimmed backdrop cancel the selection.
+    if let DevicePicker::Open(devices) = &state.lookup.retcn.device_picker {
+        let device_buttons = iced::widget::Column::with_children(
+            devices.iter().map(|serial| {
+                button(text(serial.clone()))
+                    .width(Fill)
+                    .on_press(Message::FastbootDeviceSelected(serial.clone()))
+                    .into()
+            }),
+        )
+        .spacing(8);
+
+        let card = container(
+            column![
+                text(state.l10n.tr("retcn-pick-device-title")).size(18.0),
+                device_buttons,
+                button(text(state.l10n.tr("login-cancel")))
+                    .on_press(Message::FastbootDevicePickerCancelled),
+            ]
+            .spacing(12)
+            .align_x(Alignment::Center),
+        )
+        .padding(16)
+        .width(340)
+        .style(container::rounded_box);
+
+        let backdrop = mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::FastbootDevicePickerCancelled);
+
+        return stack![
+            base,
+            backdrop,
+            container(card)
+                .width(Fill)
+                .height(Fill)
+                .center_x(Fill)
+                .center_y(Fill),
+        ]
+        .into();
+    }
+
+    base.into()
 }
 
 fn placeholder_view(state: &State) -> Element<'_, Message> {
@@ -1027,6 +1214,17 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                 button(text(l10n.tr("lookup-button"))).on_press(Message::RetcnLookupRequested)
             };
 
+            let fastboot_fetching = matches!(
+                state.lookup.retcn.fastboot_status,
+                Some(FastbootStatus::Fetching)
+            );
+            let fill_button = if fastboot_fetching {
+                button(text(l10n.tr("retcn-fill-fastboot-fetching")))
+            } else {
+                button(text(l10n.tr("retcn-fill-fastboot")))
+                    .on_press(Message::FastbootFillRequested)
+            };
+
             let platform_options: Vec<Labeled<firmware::Platform>> = firmware::Platform::ALL
                 .iter()
                 .map(|&platform| Labeled {
@@ -1076,7 +1274,7 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                         .on_input(|value| {
                             Message::RetcnFieldChanged(RetcnField::FsgVersion, value)
                         })
-                        .width(120),
+                        .width(240),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center)
@@ -1131,13 +1329,36 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                     text(l10n.tr("retcn-platform-label")).size(14.0),
                     platform_dropdown,
                     platform_extra,
-                    lookup_button,
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
+                row![fill_button, lookup_button]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
             ]
             .spacing(8)
             .align_x(Alignment::Center);
+
+            let mut content = content;
+
+            match &state.lookup.retcn.fastboot_status {
+                Some(FastbootStatus::Filled(serial)) => {
+                    content = content.push(
+                        text(l10n.tr_with_args(
+                            "retcn-fill-fastboot-filled",
+                            &[("serial", serial.clone())],
+                        ))
+                        .size(13.0)
+                        .style(text::success),
+                    );
+                }
+                Some(FastbootStatus::Error(error)) => {
+                    content = content.push(
+                        text(error.clone()).size(13.0).style(text::danger),
+                    );
+                }
+                _ => {}
+            }
 
             push_lookup_status(state, l10n, content).into()
         }

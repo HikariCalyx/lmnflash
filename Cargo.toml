@@ -1,6 +1,6 @@
 [package]
 name = "lmnflash"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [dependencies]
@@ -20,6 +20,7 @@ rsa = { version = "0.9", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
 tokio = { version = "1", features = ["rt"] }
+fastboot = { path = "fastboot" }
 
 [build-dependencies]
 embed-resource = "2"

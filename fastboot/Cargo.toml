@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rusb = "0.9"
+rusb = { version = "0.9", features = ["vendored"] }

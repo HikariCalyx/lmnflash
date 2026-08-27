@@ -15,6 +15,12 @@ impl Bundle {
 
         let mut bundle = FluentBundle::new(vec![langid]);
 
+        // Fluent wraps interpolated values in U+2068/U+2069 bidi isolation
+        // marks by default; most UI fonts have no glyphs for them, so the
+        // marks render as boxes (□) around the value. All of our messages
+        // are LTR (English/Chinese), so isolation can be disabled.
+        bundle.set_use_isolating(false);
+
         for source in sources {
             let resource = FluentResource::try_new((*source).to_owned())
                 .expect("failed to parse FTL resource");
@@ -144,6 +150,22 @@ mod tests {
         let zh = message_ids(include_str!("../l10n/zh-Hans/app.ftl"));
 
         assert_eq!(en, zh);
+    }
+
+    /// Interpolated values must not be wrapped in bidi isolation marks —
+    /// they have no glyphs in common UI fonts and render as boxes (□).
+    #[test]
+    fn interpolated_values_are_not_wrapped_in_bidi_isolates() {
+        let bundle = bundle_for(Language::EnUs);
+
+        let text = bundle.tr_with_args(
+            "retcn-fill-fastboot-filled",
+            &[("serial", "ZY22LHBR98".to_string())],
+        );
+
+        assert_eq!(text, "Filled from device ZY22LHBR98");
+        assert!(!text.contains('\u{2068}'));
+        assert!(!text.contains('\u{2069}'));
     }
 }
 

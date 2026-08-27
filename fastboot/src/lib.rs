@@ -111,6 +111,13 @@ impl FastbootDevice {
         Ok(String::from_utf8_lossy(&r).trim_end_matches('\0').to_string())
     }
 
+    /// Runs `getvar all` and returns every line the device reports
+    /// (e.g. `(bootloader) serialno: ZY22ABC`).
+    pub fn getvar_all(&self) -> Result<Vec<String>, String> {
+        self.write(b"getvar:all")?;
+        self.read_info()
+    }
+
     /// Query the device's max-download-size and update the internal limit.
     pub fn refresh_max_download(&mut self) {
         if let Ok(val) = self.getvar("max-download-size") {
