@@ -1,0 +1,204 @@
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Windows & Linux ────────────────────────────────────────────────────────
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows (x86_64 and i686 cross-compile from the x86_64 runner;
+          # aarch64 builds natively on the Windows ARM runner)
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            binary: lmnflash.exe
+            upx: true
+          - target: i686-pc-windows-msvc
+            runner: windows-latest
+            binary: lmnflash.exe
+            upx: true
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            binary: lmnflash.exe
+          # Linux (eframe/egui + rusb/libusb + rfd/GTK3 deps installed below)
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            binary: lmnflash
+            upx: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            binary: lmnflash
+            upx: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # eframe/egui needs X11/Wayland headers; fastboot needs libusb;
+      # rfd needs GTK 3 for the file-picker dialog.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxrandr-dev \
+            libgtk-3-dev \
+            libusb-1.0-0-dev \
+            pkg-config
+
+      - name: Build
+        working-directory: lmnflash
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Install UPX (Windows)
+        if: matrix.upx && runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri https://github.com/upx/upx/releases/download/v5.2.0/upx-5.2.0-win64.zip -OutFile upx.zip
+          Expand-Archive upx.zip -DestinationPath upx
+          "$PWD\upx\upx-5.2.0-win64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install UPX (Linux)
+        if: matrix.upx && runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y upx-ucl
+
+      - name: Run UPX
+        if: matrix.upx
+        shell: bash
+        run: upx --best --lzma target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmnflash-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          if-no-files-found: error
+
+  # ── macOS .app bundle + DMG (universal: x86_64 + aarch64) ────────────────
+  build-macos:
+    name: macOS (.app + DMG)
+    runs-on: macos-26
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      # build.sh reads these to point the x86_64 slice at the Rosetta
+      # Homebrew prefix so rusb finds the matching-arch libusb.
+      X86_64_PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+      X86_64_LIBRARY_PATH: /usr/local/lib
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      # Install arm64 libusb (native Homebrew prefix: /opt/homebrew)
+      - name: Install arm64 dependencies
+        run: brew install libusb pkg-config
+
+      # Install x86_64 libusb via a Rosetta 2 Homebrew prefix (/usr/local).
+      # rusb links libusb via pkg-config; each slice must link against a
+      # matching-arch library.
+      - name: Install x86_64 dependencies (Rosetta)
+        run: |
+          softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
+          if [[ ! -f /usr/local/bin/brew ]]; then
+            arch -x86_64 /bin/bash -c \
+              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+              < /dev/null
+          fi
+          arch -x86_64 /usr/local/bin/brew install libusb pkg-config
+
+      - name: Install Python dependencies
+        run: pip3 install --break-system-packages semver toml mako dmgbuild
+
+      - name: Build .app bundle + DMG
+        run: bash macos/build.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmnflash-macos-dmg
+          path: dist/lmnflash-macos_unsigned.dmg
+          if-no-files-found: error
+
+  # ── GitHub Release ─────────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [build, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename artifacts for release
+        run: |
+          set -euo pipefail
+          mkdir release
+
+          # Windows
+          cp artifacts/lmnflash-x86_64-pc-windows-msvc/lmnflash.exe   release/lmnflash-win64.exe
+          cp artifacts/lmnflash-i686-pc-windows-msvc/lmnflash.exe     release/lmnflash-win32.exe
+          cp artifacts/lmnflash-aarch64-pc-windows-msvc/lmnflash.exe  release/lmnflash-win-arm64.exe
+
+          # Linux
+          cp artifacts/lmnflash-x86_64-unknown-linux-gnu/lmnflash     release/lmnflash-linux-x86_64
+          cp artifacts/lmnflash-aarch64-unknown-linux-gnu/lmnflash    release/lmnflash-linux-arm64
+
+          # macOS
+          cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
