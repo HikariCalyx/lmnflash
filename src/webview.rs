@@ -275,7 +275,7 @@ fn run_dialog(title: &str, login_url: &str) -> Result<String, String> {
 #[cfg(target_os = "linux")]
 fn run_dialog(title: &str, login_url: &str) -> Result<String, String> {
     use gtk::prelude::*;
-    use wry::WebViewBuilderExtUnix;
+    use wry::{WebViewBuilder, WebViewBuilderExtUnix};
 
     gtk::init().map_err(|e| format!("failed to initialize GTK: {e}"))?;
 
