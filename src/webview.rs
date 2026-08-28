@@ -2,8 +2,9 @@
 //!
 //! winit 0.30 allows only ONE event loop per process, and iced already owns
 //! it. The dialog therefore runs as a separate invocation of our own binary
-//! (`--login-dialog` mode), which also isolates WebView2 from the main
-//! process. The parent passes the dialog title and login URL over stdin and
+//! (`--login-dialog` mode), which also isolates the WebView (WebView2 on
+//! Windows, WKWebView on macOS) from the main process. The parent passes the
+//! dialog title and login URL over stdin and
 //! reads the captured `SoftwareFix://callback` URL back from stdout.
 
 use std::process::{Command, Stdio};
@@ -87,17 +88,17 @@ pub fn show_login_dialog(title: &str, login_url: &str) -> Result<String, String>
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn run_dialog(_title: &str, _login_url: &str) -> Result<String, String> {
-    Err("the embedded webview is only supported on Windows".to_string())
+    Err("the embedded webview is only supported on Windows and macOS".to_string())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 enum DialogUserEvent {
     Callback(String),
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 struct DialogApp {
     title: String,
     login_url: String,
@@ -107,7 +108,7 @@ struct DialogApp {
     dialog: Option<(winit::window::Window, wry::WebView)>,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl winit::application::ApplicationHandler<DialogUserEvent> for DialogApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use winit::dpi::{LogicalPosition, LogicalSize};
@@ -210,15 +211,29 @@ impl winit::application::ApplicationHandler<DialogUserEvent> for DialogApp {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run_dialog(title: &str, login_url: &str) -> Result<String, String> {
     use winit::event_loop::EventLoop;
-    use winit::platform::windows::EventLoopBuilderExtWindows;
 
     eprintln!("[webview] creating event loop…");
 
     let mut event_loop_builder = EventLoop::<DialogUserEvent>::with_user_event();
-    event_loop_builder.with_any_thread(true);
+
+    #[cfg(target_os = "windows")]
+    {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        event_loop_builder.with_any_thread(true);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+
+        // `Accessory` keeps this dialog child process out of the Dock and
+        // menu bar, but its window still accepts clicks and keyboard input.
+        event_loop_builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+
     let event_loop = event_loop_builder
         .build()
         .map_err(|e| format!("failed to create event loop: {e}"))?;

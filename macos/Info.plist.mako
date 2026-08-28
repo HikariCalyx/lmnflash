@@ -23,7 +23,7 @@ version = semver.Version.parse(cargo_toml["package"]["version"])
 		<key>CFBundleName</key>
 		<string>LMNFlash</string>
 		<key>CFBundleIconFile</key>
-		<string>lmnflash.icns</string>
+		<string>LMNFlash.icns</string>
 		<key>CFBundlePackageType</key>
 		<string>APPL</string>
 		<key>CFBundleShortVersionString</key>
