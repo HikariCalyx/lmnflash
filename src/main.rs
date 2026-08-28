@@ -22,7 +22,9 @@ pub fn main() -> iced::Result {
         std::process::exit(code);
     }
 
-    let icon = iced::window::icon::from_file_data(include_bytes!("icon.ico"), None).ok();
+    // PNG decodes reliably on all platforms (ICO frames are not always
+    // picked up correctly by iced's image decoder on macOS/Linux).
+    let icon = iced::window::icon::from_file_data(include_bytes!("icon.png"), None).ok();
 
     iced::application(|state: &State| state.l10n.tr("app-title"), update, view)
         .default_font(system_ui_font())
