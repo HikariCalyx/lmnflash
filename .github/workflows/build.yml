@@ -21,11 +21,11 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             binary: lmnflash.exe
-            upx: true
+            upx: false
           - target: i686-pc-windows-msvc
             runner: windows-latest
             binary: lmnflash.exe
-            upx: true
+            upx: false
           - target: aarch64-pc-windows-msvc
             runner: windows-11-arm
             binary: lmnflash.exe
@@ -33,11 +33,11 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
             binary: lmnflash
-            upx: true
+            upx: false
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             binary: lmnflash
-            upx: true
+            upx: false
 
     steps:
       - uses: actions/checkout@v4
