@@ -3,8 +3,8 @@
 //! winit 0.30 allows only ONE event loop per process, and iced already owns
 //! it. The dialog therefore runs as a separate invocation of our own binary
 //! (`--login-dialog` mode), which also isolates the WebView (WebView2 on
-//! Windows, WKWebView on macOS) from the main process. The parent passes the
-//! dialog title and login URL over stdin and
+//! Windows, WKWebView on macOS, WebKitGTK on Linux) from the main process.
+//! The parent passes the dialog title and login URL over stdin and
 //! reads the captured `SoftwareFix://callback` URL back from stdout.
 
 use std::process::{Command, Stdio};
@@ -88,9 +88,9 @@ pub fn show_login_dialog(title: &str, login_url: &str) -> Result<String, String>
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn run_dialog(_title: &str, _login_url: &str) -> Result<String, String> {
-    Err("the embedded webview is only supported on Windows and macOS".to_string())
+    Err("the embedded webview is only supported on Windows, macOS and Linux".to_string())
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -264,5 +264,64 @@ fn run_dialog(title: &str, login_url: &str) -> Result<String, String> {
         Err(_) => Err(dialog_error_rx.try_recv().unwrap_or_else(|_| {
             "login dialog was closed before login completed".to_string()
         })),
+    }
+}
+
+/// Linux dialog: WebKitGTK inside a plain GTK window.
+///
+/// wry cannot embed into a winit window on Linux (X11-only, and GTK's main
+/// loop must run alongside), so the dialog child process runs its own GTK
+/// main loop instead. This works on both X11 and Wayland.
+#[cfg(target_os = "linux")]
+fn run_dialog(title: &str, login_url: &str) -> Result<String, String> {
+    use gtk::prelude::*;
+    use wry::WebViewBuilderExtUnix;
+
+    gtk::init().map_err(|e| format!("failed to initialize GTK: {e}"))?;
+
+    const WIDTH: i32 = 480;
+    const HEIGHT: i32 = 640;
+
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    window.set_title(title);
+    window.set_default_size(WIDTH, HEIGHT);
+    window.set_position(gtk::WindowPosition::Center);
+    window.set_keep_above(true);
+
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    window.add(&vbox);
+
+    let (callback_tx, callback_rx) = mpsc::channel::<String>();
+
+    // Closing the dialog window quits the GTK main loop without a callback.
+    window.connect_destroy(|_| gtk::main_quit());
+
+    let _webview = WebViewBuilder::new()
+        .with_url(login_url)
+        .with_navigation_handler(move |uri: String| {
+            if uri.to_ascii_lowercase().starts_with("softwarefix://") {
+                // The OAuth flow finished: capture the callback, cancel the
+                // navigation to the custom scheme and close the dialog.
+                let _ = callback_tx.send(uri);
+                gtk::main_quit();
+                false
+            } else {
+                true
+            }
+        })
+        .build_gtk(&vbox)
+        .map_err(|e| format!("webview unavailable: {e}"))?;
+
+    eprintln!("[webview] dialog window and webview created");
+
+    window.show_all();
+    gtk::main();
+
+    match callback_rx.try_recv() {
+        Ok(callback) => {
+            eprintln!("[webview] callback captured");
+            Ok(callback)
+        }
+        Err(_) => Err("login dialog was closed before login completed".to_string()),
     }
 }

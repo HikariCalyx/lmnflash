@@ -2677,6 +2677,7 @@ dependencies = [
  "fastboot",
  "fluent",
  "fluent-syntax",
+ "gtk",
  "iced",
  "open",
  "rsa",
