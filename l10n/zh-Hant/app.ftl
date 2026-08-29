@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = 韌體查詢
 mode-2 = 模式 2
-mode-3 = 模式 3
+mode-3 = 韌體解密
 
 login-dialog-title = LMN Flash — 登入
 login-prompt = 登入後查詢韌體
@@ -101,3 +101,15 @@ debug-info = 除錯資訊
 debug-account = 帳號
 debug-token = Bearer Token
 debug-uuid = 用戶端 UUID
+
+decrypt-select-dir = 選擇資料夾
+decrypt-description = 此功能用於解密 L 品牌平板韌體中的 t 和 x 檔案。
+decrypt-no-dir = 未選擇資料夾
+decrypt-custom-password = 使用自訂密碼
+decrypt-password-label = 密碼
+decrypt-button = 解密
+decrypt-working = 正在解密韌體檔案…
+decrypt-done = 解密完成：{ $ok } 個成功，{ $fail } 個失敗
+decrypt-no-files = 所選資料夾中未找到 *.x 或 *.t 檔案
+decrypt-password-required = 請輸入解密密碼，或取消勾選「使用自訂密碼」
+decrypt-failed-files = 解密失敗的檔案

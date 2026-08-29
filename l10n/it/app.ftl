@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Ricerca firmware
 mode-2 = Modalità 2
-mode-3 = Modalità 3
+mode-3 = Decifratura firmware
 
 login-dialog-title = LMN Flash — Accedi
 login-prompt = Accedi per cercare il firmware
@@ -101,3 +101,15 @@ debug-info = Informazioni di debug
 debug-account = Account
 debug-token = Token Bearer
 debug-uuid = UUID client
+
+decrypt-select-dir = Seleziona cartella
+decrypt-description = Questa funzione decifra i file t e x utilizzati nel firmware dei tablet del marchio L.
+decrypt-no-dir = Nessuna cartella selezionata
+decrypt-custom-password = Usa password personalizzata
+decrypt-password-label = Password
+decrypt-button = Decifra
+decrypt-working = Decifratura dei file del firmware…
+decrypt-done = Decifratura completata: { $ok } riusciti, { $fail } non riusciti
+decrypt-no-files = Nessun file *.x o *.t trovato nella cartella selezionata
+decrypt-password-required = Inserisci una password o deseleziona "Usa password personalizzata"
+decrypt-failed-files = File non riusciti

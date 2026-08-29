@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Firmwarehaku
 mode-2 = Tila 2
-mode-3 = Tila 3
+mode-3 = Firmwaren salauksen purku
 
 login-dialog-title = LMN Flash — Kirjaudu sisään
 login-prompt = Kirjaudu sisään hakeaksesi firmwarea
@@ -101,3 +101,15 @@ debug-info = Virheenkorjaustiedot
 debug-account = Tili
 debug-token = Bearer-tunnus
 debug-uuid = Asiakkaan UUID
+
+decrypt-select-dir = Valitse kansio
+decrypt-description = Tämä toiminto purkaa L-merkkisten tablettien firmwaren t- ja x-tiedostojen salauksen.
+decrypt-no-dir = Kansiota ei ole valittu
+decrypt-custom-password = Käytä mukautettua salasanaa
+decrypt-password-label = Salasana
+decrypt-button = Pura salaus
+decrypt-working = Puretaan firmware-tiedostojen salausta…
+decrypt-done = Salauksen purku valmis: { $ok } onnistui, { $fail } epäonnistui
+decrypt-no-files = Valitussa kansiossa ei ole *.x- tai *.t-tiedostoja
+decrypt-password-required = Anna salasana tai poista valinta kohdasta "Käytä mukautettua salasanaa"
+decrypt-failed-files = Epäonnistuneet tiedostot

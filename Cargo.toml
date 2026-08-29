@@ -21,9 +21,16 @@ serde = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
 tokio = { version = "1", features = ["rt"] }
 fastboot = { path = "fastboot" }
+aes = "0.8"
+cbc = "0.1"
+sha2 = "0.10"
+rfd = { version = "0.17", default-features = false }
+
+# Native folder picker backend on Linux (portal first, GTK fallback).
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "gtk3"] }
 
 # Linux webview dialog (wry's WebKitGTK backend needs a GTK container).
-[target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 
 [build-dependencies]

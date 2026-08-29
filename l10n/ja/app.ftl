@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = ファームウェア検索
 mode-2 = モード 2
-mode-3 = モード 3
+mode-3 = ファームウェア復号
 
 login-dialog-title = LMN Flash — ログイン
 login-prompt = ログインしてファームウェアを検索
@@ -101,3 +101,15 @@ debug-info = デバッグ情報
 debug-account = アカウント
 debug-token = Bearer トークン
 debug-uuid = クライアント UUID
+
+decrypt-select-dir = フォルダーを選択
+decrypt-description = この機能は、L ブランドのタブレットのファームウェアに含まれる t ファイルと x ファイルを復号します。
+decrypt-no-dir = フォルダーが選択されていません
+decrypt-custom-password = カスタム パスワードを使用
+decrypt-password-label = パスワード
+decrypt-button = 復号
+decrypt-working = ファームウェア ファイルを復号中…
+decrypt-done = 復号が完了しました：成功 { $ok } 件、失敗 { $fail } 件
+decrypt-no-files = 選択したフォルダーに *.x または *.t ファイルが見つかりません
+decrypt-password-required = 復号パスワードを入力するか、「カスタム パスワードを使用」のチェックを外してください
+decrypt-failed-files = 復号に失敗したファイル

@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = 固件查询
 mode-2 = 模式 2
-mode-3 = 模式 3
+mode-3 = 固件解密
 
 login-dialog-title = LMN Flash — 登录
 login-prompt = 登录后查询固件
@@ -101,3 +101,15 @@ debug-info = 调试信息
 debug-account = 账号
 debug-token = Bearer 令牌
 debug-uuid = 客户端 UUID
+
+decrypt-select-dir = 选择文件夹
+decrypt-description = 此功能用于解密 L 品牌平板固件中的 t 和 x 文件。
+decrypt-no-dir = 未选择文件夹
+decrypt-custom-password = 使用自定义密码
+decrypt-password-label = 密码
+decrypt-button = 解密
+decrypt-working = 正在解密固件文件…
+decrypt-done = 解密完成：{ $ok } 个成功，{ $fail } 个失败
+decrypt-no-files = 所选文件夹中未找到 *.x 或 *.t 文件
+decrypt-password-required = 请输入解密密码，或取消勾选“使用自定义密码”
+decrypt-failed-files = 解密失败的文件

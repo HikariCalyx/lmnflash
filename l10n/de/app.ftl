@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Firmware-Suche
 mode-2 = Modus 2
-mode-3 = Modus 3
+mode-3 = Firmware entschlüsseln
 
 login-dialog-title = LMN Flash — Anmelden
 login-prompt = Melden Sie sich an, um Firmware zu suchen
@@ -101,3 +101,15 @@ debug-info = Debug-Informationen
 debug-account = Konto
 debug-token = Bearer-Token
 debug-uuid = Client-UUID
+
+decrypt-select-dir = Ordner auswählen
+decrypt-description = Diese Funktion entschlüsselt die t- und x-Dateien der Firmware von Tablets der Marke L.
+decrypt-no-dir = Kein Ordner ausgewählt
+decrypt-custom-password = Eigenes Passwort verwenden
+decrypt-password-label = Passwort
+decrypt-button = Entschlüsseln
+decrypt-working = Firmware-Dateien werden entschlüsselt…
+decrypt-done = Entschlüsselung abgeschlossen: { $ok } erfolgreich, { $fail } fehlgeschlagen
+decrypt-no-files = Keine *.x- oder *.t-Dateien im ausgewählten Ordner gefunden
+decrypt-password-required = Passwort eingeben oder „Eigenes Passwort verwenden“ deaktivieren
+decrypt-failed-files = Fehlgeschlagene Dateien

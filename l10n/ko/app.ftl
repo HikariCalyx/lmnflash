@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = 펌웨어 조회
 mode-2 = 모드 2
-mode-3 = 모드 3
+mode-3 = 펌웨어 복호화
 
 login-dialog-title = LMN Flash — 로그인
 login-prompt = 로그인하여 펌웨어 조회
@@ -101,3 +101,15 @@ debug-info = 디버그 정보
 debug-account = 계정
 debug-token = Bearer 토큰
 debug-uuid = 클라이언트 UUID
+
+decrypt-select-dir = 폴더 선택
+decrypt-description = 이 기능은 L 브랜드 태블릿 펌웨어에 사용되는 t 및 x 파일을 복호화합니다.
+decrypt-no-dir = 선택한 폴더가 없습니다
+decrypt-custom-password = 사용자 지정 암호 사용
+decrypt-password-label = 암호
+decrypt-button = 복호화
+decrypt-working = 펌웨어 파일 복호화 중…
+decrypt-done = 복호화 완료: { $ok }개 성공, { $fail }개 실패
+decrypt-no-files = 선택한 폴더에 *.x 또는 *.t 파일이 없습니다
+decrypt-password-required = 복호화 암호를 입력하거나 "사용자 지정 암호 사용"을 해제하세요
+decrypt-failed-files = 복호화 실패 파일

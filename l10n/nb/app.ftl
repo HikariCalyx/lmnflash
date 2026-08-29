@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Firmwaresøk
 mode-2 = Modus 2
-mode-3 = Modus 3
+mode-3 = Dekryptering av fastvare
 
 login-dialog-title = LMN Flash — Logg inn
 login-prompt = Logg inn for å søke etter fastvare
@@ -101,3 +101,15 @@ debug-info = Feilsøkingsinfo
 debug-account = Konto
 debug-token = Bearer-token
 debug-uuid = Klient-UUID
+
+decrypt-select-dir = Velg mappe
+decrypt-description = Denne funksjonen dekrypterer t- og x-filer som brukes i fastvare for nettbrett av merket L.
+decrypt-no-dir = Ingen mappe valgt
+decrypt-custom-password = Bruk egendefinert passord
+decrypt-password-label = Passord
+decrypt-button = Dekrypter
+decrypt-working = Dekrypterer fastvarefiler…
+decrypt-done = Dekryptering fullført: { $ok } vellykket, { $fail } mislykket
+decrypt-no-files = Ingen *.x- eller *.t-filer funnet i den valgte mappen
+decrypt-password-required = Skriv inn et passord, eller fjern avmerkingen for "Bruk egendefinert passord"
+decrypt-failed-files = Mislykkede filer

@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod decrypt;
 mod fastboot_info;
 mod firmware;
 mod l10n;
@@ -10,8 +11,8 @@ mod login;
 mod webview;
 
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, pick_list, row,
-    stack, text_input, Space,
+    button, checkbox, column, container, horizontal_rule, mouse_area, pick_list,
+    row, scrollable, stack, text_input, Space,
 };
 use iced::widget::text::Shaping;
 use iced::{Alignment, Element, Fill, Font, Size, Task};
@@ -251,6 +252,17 @@ enum DevicePicker {
     Open(Vec<String>),
 }
 
+/// Status of the firmware-decrypt mode (Mode 3).
+#[derive(Debug, Clone, Default)]
+enum DecryptStatus {
+    #[default]
+    Idle,
+    PickingDir,
+    Working,
+    Done(decrypt::DecryptSummary),
+    Error(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum SimCount {
     #[default]
@@ -296,6 +308,15 @@ struct TabletInput {
     serial_number: String,
 }
 
+/// Inputs for the firmware-decrypt mode (Mode 3).
+#[derive(Default)]
+struct DecryptState {
+    directory: Option<std::path::PathBuf>,
+    custom_password: bool,
+    password: String,
+    status: DecryptStatus,
+}
+
 #[derive(Default)]
 struct LookupState {
     mode: LookupMode,
@@ -337,6 +358,7 @@ struct State {
     client_uuid: String,
     login: LoginStatus,
     lookup: LookupState,
+    decrypt: DecryptState,
 }
 
 impl Default for State {
@@ -350,6 +372,7 @@ impl Default for State {
             client_uuid: uuid::Uuid::new_v4().to_string(),
             login: LoginStatus::default(),
             lookup: LookupState::default(),
+            decrypt: DecryptState::default(),
         }
     }
 }
@@ -442,6 +465,12 @@ enum Message {
     CopyDownloadUri(String),
     CopyToolUri(String),
     CopyRawJson(String),
+    DecryptPickDirRequested,
+    DecryptDirPicked(Option<std::path::PathBuf>),
+    DecryptCustomPasswordToggled(bool),
+    DecryptPasswordChanged(String),
+    DecryptRequested,
+    DecryptFinished(Result<decrypt::DecryptSummary, String>),
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -741,6 +770,54 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::CopyCnPassword(password) => iced::clipboard::write::<Message>(password),
+        Message::DecryptPickDirRequested => {
+            if matches!(
+                state.decrypt.status,
+                DecryptStatus::PickingDir | DecryptStatus::Working
+            ) {
+                return Task::none();
+            }
+
+            state.decrypt.status = DecryptStatus::PickingDir;
+            let title = state.l10n.tr("decrypt-select-dir");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_folder()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::DecryptDirPicked,
+            )
+        }
+        Message::DecryptDirPicked(directory) => {
+            state.decrypt.directory = directory;
+            state.decrypt.status = DecryptStatus::Idle;
+            Task::none()
+        }
+        Message::DecryptCustomPasswordToggled(custom_password) => {
+            state.decrypt.custom_password = custom_password;
+            Task::none()
+        }
+        Message::DecryptPasswordChanged(password) => {
+            state.decrypt.password = password;
+            Task::none()
+        }
+        Message::DecryptRequested => start_decrypt(state),
+        Message::DecryptFinished(result) => {
+            if !matches!(state.decrypt.status, DecryptStatus::Working) {
+                return Task::none();
+            }
+
+            match result {
+                Ok(summary) => state.decrypt.status = DecryptStatus::Done(summary),
+                Err(error) => state.decrypt.status = DecryptStatus::Error(error),
+            }
+
+            Task::none()
+        }
         Message::LookupRequested => request_lookup(state),
         Message::LookupFinished(result) => {
             if !matches!(state.lookup.status, LookupStatus::Fetching) {
@@ -882,6 +959,36 @@ fn request_lookup(state: &mut State) -> Task<Message> {
     )
 }
 
+/// Validates the decrypt form and starts decrypting the selected directory.
+fn start_decrypt(state: &mut State) -> Task<Message> {
+    let Some(directory) = state.decrypt.directory.clone() else {
+        return Task::none();
+    };
+
+    let password = if state.decrypt.custom_password {
+        let password = state.decrypt.password.trim().to_string();
+        if password.is_empty() {
+            let message = state.l10n.tr("decrypt-password-required");
+            state.decrypt.status = DecryptStatus::Error(message);
+            return Task::none();
+        }
+        password
+    } else {
+        decrypt::DEFAULT_PASSWORD.to_string()
+    };
+
+    state.decrypt.status = DecryptStatus::Working;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || decrypt::decrypt_directory(&directory, &password))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::DecryptFinished,
+    )
+}
+
 /// Reads device info from the selected fastboot device in the background.
 fn start_fastboot_fill(serial: String) -> Task<Message> {
     Task::perform(
@@ -990,6 +1097,7 @@ fn open_browser(url: &str) -> Task<Message> {
 fn view(state: &State) -> Element<'_, Message> {
     let content = match state.mode {
         Mode::Mode1 => firmware_lookup_view(state),
+        Mode::Mode3 => decrypt_view(state),
         _ => placeholder_view(state),
     };
 
@@ -1097,6 +1205,133 @@ fn placeholder_view(state: &State) -> Element<'_, Message> {
     .center_x(Fill)
     .center_y(Fill)
     .into()
+}
+
+/// The firmware-decrypt UI (Mode 3): pick a directory, optionally provide a
+/// custom password, then decrypt every `*.x`/`*.t` file found in it.
+fn decrypt_view(state: &State) -> Element<'_, Message> {
+    let l10n = &state.l10n;
+    let decrypt_state = &state.decrypt;
+
+    let busy = matches!(
+        decrypt_state.status,
+        DecryptStatus::PickingDir | DecryptStatus::Working
+    );
+
+    let pick_button = if busy {
+        button(text(l10n.tr("decrypt-select-dir")))
+    } else {
+        button(text(l10n.tr("decrypt-select-dir"))).on_press(Message::DecryptPickDirRequested)
+    };
+
+    let path_text = match &decrypt_state.directory {
+        Some(path) => path.display().to_string(),
+        None => l10n.tr("decrypt-no-dir"),
+    };
+
+    let mut content = column![
+        text(l10n.tr("decrypt-description")).size(14.0),
+        row![
+            pick_button,
+            container(
+                text(path_text)
+                    .size(13.0)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                    .width(420),
+            )
+            .padding(8)
+            .style(container::rounded_box),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        checkbox(
+            l10n.tr("decrypt-custom-password"),
+            decrypt_state.custom_password,
+        )
+        .text_shaping(Shaping::Advanced)
+        .on_toggle(Message::DecryptCustomPasswordToggled),
+    ]
+    .spacing(8)
+    .align_x(Alignment::Center);
+
+    if decrypt_state.custom_password {
+        content = content.push(
+            row![
+                text(l10n.tr("decrypt-password-label")).size(14.0),
+                text_input("", &decrypt_state.password)
+                    .secure(true)
+                    .on_input(Message::DecryptPasswordChanged)
+                    .on_submit(Message::DecryptRequested)
+                    .width(240),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+    }
+
+    let decrypt_button = if busy || decrypt_state.directory.is_none() {
+        button(text(l10n.tr("decrypt-button")))
+    } else {
+        button(text(l10n.tr("decrypt-button"))).on_press(Message::DecryptRequested)
+    };
+    content = content.push(decrypt_button);
+
+    match &decrypt_state.status {
+        DecryptStatus::Idle | DecryptStatus::PickingDir => {}
+        DecryptStatus::Working => {
+            content = content.push(text(l10n.tr("decrypt-working")).size(14.0));
+        }
+        DecryptStatus::Error(error) => {
+            content = content.push(
+                text(error.clone())
+                    .size(14.0)
+                    .style(iced::widget::text::danger),
+            );
+        }
+        DecryptStatus::Done(summary) => {
+            if summary.total == 0 {
+                content = content.push(text(l10n.tr("decrypt-no-files")).size(14.0));
+            } else {
+                let message = l10n.tr_with_args(
+                    "decrypt-done",
+                    &[
+                        ("ok", summary.succeeded.to_string()),
+                        ("fail", summary.failed.len().to_string()),
+                    ],
+                );
+
+                let style = if summary.failed.is_empty() {
+                    iced::widget::text::success
+                } else {
+                    iced::widget::text::danger
+                };
+                content = content.push(text(message).size(14.0).style(style));
+
+                if !summary.failed.is_empty() {
+                    content = content.push(text(l10n.tr("decrypt-failed-files")).size(13.0));
+
+                    let rows = iced::widget::Column::with_children(
+                        summary.failed.iter().map(|(path, error)| {
+                            text(format!("{}: {}", path.display(), error))
+                                .size(12.0)
+                                .into()
+                        }),
+                    )
+                    .spacing(4)
+                    .align_x(Alignment::Start);
+
+                    content = content.push(scrollable(rows).height(120).width(520));
+                }
+            }
+        }
+    }
+
+    container(content)
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill)
+        .into()
 }
 
 fn firmware_lookup_view(state: &State) -> Element<'_, Message> {

@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Recherche de firmware
 mode-2 = Mode 2
-mode-3 = Mode 3
+mode-3 = Déchiffrement du firmware
 
 login-dialog-title = LMN Flash — Connexion
 login-prompt = Connectez-vous pour rechercher un firmware
@@ -101,3 +101,15 @@ debug-info = Informations de débogage
 debug-account = Compte
 debug-token = Jeton Bearer
 debug-uuid = UUID du client
+
+decrypt-select-dir = Sélectionner un dossier
+decrypt-description = Cette fonctionnalité déchiffre les fichiers t et x utilisés dans le firmware des tablettes de marque L.
+decrypt-no-dir = Aucun dossier sélectionné
+decrypt-custom-password = Utiliser un mot de passe personnalisé
+decrypt-password-label = Mot de passe
+decrypt-button = Déchiffrer
+decrypt-working = Déchiffrement des fichiers du firmware…
+decrypt-done = Déchiffrement terminé : { $ok } réussis, { $fail } échoués
+decrypt-no-files = Aucun fichier *.x ou *.t trouvé dans le dossier sélectionné
+decrypt-password-required = Saisissez un mot de passe ou décochez « Utiliser un mot de passe personnalisé »
+decrypt-failed-files = Fichiers en échec

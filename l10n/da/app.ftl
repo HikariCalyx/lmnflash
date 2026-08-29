@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Firmwareopslag
 mode-2 = Tilstand 2
-mode-3 = Tilstand 3
+mode-3 = Firmware-dekryptering
 
 login-dialog-title = LMN Flash — Log ind
 login-prompt = Log ind for at slå firmware op
@@ -101,3 +101,15 @@ debug-info = Fejlfindingsinfo
 debug-account = Konto
 debug-token = Bearer-token
 debug-uuid = Klient-UUID
+
+decrypt-select-dir = Vælg mappe
+decrypt-description = Denne funktion dekrypterer t- og x-filer, der bruges i firmware til tablets af mærket L.
+decrypt-no-dir = Ingen mappe valgt
+decrypt-custom-password = Brug brugerdefineret adgangskode
+decrypt-password-label = Adgangskode
+decrypt-button = Dekryptér
+decrypt-working = Dekrypterer firmwarefiler…
+decrypt-done = Dekryptering fuldført: { $ok } lykkedes, { $fail } mislykkedes
+decrypt-no-files = Ingen *.x- eller *.t-filer fundet i den valgte mappe
+decrypt-password-required = Indtast en adgangskode, eller fjern markeringen af "Brug brugerdefineret adgangskode"
+decrypt-failed-files = Mislykkede filer

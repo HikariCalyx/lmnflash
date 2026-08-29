@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Firmware zoeken
 mode-2 = Modus 2
-mode-3 = Modus 3
+mode-3 = Firmware ontsleutelen
 
 login-dialog-title = LMN Flash — Aanmelden
 login-prompt = Meld u aan om firmware te zoeken
@@ -101,3 +101,15 @@ debug-info = Debuginformatie
 debug-account = Account
 debug-token = Bearer-token
 debug-uuid = Client-UUID
+
+decrypt-select-dir = Map selecteren
+decrypt-description = Deze functie ontsleutelt t- en x-bestanden die worden gebruikt in firmware van tablets van het merk L.
+decrypt-no-dir = Geen map geselecteerd
+decrypt-custom-password = Aangepast wachtwoord gebruiken
+decrypt-password-label = Wachtwoord
+decrypt-button = Ontsleutelen
+decrypt-working = Firmwarebestanden ontsleutelen…
+decrypt-done = Ontsleutelen voltooid: { $ok } geslaagd, { $fail } mislukt
+decrypt-no-files = Geen *.x- of *.t-bestanden gevonden in de geselecteerde map
+decrypt-password-required = Voer een wachtwoord in of schakel "Aangepast wachtwoord gebruiken" uit
+decrypt-failed-files = Mislukte bestanden

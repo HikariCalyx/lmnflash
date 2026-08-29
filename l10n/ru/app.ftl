@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Поиск прошивки
 mode-2 = Режим 2
-mode-3 = Режим 3
+mode-3 = Расшифровка прошивки
 
 login-dialog-title = LMN Flash — вход
 login-prompt = Войдите, чтобы найти прошивку
@@ -101,3 +101,15 @@ debug-info = Отладочная информация
 debug-account = Аккаунт
 debug-token = Токен Bearer
 debug-uuid = UUID клиента
+
+decrypt-select-dir = Выбрать папку
+decrypt-description = Эта функция расшифровывает файлы t и x из прошивки планшетов марки L.
+decrypt-no-dir = Папка не выбрана
+decrypt-custom-password = Использовать свой пароль
+decrypt-password-label = Пароль
+decrypt-button = Расшифровать
+decrypt-working = Расшифровка файлов прошивки…
+decrypt-done = Расшифровка завершена: { $ok } успешно, { $fail } с ошибками
+decrypt-no-files = В выбранной папке нет файлов *.x или *.t
+decrypt-password-required = Введите пароль или снимите флажок «Использовать свой пароль»
+decrypt-failed-files = Файлы с ошибками

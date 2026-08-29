@@ -3,7 +3,7 @@ app-title = LMN Flash
 
 mode-1 = Firmwaresökning
 mode-2 = Läge 2
-mode-3 = Läge 3
+mode-3 = Dekryptera firmware
 
 login-dialog-title = LMN Flash — Logga in
 login-prompt = Logga in för att söka firmware
@@ -101,3 +101,15 @@ debug-info = Felsökningsinformation
 debug-account = Konto
 debug-token = Bearer-token
 debug-uuid = Klient-UUID
+
+decrypt-select-dir = Välj mapp
+decrypt-description = Den här funktionen dekrypterar t- och x-filer som används i firmware för surfplattor av märket L.
+decrypt-no-dir = Ingen mapp vald
+decrypt-custom-password = Använd anpassat lösenord
+decrypt-password-label = Lösenord
+decrypt-button = Dekryptera
+decrypt-working = Dekrypterar firmwarefiler…
+decrypt-done = Dekrypteringen klar: { $ok } lyckades, { $fail } misslyckades
+decrypt-no-files = Inga *.x- eller *.t-filer hittades i den valda mappen
+decrypt-password-required = Ange ett lösenord eller avmarkera "Använd anpassat lösenord"
+decrypt-failed-files = Misslyckade filer
