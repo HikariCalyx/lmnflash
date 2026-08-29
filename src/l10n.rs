@@ -88,16 +88,62 @@ pub enum Language {
     EnUs,
     ZhHans,
     ZhHant,
+    Ja,
+    Ko,
+    Ru,
+    Da,
+    De,
+    Fr,
+    It,
+    Nb,
+    Nl,
+    PtBr,
+    Fi,
+    Es,
+    Sv,
+    Uk,
 }
 
 impl Language {
-    pub const ALL: [Self; 3] = [Self::EnUs, Self::ZhHans, Self::ZhHant];
+    pub const ALL: [Self; 17] = [
+        Self::EnUs,
+        Self::ZhHans,
+        Self::ZhHant,
+        Self::Ja,
+        Self::Ko,
+        Self::Ru,
+        Self::Da,
+        Self::De,
+        Self::Fr,
+        Self::It,
+        Self::Nb,
+        Self::Nl,
+        Self::PtBr,
+        Self::Fi,
+        Self::Es,
+        Self::Sv,
+        Self::Uk,
+    ];
 
     pub fn message_id(self) -> &'static str {
         match self {
             Self::EnUs => "lang-en",
             Self::ZhHans => "lang-zh",
             Self::ZhHant => "lang-zhhant",
+            Self::Ja => "lang-ja",
+            Self::Ko => "lang-ko",
+            Self::Ru => "lang-ru",
+            Self::Da => "lang-da",
+            Self::De => "lang-de",
+            Self::Fr => "lang-fr",
+            Self::It => "lang-it",
+            Self::Nb => "lang-nb",
+            Self::Nl => "lang-nl",
+            Self::PtBr => "lang-ptbr",
+            Self::Fi => "lang-fi",
+            Self::Es => "lang-es",
+            Self::Sv => "lang-sv",
+            Self::Uk => "lang-uk",
         }
     }
 
@@ -107,15 +153,43 @@ impl Language {
             Self::EnUs => "en-US",
             Self::ZhHans => "zh-Hans",
             Self::ZhHant => "zh-Hant",
+            Self::Ja => "ja",
+            Self::Ko => "ko",
+            Self::Ru => "ru",
+            Self::Da => "da",
+            Self::De => "de",
+            Self::Fr => "fr",
+            Self::It => "it",
+            Self::Nb => "nb",
+            Self::Nl => "nl",
+            Self::PtBr => "pt-BR",
+            Self::Fi => "fi",
+            Self::Es => "es",
+            Self::Sv => "sv",
+            Self::Uk => "uk",
         }
     }
 
-    /// Parses a locale code (also tolerates plain `en` / `zh`).
+    /// Parses a locale code (also tolerates plain language codes).
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
             "en-US" | "en" => Some(Self::EnUs),
             "zh-Hans" | "zh-CN" | "zh" => Some(Self::ZhHans),
             "zh-Hant" | "zh-TW" | "zh-HK" | "zh-MO" => Some(Self::ZhHant),
+            "ja" | "ja-JP" => Some(Self::Ja),
+            "ko" | "ko-KR" => Some(Self::Ko),
+            "ru" | "ru-RU" => Some(Self::Ru),
+            "da" | "da-DK" => Some(Self::Da),
+            "de" | "de-DE" => Some(Self::De),
+            "fr" | "fr-FR" => Some(Self::Fr),
+            "it" | "it-IT" => Some(Self::It),
+            "nb" | "nb-NO" | "no" | "no-NO" => Some(Self::Nb),
+            "nl" | "nl-NL" => Some(Self::Nl),
+            "pt" | "pt-BR" => Some(Self::PtBr),
+            "fi" | "fi-FI" => Some(Self::Fi),
+            "es" | "es-ES" => Some(Self::Es),
+            "sv" | "sv-SE" => Some(Self::Sv),
+            "uk" | "uk-UA" => Some(Self::Uk),
             _ => None,
         }
     }
@@ -138,6 +212,22 @@ pub fn bundle_for(language: Language) -> Bundle {
         Language::ZhHant => {
             Bundle::new("zh-Hant", &[include_str!("../l10n/zh-Hant/app.ftl"), en])
         }
+        Language::Ja => Bundle::new("ja", &[include_str!("../l10n/ja/app.ftl"), en]),
+        Language::Ko => Bundle::new("ko", &[include_str!("../l10n/ko/app.ftl"), en]),
+        Language::Ru => Bundle::new("ru", &[include_str!("../l10n/ru/app.ftl"), en]),
+        Language::Da => Bundle::new("da", &[include_str!("../l10n/da/app.ftl"), en]),
+        Language::De => Bundle::new("de", &[include_str!("../l10n/de/app.ftl"), en]),
+        Language::Fr => Bundle::new("fr", &[include_str!("../l10n/fr/app.ftl"), en]),
+        Language::It => Bundle::new("it", &[include_str!("../l10n/it/app.ftl"), en]),
+        Language::Nb => Bundle::new("nb", &[include_str!("../l10n/nb/app.ftl"), en]),
+        Language::Nl => Bundle::new("nl", &[include_str!("../l10n/nl/app.ftl"), en]),
+        Language::PtBr => {
+            Bundle::new("pt-BR", &[include_str!("../l10n/pt-BR/app.ftl"), en])
+        }
+        Language::Fi => Bundle::new("fi", &[include_str!("../l10n/fi/app.ftl"), en]),
+        Language::Es => Bundle::new("es", &[include_str!("../l10n/es/app.ftl"), en]),
+        Language::Sv => Bundle::new("sv", &[include_str!("../l10n/sv/app.ftl"), en]),
+        Language::Uk => Bundle::new("uk", &[include_str!("../l10n/uk/app.ftl"), en]),
     }
 }
 
@@ -171,11 +261,27 @@ mod tests {
     #[test]
     fn all_bundles_define_the_same_messages() {
         let en = message_ids(include_str!("../l10n/en-US/app.ftl"));
-        let zh_hans = message_ids(include_str!("../l10n/zh-Hans/app.ftl"));
-        let zh_hant = message_ids(include_str!("../l10n/zh-Hant/app.ftl"));
 
-        assert_eq!(en, zh_hans);
-        assert_eq!(en, zh_hant);
+        for source in [
+            include_str!("../l10n/zh-Hans/app.ftl"),
+            include_str!("../l10n/zh-Hant/app.ftl"),
+            include_str!("../l10n/ja/app.ftl"),
+            include_str!("../l10n/ko/app.ftl"),
+            include_str!("../l10n/ru/app.ftl"),
+            include_str!("../l10n/da/app.ftl"),
+            include_str!("../l10n/de/app.ftl"),
+            include_str!("../l10n/fr/app.ftl"),
+            include_str!("../l10n/it/app.ftl"),
+            include_str!("../l10n/nb/app.ftl"),
+            include_str!("../l10n/nl/app.ftl"),
+            include_str!("../l10n/pt-BR/app.ftl"),
+            include_str!("../l10n/fi/app.ftl"),
+            include_str!("../l10n/es/app.ftl"),
+            include_str!("../l10n/sv/app.ftl"),
+            include_str!("../l10n/uk/app.ftl"),
+        ] {
+            assert_eq!(message_ids(source), en);
+        }
     }
 
     /// Interpolated values must not be wrapped in bidi isolation marks —
@@ -205,7 +311,11 @@ mod tests {
         assert_eq!(Language::from_code("zh-CN"), Some(Language::ZhHans));
         assert_eq!(Language::from_code("zh-TW"), Some(Language::ZhHant));
         assert_eq!(Language::from_code("zh-HK"), Some(Language::ZhHant));
-        assert_eq!(Language::from_code("fr"), None);
+        assert_eq!(Language::from_code("ja-JP"), Some(Language::Ja));
+        assert_eq!(Language::from_code("ko-KR"), Some(Language::Ko));
+        assert_eq!(Language::from_code("ru-RU"), Some(Language::Ru));
+        assert_eq!(Language::from_code("fr-FR"), Some(Language::Fr));
+        assert_eq!(Language::from_code("pl"), None);
     }
 }
 

@@ -390,7 +390,23 @@ fn default_language() -> l10n::Language {
         return l10n::Language::ZhHans;
     }
 
-    l10n::Language::EnUs
+    match language.to_ascii_lowercase().as_str() {
+        "ja" => l10n::Language::Ja,
+        "ko" => l10n::Language::Ko,
+        "ru" => l10n::Language::Ru,
+        "da" => l10n::Language::Da,
+        "de" => l10n::Language::De,
+        "fr" => l10n::Language::Fr,
+        "it" => l10n::Language::It,
+        "nb" | "no" => l10n::Language::Nb,
+        "nl" => l10n::Language::Nl,
+        "pt" => l10n::Language::PtBr,
+        "fi" => l10n::Language::Fi,
+        "es" => l10n::Language::Es,
+        "sv" => l10n::Language::Sv,
+        "uk" => l10n::Language::Uk,
+        _ => l10n::Language::EnUs,
+    }
 }
 
 #[derive(Debug, Clone)]

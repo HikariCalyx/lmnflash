@@ -11,24 +11,44 @@ const CLIENT_VERSION: &str = "7.6.2.10";
 
 /// Lenovo ID language for the given OS locale string.
 ///
-/// The service accepts locale codes like `zh_CN` / `zh_TW` / `en_US`;
 /// Chinese maps to Traditional for Taiwan/Hong Kong/Macau and Simplified
-/// otherwise, matching the app's UI languages.
+/// otherwise, matching the app's UI languages; other locales use their
+/// country code (`ja_JP`, `ko_KR`, `ru_RU`), defaulting to `en_US`.
 fn language_code_for_locale(locale: &str) -> &'static str {
     let normalized = locale.replace('_', "-").to_ascii_lowercase();
 
-    let Some(rest) = normalized.strip_prefix("zh") else {
+    let Some(language) = normalized.split('-').next() else {
         return "en_US";
     };
 
-    if rest.contains("hant")
-        || rest.starts_with("-tw")
-        || rest.starts_with("-hk")
-        || rest.starts_with("-mo")
-    {
-        "zh_TW"
-    } else {
-        "zh_CN"
+    match language {
+        "zh" => {
+            let traditional = normalized.contains("hant")
+                || normalized.contains("-tw")
+                || normalized.contains("-hk")
+                || normalized.contains("-mo");
+
+            if traditional {
+                "zh_TW"
+            } else {
+                "zh_CN"
+            }
+        }
+        "ja" => "ja_JP",
+        "ko" => "ko_KR",
+        "ru" => "ru_RU",
+        "da" => "da_DK",
+        "de" => "de_DE",
+        "fr" => "fr_FR",
+        "it" => "it_IT",
+        "nb" | "no" => "nb_NO",
+        "nl" => "nl_NL",
+        "pt" => "pt_BR",
+        "fi" => "fi_FI",
+        "es" => "es_ES",
+        "sv" => "sv_SE",
+        "uk" => "uk_UA",
+        _ => "en_US",
     }
 }
 
@@ -228,7 +248,21 @@ mod tests {
         assert_eq!(language_code_for_locale("zh-HK"), "zh_TW");
         assert_eq!(language_code_for_locale("zh-Hant"), "zh_TW");
         assert_eq!(language_code_for_locale("en-US"), "en_US");
-        assert_eq!(language_code_for_locale("ja-JP"), "en_US");
+        assert_eq!(language_code_for_locale("ja-JP"), "ja_JP");
+        assert_eq!(language_code_for_locale("ko-KR"), "ko_KR");
+        assert_eq!(language_code_for_locale("ru-RU"), "ru_RU");
+        assert_eq!(language_code_for_locale("da-DK"), "da_DK");
+        assert_eq!(language_code_for_locale("de-DE"), "de_DE");
+        assert_eq!(language_code_for_locale("fr-FR"), "fr_FR");
+        assert_eq!(language_code_for_locale("it-IT"), "it_IT");
+        assert_eq!(language_code_for_locale("nb-NO"), "nb_NO");
+        assert_eq!(language_code_for_locale("nl-NL"), "nl_NL");
+        assert_eq!(language_code_for_locale("pt-BR"), "pt_BR");
+        assert_eq!(language_code_for_locale("fi-FI"), "fi_FI");
+        assert_eq!(language_code_for_locale("es-ES"), "es_ES");
+        assert_eq!(language_code_for_locale("sv-SE"), "sv_SE");
+        assert_eq!(language_code_for_locale("uk-UA"), "uk_UA");
+        assert_eq!(language_code_for_locale("pl-PL"), "en_US");
         assert_eq!(language_code_for_locale(""), "en_US");
     }
 }
