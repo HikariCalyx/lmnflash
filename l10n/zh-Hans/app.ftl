@@ -81,6 +81,7 @@ fw-copy-tool = 复制工具链接
 fw-copy-raw = 复制原始返回数据
 lang-en = English
 lang-zh = 简体中文
+lang-zhhant = 繁體中文
 
 debug-info = 调试信息
 debug-account = 账号

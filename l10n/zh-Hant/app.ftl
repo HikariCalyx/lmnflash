@@ -1,0 +1,89 @@
+# Localization strings for LMN Flash (zh-Hant).
+app-title = LMN Flash
+
+mode-1 = 韌體查詢
+mode-2 = 模式 2
+mode-3 = 模式 3
+
+login-dialog-title = LMN Flash — 登入
+login-prompt = 登入後查詢韌體
+login-button = 登入
+login-button-hint = 左鍵單擊：內建瀏覽器 · 右鍵單擊：手動登入
+login-fetching = 正在取得登入連結…
+login-webview-open = 請在彈出視窗中完成登入。
+login-manual-prompt = 請在瀏覽器中登入，然後將 SoftwareFix://callback 連結貼到下方：
+login-manual-placeholder = SoftwareFix://callback?Authorization=…
+login-open-browser = 在瀏覽器中開啟
+login-copy-url = 複製連結
+login-url-label = 登入連結
+login-submit = 確認
+login-cancel = 取消
+login-back = 返回
+login-error = 登入失敗：{ $error }
+login-webview-fallback = 無法開啟內建登入視窗，請改用瀏覽器登入。
+
+lookup-mode-row = 全球版智慧型手機
+lookup-mode-retcn = 中國大陸版智慧型手機
+lookup-mode-tablet = 平板電腦
+lookup-imei-label = IMEI
+lookup-imei-placeholder = 15 位 IMEI
+lookup-button = 查詢
+lookup-fetching = 正在查詢韌體…
+imei-error-digits = IMEI 只能包含數字
+imei-error-length = IMEI 必須為 14 或 15 位
+imei-error-checksum = IMEI 校驗位無效
+
+tablet-sn-label = 序號
+tablet-error-sn = 請輸入序號
+tablet-copy-password = 複製解壓密碼
+cn-product-name = 產品名稱
+cn-product-model = 產品型號
+cn-market-name = 市場名稱
+cn-mtm-compat = 相容 MTM
+cn-latest-version = 最新版本
+cn-id = 資源 ID
+
+retcn-sn-label = 序號
+retcn-model-label = XT 型號代碼
+retcn-fingerprint-label = 建置指紋
+retcn-carrier-label = 電信業者
+retcn-platform-label = 平台
+retcn-fsg-label = FSG 版本
+retcn-sim-label = SIM 卡槽
+platform-qualcomm = 高通（Qualcomm）
+platform-mediatek = 聯發科（MediaTek）
+sim-single = 單卡
+sim-dual = 雙卡
+retcn-error-model = 請填寫 XT 型號代碼
+retcn-error-fingerprint = 請填寫建置指紋
+retcn-error-carrier = 請填寫電信業者
+retcn-error-sn = 請填寫序號
+retcn-error-fsg = 高通平台需要填寫 FSG 版本
+retcn-fill-fastboot = 從 Fastboot 讀取
+retcn-fill-fastboot-fetching = 正在讀取裝置資訊…
+retcn-fill-fastboot-filled = 已從裝置 { $serial } 填入
+retcn-fill-fastboot-no-device = 未偵測到 fastboot 裝置
+retcn-fill-fastboot-unsupported-device = 未偵測到受支援的 Motorola 裝置
+retcn-pick-device-title = 請選擇 fastboot 裝置
+fw-market-name = 市場名稱
+fw-model-name = 型號名稱
+fw-sale-model = 銷售型號
+fw-carrier = 電信業者
+fw-publish-date = 發佈日期
+fw-file-name = 檔案名稱
+fw-file-size = 檔案大小
+fw-rom-id = 韌體資源 ID
+fw-rom-match-id = ROM 匹配 ID
+fw-fingerprint = 指紋
+fw-comments = 備註
+fw-copy-uri = 複製下載連結
+fw-copy-tool = 複製工具連結
+fw-copy-raw = 複製原始返回資料
+lang-en = English
+lang-zh = 简体中文
+lang-zhhant = 繁體中文
+
+debug-info = 除錯資訊
+debug-account = 帳號
+debug-token = Bearer Token
+debug-uuid = 用戶端 UUID

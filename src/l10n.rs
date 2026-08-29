@@ -87,15 +87,36 @@ pub enum Language {
     #[default]
     EnUs,
     ZhHans,
+    ZhHant,
 }
 
 impl Language {
-    pub const ALL: [Self; 2] = [Self::EnUs, Self::ZhHans];
+    pub const ALL: [Self; 3] = [Self::EnUs, Self::ZhHans, Self::ZhHant];
 
     pub fn message_id(self) -> &'static str {
         match self {
             Self::EnUs => "lang-en",
             Self::ZhHans => "lang-zh",
+            Self::ZhHant => "lang-zhhant",
+        }
+    }
+
+    /// The locale code persisted in `config.conf`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::EnUs => "en-US",
+            Self::ZhHans => "zh-Hans",
+            Self::ZhHant => "zh-Hant",
+        }
+    }
+
+    /// Parses a locale code (also tolerates plain `en` / `zh`).
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "en-US" | "en" => Some(Self::EnUs),
+            "zh-Hans" | "zh-CN" | "zh" => Some(Self::ZhHans),
+            "zh-Hant" | "zh-TW" | "zh-HK" | "zh-MO" => Some(Self::ZhHant),
+            _ => None,
         }
     }
 }
@@ -113,6 +134,9 @@ pub fn bundle_for(language: Language) -> Bundle {
         Language::EnUs => Bundle::new("en-US", &[en]),
         Language::ZhHans => {
             Bundle::new("zh-Hans", &[include_str!("../l10n/zh-Hans/app.ftl"), en])
+        }
+        Language::ZhHant => {
+            Bundle::new("zh-Hant", &[include_str!("../l10n/zh-Hant/app.ftl"), en])
         }
     }
 }
@@ -147,9 +171,11 @@ mod tests {
     #[test]
     fn all_bundles_define_the_same_messages() {
         let en = message_ids(include_str!("../l10n/en-US/app.ftl"));
-        let zh = message_ids(include_str!("../l10n/zh-Hans/app.ftl"));
+        let zh_hans = message_ids(include_str!("../l10n/zh-Hans/app.ftl"));
+        let zh_hant = message_ids(include_str!("../l10n/zh-Hant/app.ftl"));
 
-        assert_eq!(en, zh);
+        assert_eq!(en, zh_hans);
+        assert_eq!(en, zh_hant);
     }
 
     /// Interpolated values must not be wrapped in bidi isolation marks —
@@ -166,6 +192,20 @@ mod tests {
         assert_eq!(text, "Filled from device ZY22LHBR98");
         assert!(!text.contains('\u{2068}'));
         assert!(!text.contains('\u{2069}'));
+    }
+
+    #[test]
+    fn language_codes_round_trip() {
+        for language in Language::ALL {
+            assert_eq!(Language::from_code(language.code()), Some(language));
+        }
+
+        assert_eq!(Language::from_code("zh"), Some(Language::ZhHans));
+        assert_eq!(Language::from_code("en"), Some(Language::EnUs));
+        assert_eq!(Language::from_code("zh-CN"), Some(Language::ZhHans));
+        assert_eq!(Language::from_code("zh-TW"), Some(Language::ZhHant));
+        assert_eq!(Language::from_code("zh-HK"), Some(Language::ZhHant));
+        assert_eq!(Language::from_code("fr"), None);
     }
 }
 

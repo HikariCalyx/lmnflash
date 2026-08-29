@@ -8,12 +8,39 @@ use base64::Engine as _;
 
 const BASE_URL: &str = "https://lsa.lenovo.com";
 const CLIENT_VERSION: &str = "7.6.2.10";
-/// Lenovo ID language, as accepted by the service (`zh_CN` by default).
-const LANGUAGE: &str = "zh_CN";
+
+/// Lenovo ID language for the given OS locale string.
+///
+/// The service accepts locale codes like `zh_CN` / `zh_TW` / `en_US`;
+/// Chinese maps to Traditional for Taiwan/Hong Kong/Macau and Simplified
+/// otherwise, matching the app's UI languages.
+fn language_code_for_locale(locale: &str) -> &'static str {
+    let normalized = locale.replace('_', "-").to_ascii_lowercase();
+
+    let Some(rest) = normalized.strip_prefix("zh") else {
+        return "en_US";
+    };
+
+    if rest.contains("hant")
+        || rest.starts_with("-tw")
+        || rest.starts_with("-hk")
+        || rest.starts_with("-mo")
+    {
+        "zh_TW"
+    } else {
+        "zh_CN"
+    }
+}
+
+/// Lenovo ID language based on the OS language.
+fn language_code() -> &'static str {
+    language_code_for_locale(&sys_locale::get_locale().unwrap_or_default())
+}
 
 /// Requests the login URL from the Lenovo service (see `reference/login.sh`).
 pub fn fetch_login_url(client_uuid: &str) -> Result<String, String> {
-    let language_header = LANGUAGE.replace('_', "-");
+    let language = language_code();
+    let language_header = language.replace('_', "-");
     let windows_header = base64::engine::general_purpose::STANDARD.encode("Windows 10");
 
     let request_body = json!({
@@ -65,7 +92,7 @@ fn add_login_params(login_url: &str) -> Result<String, String> {
 
     {
         let mut query = url.query_pairs_mut();
-        query.append_pair("lenovoid.lang", LANGUAGE);
+        query.append_pair("lenovoid.lang", language_code());
         query.append_pair("prompt", "login");
     }
 
@@ -192,5 +219,16 @@ mod tests {
 
         assert_eq!(info.token, "abc123");
         assert_eq!(info.full_name, None);
+    }
+
+    #[test]
+    fn language_code_follows_os_locale() {
+        assert_eq!(language_code_for_locale("zh-CN"), "zh_CN");
+        assert_eq!(language_code_for_locale("zh_TW"), "zh_TW");
+        assert_eq!(language_code_for_locale("zh-HK"), "zh_TW");
+        assert_eq!(language_code_for_locale("zh-Hant"), "zh_TW");
+        assert_eq!(language_code_for_locale("en-US"), "en_US");
+        assert_eq!(language_code_for_locale("ja-JP"), "en_US");
+        assert_eq!(language_code_for_locale(""), "en_US");
     }
 }

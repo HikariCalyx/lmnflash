@@ -11,9 +11,21 @@ mod webview;
 
 use iced::widget::{
     button, column, container, horizontal_rule, mouse_area, pick_list, row,
-    stack, text, text_input, Space,
+    stack, text_input, Space,
 };
+use iced::widget::text::Shaping;
 use iced::{Alignment, Element, Fill, Font, Size, Task};
+
+/// A `text` label rendered with advanced text shaping.
+///
+/// Advanced shaping makes missing glyphs (e.g. CJK on a system whose UI
+/// language is not Chinese) fall back through the installed system fonts,
+/// so text renders correctly regardless of the OS language.
+fn text<'a>(
+    fragment: impl iced::widget::text::IntoFragment<'a>,
+) -> iced::widget::Text<'a> {
+    iced::widget::text(fragment).shaping(Shaping::Advanced)
+}
 
 pub fn main() -> iced::Result {
     // When started with `--login-dialog`, this process only shows the WebView
@@ -22,9 +34,7 @@ pub fn main() -> iced::Result {
         std::process::exit(code);
     }
 
-    // PNG decodes reliably on all platforms (ICO frames are not always
-    // picked up correctly by iced's image decoder on macOS/Linux).
-    let icon = iced::window::icon::from_file_data(include_bytes!("icon.png"), None).ok();
+    let icon = iced::window::icon::from_file_data(include_bytes!("icon.ico"), None).ok();
 
     iced::application(|state: &State| state.l10n.tr("app-title"), update, view)
         .default_font(system_ui_font())
@@ -37,6 +47,17 @@ pub fn main() -> iced::Result {
         .run_with(|| (State::initial(), Task::none()))
 }
 
+/// True for Traditional-Chinese OS locales (Taiwan, Hong Kong, Macau, or an
+/// explicit `Hant` script tag).
+fn is_traditional_chinese(locale: &str) -> bool {
+    let normalized = locale.replace('_', "-").to_ascii_lowercase();
+
+    normalized.contains("hant")
+        || normalized.contains("-tw")
+        || normalized.contains("-hk")
+        || normalized.contains("-mo")
+}
+
 /// Picks a system font family that matches the OS display language.
 ///
 /// Requires iced's `system` feature so OS fonts are loaded; missing glyphs
@@ -47,17 +68,32 @@ fn system_ui_font() -> Font {
 
     let family = match language {
         "zh" => {
-            #[cfg(target_os = "windows")]
-            {
-                "Microsoft YaHei"
-            }
-            #[cfg(target_os = "macos")]
-            {
-                "PingFang SC"
-            }
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-            {
-                "Noto Sans CJK SC"
+            if is_traditional_chinese(&locale) {
+                #[cfg(target_os = "windows")]
+                {
+                    "Microsoft JhengHei"
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    "PingFang TC"
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                {
+                    "Noto Sans CJK TC"
+                }
+            } else {
+                #[cfg(target_os = "windows")]
+                {
+                    "Microsoft YaHei"
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    "PingFang SC"
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                {
+                    "Noto Sans CJK SC"
+                }
             }
         }
         "ja" => {
@@ -319,9 +355,15 @@ impl Default for State {
 }
 
 impl State {
-    /// Creates the initial state, reusing cached credentials if they are fresh.
+    /// Creates the initial state, reusing the previously selected language
+    /// and cached credentials if they are fresh.
     fn initial() -> Self {
         let mut state = Self::default();
+
+        if let Some(language) = config::load_language() {
+            state.lang = language;
+            state.l10n = l10n::bundle_for(language);
+        }
 
         if let Some((token, client_uuid)) = config::load_credentials() {
             state.client_uuid = client_uuid;
@@ -338,16 +380,17 @@ impl State {
 /// Picks the UI language from the OS locale (defaults to English).
 fn default_language() -> l10n::Language {
     let locale = sys_locale::get_locale().unwrap_or_default();
+    let language = locale.split(['-', '_']).next().unwrap_or_default();
 
-    if locale
-        .split(['-', '_'])
-        .next()
-        .is_some_and(|language| language == "zh")
-    {
-        l10n::Language::ZhHans
-    } else {
-        l10n::Language::EnUs
+    if language.eq_ignore_ascii_case("zh") {
+        if is_traditional_chinese(&locale) {
+            return l10n::Language::ZhHant;
+        }
+
+        return l10n::Language::ZhHans;
     }
+
+    l10n::Language::EnUs
 }
 
 #[derive(Debug, Clone)]
@@ -394,6 +437,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::LanguageSelected(language) => {
             state.lang = language;
             state.l10n = l10n::bundle_for(language);
+
+            if let Err(error) = config::save_language(language) {
+                eprintln!("failed to save language: {error}");
+            }
+
             Task::none()
         }
         Message::LoginRequested(click) => request_login(state, click),
@@ -942,7 +990,8 @@ fn view(state: &State) -> Element<'_, Message> {
     };
     let language_dropdown = pick_list(language_options, Some(selected_language), |option| {
         Message::LanguageSelected(option.value)
-    });
+    })
+    .text_shaping(Shaping::Advanced);
 
     // Language selector overlay in the top-right corner.
     let content_area = stack![
@@ -1067,7 +1116,7 @@ fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
             let url_box = container(
                 text(url.clone())
                     .size(12.0)
-                    .wrapping(text::Wrapping::WordOrGlyph)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
                     .width(460),
             )
             .padding(8)
@@ -1101,7 +1150,7 @@ fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
                     .push(
                         text(l10n.tr("login-webview-fallback"))
                             .size(14.0)
-                            .style(text::danger),
+                            .style(iced::widget::text::danger),
                     )
                     .push(text(reason.clone()).size(12.0));
             }
@@ -1112,7 +1161,7 @@ fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
             let message = l10n.tr_with_args("login-error", &[("error", error.clone())]);
 
             column![
-                text(message).size(18.0).style(text::danger),
+                text(message).size(18.0).style(iced::widget::text::danger),
                 button(text(l10n.tr("login-back"))).on_press(Message::CancelLogin),
             ]
             .spacing(12)
@@ -1176,7 +1225,8 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
 
     let dropdown = pick_list(options, Some(selected), |option| {
         Message::LookupModeSelected(option.value)
-    });
+    })
+    .text_shaping(Shaping::Advanced);
 
     let mode_content: Element<'_, Message> = match state.lookup.mode {
         LookupMode::RowSmartphone => {
@@ -1246,7 +1296,8 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                 Message,
             > = pick_list(platform_options, Some(selected_platform), |option| {
                 Message::RetcnPlatformSelected(option.value)
-            });
+            })
+            .text_shaping(Shaping::Advanced);
 
             let sim_options: Vec<Labeled<SimCount>> = SimCount::ALL
                 .iter()
@@ -1267,7 +1318,8 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                 Message,
             > = pick_list(sim_options, Some(selected_sim), |option| {
                 Message::RetcnSimCountSelected(option.value)
-            });
+            })
+            .text_shaping(Shaping::Advanced);
 
             let platform_extra: Element<'_, Message> = match state.lookup.retcn.platform {
                 firmware::Platform::Qualcomm => row![
@@ -1351,12 +1403,12 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                             &[("serial", serial.clone())],
                         ))
                         .size(13.0)
-                        .style(text::success),
+                        .style(iced::widget::text::success),
                     );
                 }
                 Some(FastbootStatus::Error(error)) => {
                     content = content.push(
-                        text(error.clone()).size(13.0).style(text::danger),
+                        text(error.clone()).size(13.0).style(iced::widget::text::danger),
                     );
                 }
                 _ => {}
@@ -1410,7 +1462,7 @@ fn push_lookup_status<'a>(
             content = content.push(text(l10n.tr("lookup-fetching")).size(14.0));
         }
         LookupStatus::Error(error) => {
-            content = content.push(text(error.clone()).size(14.0).style(text::danger));
+            content = content.push(text(error.clone()).size(14.0).style(iced::widget::text::danger));
         }
         LookupStatus::Done(result) => {
             let view = match result {
@@ -1531,4 +1583,21 @@ fn firmware_info_view<'a>(
     .width(520)
     .style(container::rounded_box)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn traditional_chinese_locales_are_detected() {
+        assert!(is_traditional_chinese("zh-TW"));
+        assert!(is_traditional_chinese("zh-HK"));
+        assert!(is_traditional_chinese("zh_MO"));
+        assert!(is_traditional_chinese("zh-Hant"));
+        assert!(!is_traditional_chinese("zh-CN"));
+        assert!(!is_traditional_chinese("zh-Hans"));
+        assert!(!is_traditional_chinese("en-US"));
+        assert!(!is_traditional_chinese(""));
+    }
 }
