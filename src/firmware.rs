@@ -13,6 +13,9 @@ const RETCN_ENDPOINT: &str =
     "https://lsa.lenovo.com/Interface/rescueDevice/getNewResource.jhtml";
 const TABLET_ROW_ENDPOINT: &str =
     "https://lsa.lenovo.com/Interface/rescueDevice/getNewResourceBySN.jhtml";
+/// Returns which discriminator parameters a model-based lookup needs.
+const MODEL_MATCH_ENDPOINT: &str =
+    "https://lsa.lenovo.com/Interface/rescueDevice/getRomMatchParams.jhtml";
 
 const CN_MACHINE_ENDPOINT: &str =
     "https://ptstpd.lenovo.com.cn/home/ConfigurationQuery/getMachineSequenceInfo";
@@ -173,6 +176,38 @@ impl Platform {
     }
 }
 
+/// Device category used by the model-based lookup (`--category` in
+/// `reference/motofw.py`). The server matches tablets/smart devices by
+/// country code in addition to model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Category {
+    #[default]
+    Phone,
+    Tablet,
+    Smart,
+}
+
+impl Category {
+    pub const ALL: [Self; 3] = [Self::Phone, Self::Tablet, Self::Smart];
+
+    pub fn message_id(self) -> &'static str {
+        match self {
+            Self::Phone => "category-phone",
+            Self::Tablet => "category-tablet",
+            Self::Smart => "category-smart",
+        }
+    }
+
+    /// The lowercase value sent to the server (`category` parameter).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Phone => "phone",
+            Self::Tablet => "tablet",
+            Self::Smart => "smart",
+        }
+    }
+}
+
 /// The inputs required for a RETCN (`getNewResource`) firmware lookup.
 #[derive(Debug, Clone)]
 pub struct RetcnRequest {
@@ -321,6 +356,116 @@ pub fn fetch_firmware_by_sn(
     )
 }
 
+/// The parameters the server needs to tell one model's builds apart.
+#[derive(Debug, Clone)]
+pub struct ModelMatchParams {
+    /// Discriminator parameter names required for a model lookup.
+    pub params: Vec<String>,
+}
+
+/// Looks up which discriminator parameters `getNewResource` needs for a
+/// model-based lookup (see `reference/motofw.py find`).
+pub fn fetch_model_match_params(
+    model: &str,
+    token: &str,
+    client_uuid: &str,
+) -> Result<ModelMatchParams, FirmwareError> {
+    let authorization = format!("Bearer {}", token.trim().trim_start_matches("Bearer "));
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(120))
+        .build();
+
+    let request_body = json!({
+        "client": { "version": CLIENT_VERSION },
+        "dparams": { "modelName": model },
+        "language": "en-US",
+        "windowsInfo": "Microsoft Windows 11, x64-based PC",
+    });
+
+    let api = api_post(
+        &agent,
+        MODEL_MATCH_ENDPOINT,
+        &authorization,
+        client_uuid,
+        "en-US",
+        request_body,
+    )?;
+
+    let params = api
+        .content
+        .get("params")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ModelMatchParams { params })
+}
+
+/// Looks up the firmware resource for `model` with the collected
+/// discriminator parameters (see `reference/motofw.py find`).
+///
+/// `category` and `country_code` follow `_seed_params`: phones only carry
+/// `category`, while tablets/smart devices also send `countryCode`.
+pub fn fetch_firmware_by_model(
+    model: &str,
+    category: Category,
+    country_code: &str,
+    params: &[(String, String)],
+    token: &str,
+    client_uuid: &str,
+) -> Result<FirmwareInfo, FirmwareError> {
+    let authorization = format!("Bearer {}", token.trim().trim_start_matches("Bearer "));
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(120))
+        .build();
+
+    let mut params_object = serde_json::Map::new();
+    for (key, value) in params {
+        params_object.insert(key.clone(), serde_json::Value::String(value.clone()));
+    }
+    params_object.insert(
+        "category".to_string(),
+        serde_json::Value::String(category.code().to_string()),
+    );
+    if category != Category::Phone && !country_code.is_empty() {
+        params_object.insert(
+            "countryCode".to_string(),
+            serde_json::Value::String(country_code.to_string()),
+        );
+    }
+
+    let request_body = json!({
+        "client": { "version": CLIENT_VERSION },
+        "dparams": {
+            "modelName": model,
+            "code": "0000",
+            "params": serde_json::Value::Object(params_object),
+            "imei": "",
+            "imei2": "",
+            "sn": "",
+            "matchType": 1,
+        },
+        "language": "en-US",
+        "windowsInfo": "Microsoft Windows 11, x64-based PC",
+    });
+
+    post_lookup(
+        &agent,
+        RETCN_ENDPOINT,
+        &authorization,
+        client_uuid,
+        "en-US",
+        request_body,
+    )
+}
+
 /// Looks up a CN tablet by serial number (no authentication required).
 ///
 /// Returns `Ok(None)` when the CN service has no matching resource, and `Err`
@@ -428,19 +573,31 @@ pub fn fetch_cn_tablet(sn: &str) -> Result<Option<CnTabletInfo>, String> {
     }))
 }
 
-/// Shared request + parsing logic for both lookup endpoints.
-fn post_lookup(
+/// The authenticated POST response envelope: `content` payload and the raw
+/// JSON (preserved for the "copy raw response" button).
+struct ApiResponse {
+    content: serde_json::Value,
+    raw_json: String,
+}
+
+/// Shared authenticated POST for the LSA endpoints: builds the device
+/// fingerprint, sends the request and checks the business result code
+/// (402–409 → [`FirmwareError::AuthExpired`]).
+fn api_post(
     agent: &ureq::Agent,
     endpoint: &str,
     authorization: &str,
     client_uuid: &str,
     language: &str,
     request_body: serde_json::Value,
-) -> Result<FirmwareInfo, FirmwareError> {
+) -> Result<ApiResponse, FirmwareError> {
     let fingerprint = build_fingerprint(agent, authorization, client_uuid, endpoint)
         .map_err(FirmwareError::Other)?;
 
     let windows_header = base64::engine::general_purpose::STANDARD.encode("Microsoft Windows 11");
+
+    #[cfg(debug_assertions)]
+    eprintln!("[firmware] POST {endpoint} body: {request_body}");
 
     let raw_json = agent
         .post(endpoint)
@@ -467,6 +624,9 @@ fn post_lookup(
     let response: serde_json::Value = serde_json::from_str(&raw_json)
         .map_err(|e| FirmwareError::Other(format!("invalid firmware response: {e}")))?;
 
+    #[cfg(debug_assertions)]
+    eprintln!("[firmware] POST {endpoint} response: {raw_json}");
+
     let code = response.get("code").and_then(serde_json::Value::as_str);
     if code != Some("0000") {
         let message = format!(
@@ -485,15 +645,35 @@ fn post_lookup(
         });
     }
 
-    let item = response
-        .get("content")
-        .and_then(serde_json::Value::as_array)
+    Ok(ApiResponse {
+        content: response
+            .get("content")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        raw_json,
+    })
+}
+
+/// Shared request + parsing logic for both lookup endpoints.
+fn post_lookup(
+    agent: &ureq::Agent,
+    endpoint: &str,
+    authorization: &str,
+    client_uuid: &str,
+    language: &str,
+    request_body: serde_json::Value,
+) -> Result<FirmwareInfo, FirmwareError> {
+    let api = api_post(agent, endpoint, authorization, client_uuid, language, request_body)?;
+
+    let item = api
+        .content
+        .as_array()
         .and_then(|items| items.first())
         .ok_or_else(|| {
             FirmwareError::Other("API returned no matching resource".to_string())
         })?;
 
-    let mut info = parse_firmware_item(item, raw_json);
+    let mut info = parse_firmware_item(item, api.raw_json);
 
     // Fall back to the download URL's Last-Modified header when the API
     // did not provide a publish date; also read the download size.
@@ -794,6 +974,17 @@ mod tests {
             interface_name(TABLET_ROW_ENDPOINT),
             "getNewResourceBySNinterface"
         );
+        assert_eq!(
+            interface_name(MODEL_MATCH_ENDPOINT),
+            "getRomMatchParamsinterface"
+        );
+    }
+
+    #[test]
+    fn category_codes_are_lowercase() {
+        assert_eq!(Category::Phone.code(), "phone");
+        assert_eq!(Category::Tablet.code(), "tablet");
+        assert_eq!(Category::Smart.code(), "smart");
     }
 
     #[test]

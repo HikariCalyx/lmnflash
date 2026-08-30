@@ -178,16 +178,23 @@ enum LookupMode {
     RowSmartphone,
     RetcnSmartphone,
     Tablet,
+    ByModel,
 }
 
 impl LookupMode {
-    const ALL: [Self; 3] = [Self::RowSmartphone, Self::RetcnSmartphone, Self::Tablet];
+    const ALL: [Self; 4] = [
+        Self::RowSmartphone,
+        Self::RetcnSmartphone,
+        Self::Tablet,
+        Self::ByModel,
+    ];
 
     fn message_id(self) -> &'static str {
         match self {
             Self::RowSmartphone => "lookup-mode-row",
             Self::RetcnSmartphone => "lookup-mode-retcn",
             Self::Tablet => "lookup-mode-tablet",
+            Self::ByModel => "lookup-mode-by-model",
         }
     }
 }
@@ -308,6 +315,58 @@ struct TabletInput {
     serial_number: String,
 }
 
+/// Inputs for the "Lookup by Model" lookup.
+struct ByModelInput {
+    model: String,
+    /// Discriminator parameter names the server needs for this model.
+    required: Vec<String>,
+    /// The model `required` was fetched for (refetched when it changes).
+    loaded_model: String,
+    /// Current value of each required parameter (parallel to `required`).
+    values: Vec<String>,
+    /// Device category; auto-detected from the model until overridden.
+    category: firmware::Category,
+    /// False once the user picks a category manually (stops auto-detection).
+    category_auto: bool,
+    /// Two-letter country code, sent for tablets/smart devices (e.g. "US").
+    country_code: String,
+}
+
+impl Default for ByModelInput {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            required: Vec::new(),
+            loaded_model: String::new(),
+            values: Vec::new(),
+            category: firmware::Category::Phone,
+            category_auto: true,
+            country_code: "US".to_string(),
+        }
+    }
+}
+
+/// Infers the device category (and sometimes the country) from a model number.
+///
+/// - `TB…` → L tablet
+/// - `XT…` → M smartphone
+/// - `PC-…` → N tablet, country JP
+/// - `CD…` / `SD…` → L smart device
+fn detect_category(model: &str) -> Option<(firmware::Category, Option<&'static str>)> {
+    let model = model.trim();
+    if model.starts_with("XT") {
+        Some((firmware::Category::Phone, None))
+    } else if model.starts_with("TB") {
+        Some((firmware::Category::Tablet, None))
+    } else if model.starts_with("PC-") {
+        Some((firmware::Category::Tablet, Some("JP")))
+    } else if model.starts_with("CD") || model.starts_with("SD") {
+        Some((firmware::Category::Smart, None))
+    } else {
+        None
+    }
+}
+
 /// Inputs for the firmware-decrypt mode (Mode 3).
 #[derive(Default)]
 struct DecryptState {
@@ -327,6 +386,7 @@ struct LookupState {
     retry_after_login: bool,
     retcn: RetcnInput,
     tablet: TabletInput,
+    by_model: ByModelInput,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -461,6 +521,12 @@ enum Message {
     TabletSnChanged(String),
     TabletLookupRequested,
     TabletLookupFinished(Result<LookupResult, String>),
+    ModelInputChanged(String),
+    ModelLookupRequested,
+    ModelMatchParamsFetched(Result<firmware::ModelMatchParams, firmware::FirmwareError>),
+    ModelParamChanged(usize, String),
+    ModelCategorySelected(firmware::Category),
+    ModelCountryChanged(String),
     CopyCnPassword(String),
     CopyDownloadUri(String),
     CopyToolUri(String),
@@ -769,6 +835,60 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             Task::none()
         }
+        Message::ModelInputChanged(input) => {
+            let by_model = &mut state.lookup.by_model;
+            by_model.model = input;
+            if by_model.category_auto {
+                if let Some((category, country)) = detect_category(&by_model.model) {
+                    by_model.category = category;
+                    if let Some(country) = country {
+                        by_model.country_code = country.to_string();
+                    }
+                }
+            }
+            Task::none()
+        }
+        Message::ModelCategorySelected(category) => {
+            state.lookup.by_model.category = category;
+            state.lookup.by_model.category_auto = false;
+            Task::none()
+        }
+        Message::ModelCountryChanged(input) => {
+            state.lookup.by_model.country_code = input;
+            Task::none()
+        }
+        Message::ModelLookupRequested => request_model_lookup(state),
+        Message::ModelParamChanged(index, value) => {
+            if let Some(slot) = state.lookup.by_model.values.get_mut(index) {
+                *slot = value;
+            }
+            Task::none()
+        }
+        Message::ModelMatchParamsFetched(result) => {
+            match result {
+                Ok(match_params) => {
+                    let by_model = &mut state.lookup.by_model;
+                    by_model.loaded_model = by_model.model.clone();
+                    by_model.required = match_params.params;
+                    by_model.values = vec![String::new(); by_model.required.len()];
+                    state.lookup.status = LookupStatus::Idle;
+                }
+                Err(firmware::FirmwareError::AuthExpired(message)) => {
+                    // Token expired: forget it, log in again, and re-run the
+                    // lookup automatically once the new login succeeds.
+                    eprintln!("[lookup] token expired: {message}");
+                    state.login = LoginStatus::LoggedOut;
+                    state.lookup.status = LookupStatus::Idle;
+                    state.lookup.retry_after_login = true;
+                    return request_login(state, Click::Left);
+                }
+                Err(firmware::FirmwareError::Other(error)) => {
+                    state.lookup.status = LookupStatus::Error(error);
+                }
+            }
+
+            Task::none()
+        }
         Message::CopyCnPassword(password) => iced::clipboard::write::<Message>(password),
         Message::DecryptPickDirRequested => {
             if matches!(
@@ -1073,6 +1193,81 @@ fn request_retcn_lookup(state: &mut State) -> Task<Message> {
         },
         Message::LookupFinished,
     )
+}
+
+/// Starts a "Lookup by Model" request.
+///
+/// The first request asks `getRomMatchParams` which discriminator parameters
+/// separate this model's builds; once the user fills those in, a second
+/// request submits the actual lookup through `getNewResource`.
+fn request_model_lookup(state: &mut State) -> Task<Message> {
+    let token = match &state.login {
+        LoginStatus::LoggedIn { token, .. } => token.clone(),
+        _ => return Task::none(),
+    };
+
+    let model = state.lookup.by_model.model.trim().to_string();
+    if model.is_empty() {
+        let message = state.l10n.tr("by-model-error-required");
+        state.lookup.status = LookupStatus::Error(message);
+        return Task::none();
+    }
+
+    let uuid = state.client_uuid.clone();
+
+    if state.lookup.by_model.loaded_model != model {
+        // The server still owes us the list of discriminator parameters.
+        state.lookup.status = LookupStatus::Fetching;
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    firmware::fetch_model_match_params(&model, &token, &uuid)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    Err(firmware::FirmwareError::Other(format!(
+                        "background task failed: {e}"
+                    )))
+                })
+            },
+            Message::ModelMatchParamsFetched,
+        )
+    } else {
+        // Parameters are known; submit the lookup with the entered values.
+        let params: Vec<(String, String)> = state
+            .lookup
+            .by_model
+            .required
+            .iter()
+            .cloned()
+            .zip(state.lookup.by_model.values.iter().cloned())
+            .collect();
+        let category = state.lookup.by_model.category;
+        let country_code = state.lookup.by_model.country_code.clone();
+
+        state.lookup.status = LookupStatus::Fetching;
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    firmware::fetch_firmware_by_model(
+                        &model,
+                        category,
+                        &country_code,
+                        &params,
+                        &token,
+                        &uuid,
+                    )
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    Err(firmware::FirmwareError::Other(format!(
+                        "background task failed: {e}"
+                    )))
+                })
+            },
+            Message::LookupFinished,
+        )
+    }
 }
 
 /// Opens the login URL in the system web browser without blocking the UI.
@@ -1693,6 +1888,113 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
 
             push_lookup_status(state, l10n, content).into()
         }
+        LookupMode::ByModel => {
+            let fetching = matches!(state.lookup.status, LookupStatus::Fetching);
+
+            let lookup_button = if fetching {
+                button(text(l10n.tr("lookup-button")))
+            } else {
+                button(text(l10n.tr("lookup-button"))).on_press(Message::ModelLookupRequested)
+            };
+
+            let category_options: Vec<Labeled<firmware::Category>> = firmware::Category::ALL
+                .iter()
+                .map(|&category| Labeled {
+                    value: category,
+                    label: l10n.tr(category.message_id()),
+                })
+                .collect();
+            let selected_category = Labeled {
+                value: state.lookup.by_model.category,
+                label: l10n.tr(state.lookup.by_model.category.message_id()),
+            };
+            let category_picker: iced::widget::PickList<
+                '_,
+                Labeled<firmware::Category>,
+                Vec<Labeled<firmware::Category>>,
+                Labeled<firmware::Category>,
+                Message,
+            > = pick_list(category_options, Some(selected_category), |option| {
+                Message::ModelCategorySelected(option.value)
+            })
+            .text_shaping(Shaping::Advanced);
+
+            let mut content = column![
+                row![
+                    text(l10n.tr("fw-model-name")).size(16.0),
+                    text_input("", &state.lookup.by_model.model)
+                        .on_input(Message::ModelInputChanged)
+                        .on_submit(Message::ModelLookupRequested)
+                        .width(220),
+                    lookup_button,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text(l10n.tr("by-model-category-label")).size(14.0),
+                    category_picker,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(8)
+            .align_x(Alignment::Center);
+
+            // Country code only matters for tablets/smart devices
+            // (phones omit it, matching `_seed_params` in motofw.py).
+            if state.lookup.by_model.category != firmware::Category::Phone {
+                content = content.push(
+                    row![
+                        text(l10n.tr("by-model-country-label")).size(14.0),
+                        text_input("", &state.lookup.by_model.country_code)
+                            .on_input(Message::ModelCountryChanged)
+                            .width(100),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            }
+
+            // Discriminator fields the server needs for this model (shown
+            // after the first request resolves `getRomMatchParams`).
+            let params_ready =
+                state.lookup.by_model.loaded_model == state.lookup.by_model.model.trim();
+            if params_ready {
+                for (index, key) in state.lookup.by_model.required.iter().enumerate() {
+                    let label_id = match key.as_str() {
+                        "fingerPrint" => Some("retcn-fingerprint-label"),
+                        "roCarrier" => Some("retcn-carrier-label"),
+                        "fsgVersion.qcom" => Some("retcn-fsg-label"),
+                        "simCount" => Some("retcn-sim-label"),
+                        _ => None,
+                    };
+                    let label = match label_id {
+                        Some(id) => l10n.tr(id),
+                        None => key.clone(),
+                    };
+                    let value = state
+                        .lookup
+                        .by_model
+                        .values
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    content = content.push(
+                        row![
+                            text(label).size(14.0),
+                            text_input("", &value)
+                                .on_input(move |input| Message::ModelParamChanged(index, input))
+                                .width(220),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                    );
+                }
+            }
+
+            push_lookup_status(state, l10n, content).into()
+        }
     };
 
     column![dropdown, mode_content]
@@ -1850,5 +2152,32 @@ mod tests {
         assert!(!is_traditional_chinese("zh-Hans"));
         assert!(!is_traditional_chinese("en-US"));
         assert!(!is_traditional_chinese(""));
+    }
+
+    #[test]
+    fn model_category_is_detected_from_prefix() {
+        assert_eq!(
+            detect_category("XT2125-4"),
+            Some((firmware::Category::Phone, None))
+        );
+        assert_eq!(
+            detect_category("TB350FU"),
+            Some((firmware::Category::Tablet, None))
+        );
+        assert_eq!(
+            detect_category("PC-TB300FU"),
+            Some((firmware::Category::Tablet, Some("JP")))
+        );
+        assert_eq!(
+            detect_category("CD1901"),
+            Some((firmware::Category::Smart, None))
+        );
+        assert_eq!(
+            detect_category("SD650A"),
+            Some((firmware::Category::Smart, None))
+        );
+        assert_eq!(detect_category("  XT2125-4 "), Some((firmware::Category::Phone, None)));
+        assert_eq!(detect_category(""), None);
+        assert_eq!(detect_category("XYZ123"), None);
     }
 }
