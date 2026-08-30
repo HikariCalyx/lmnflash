@@ -15,8 +15,8 @@ pub struct DeviceInfo {
     pub fsg_version: String,
     /// Chipset platform, when it can be inferred from the device variables.
     pub platform: Option<Platform>,
-    /// SIM slot count (1 or 2), when the device reports a usable `radio`
-    /// value (MediaTek).
+    /// SIM slot count (1 or 2), when the device reports it via the
+    /// `oem hw dualsim` command.
     pub sim_count: Option<u8>,
 }
 
@@ -126,13 +126,14 @@ pub fn read_device_info(serial: &str) -> Result<DeviceInfo, String> {
 
     let platform = detect_platform(&variables);
 
-    // MediaTek devices report the SIM slot count in `radio` (e.g. `2`).
-    // Qualcomm devices use `radio` for something else (e.g. `NA`), so only
-    // apply it when the chipset is not known to be Qualcomm.
-    let sim_count = match platform {
-        Some(Platform::Qualcomm) => None,
-        _ => parse_sim_count(&get(&["radio"])),
-    };
+    // Query the SIM slot count directly via the OEM command
+    // `fastboot oem hw dualsim`, which reports `dualsim: true` on dual-SIM
+    // hardware (works regardless of chipset). Bootloaders that don't support
+    // the command leave the count unknown.
+    let sim_count = device
+        .oem_info("hw dualsim")
+        .ok()
+        .and_then(|lines| parse_dualsim(&lines));
 
     Ok(DeviceInfo {
         serial_number,
@@ -244,17 +245,32 @@ fn fsg_from_baseband(baseband: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Parses a SIM slot count from the `radio` value (`1`, `2`, `0x2`, …).
-fn parse_sim_count(radio: &str) -> Option<u8> {
-    let radio = radio.trim();
+/// Parses the SIM slot count from the `oem hw dualsim` response lines
+/// (e.g. `dualsim: true` → Dual, `dualsim: false` → Single). Also accepts
+/// numeric values (`1`, `2`, `0x2`, …) for bootloaders that report a count.
+fn parse_dualsim(lines: &[String]) -> Option<u8> {
+    let text = lines.join("\n").to_ascii_lowercase();
 
-    let value = if let Some(hex) = radio.strip_prefix("0x") {
-        u8::from_str_radix(hex, 16).ok()?
-    } else {
-        radio.parse::<u8>().ok()?
-    };
+    if text.contains("true") {
+        return Some(2);
+    }
+    if text.contains("false") {
+        return Some(1);
+    }
 
-    matches!(value, 1 | 2).then_some(value)
+    lines
+        .iter()
+        .flat_map(|line| line.split([':', '=', ' ']))
+        .find_map(|token| {
+            let token = token.trim();
+            let value = if let Some(hex) = token.strip_prefix("0x") {
+                u8::from_str_radix(hex, 16).ok()?
+            } else {
+                token.parse::<u8>().ok()?
+            };
+
+            matches!(value, 1 | 2).then_some(value)
+        })
 }
 
 #[cfg(test)]
@@ -327,15 +343,27 @@ mod tests {
     }
 
     #[test]
-    fn parses_sim_count_from_radio() {
-        assert_eq!(parse_sim_count("1"), Some(1));
-        assert_eq!(parse_sim_count("2"), Some(2));
-        assert_eq!(parse_sim_count("0x2"), Some(2));
-        assert_eq!(parse_sim_count(" 2 "), Some(2));
-        assert_eq!(parse_sim_count("NA"), None);
-        assert_eq!(parse_sim_count("0"), None);
-        assert_eq!(parse_sim_count("3"), None);
-        assert_eq!(parse_sim_count(""), None);
+    fn parses_dualsim_from_oem_output() {
+        // Dual-SIM device, exactly as `fastboot oem hw dualsim` reports it.
+        assert_eq!(
+            parse_dualsim(&["dualsim: true".to_string()]),
+            Some(2)
+        );
+        // Single-SIM device.
+        assert_eq!(
+            parse_dualsim(&["dualsim: false".to_string()]),
+            Some(1)
+        );
+        // Case-insensitive.
+        assert_eq!(parse_dualsim(&["DualSIM: TRUE".to_string()]), Some(2));
+        // Numeric fallback for bootloaders that report a count.
+        assert_eq!(parse_dualsim(&["1".to_string()]), Some(1));
+        assert_eq!(parse_dualsim(&["2".to_string()]), Some(2));
+        assert_eq!(parse_dualsim(&["dualsim: 0x2".to_string()]), Some(2));
+        // Unrecognized output leaves the count unknown.
+        assert_eq!(parse_dualsim(&["dualsim: 0".to_string()]), None);
+        assert_eq!(parse_dualsim(&["unknown".to_string()]), None);
+        assert_eq!(parse_dualsim(&[]), None);
     }
 
     #[test]
