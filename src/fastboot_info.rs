@@ -4,6 +4,199 @@
 use crate::firmware::Platform;
 use std::collections::HashMap;
 
+/// The bootloader unlock state of a Motorola (Lenovo) device.
+///
+/// A device moves through these states as its bootloader is unlocked,
+/// relocked, or serviced:
+///
+/// * `oem_locked` — pristine, OEM-locked factory state.
+/// * `flashing_unlocked` — OEM unlock performed; flashing allowed.
+/// * `flashing_locked` — relocked after an unlock.
+/// * `engineering` — engineering bootloader/build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BootloaderState {
+    /// The factory default: the bootloader is locked by the OEM and only
+    /// runs images signed by Motorola. This is the state out of the box.
+    #[default]
+    OemLocked,
+    /// An OEM unlock was performed, so the bootloader accepts unsigned
+    /// images and flashes without restriction.
+    FlashingUnlocked,
+    /// The bootloader was locked again after having been unlocked; it is
+    /// restricted once more, but is distinguishable from the pristine
+    /// [`BootloaderState::OemLocked`] state.
+    FlashingLocked,
+    /// An engineering bootloader/build, granting extended flashing and
+    /// debug access beyond the retail unlock. Typically only found on
+    /// engineering (pre-production/test) units.
+    Engineering,
+}
+
+impl BootloaderState {
+    pub const ALL: [Self; 4] = [
+        Self::OemLocked,
+        Self::FlashingUnlocked,
+        Self::FlashingLocked,
+        Self::Engineering,
+    ];
+
+    /// The canonical snake_case code for this state.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::OemLocked => "oem_locked",
+            Self::FlashingUnlocked => "flashing_unlocked",
+            Self::FlashingLocked => "flashing_locked",
+            Self::Engineering => "engineering",
+        }
+    }
+
+    /// Parses a state from its canonical code; `None` for unknown codes.
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "oem_locked" => Some(Self::OemLocked),
+            "flashing_unlocked" => Some(Self::FlashingUnlocked),
+            "flashing_locked" => Some(Self::FlashingLocked),
+            "engineering" => Some(Self::Engineering),
+            _ => None,
+        }
+    }
+}
+
+/// A Motorola (Lenovo) `cid` — the numeric carrier/regional code a
+/// bootloader reports via `fastboot getvar cid` (e.g. `0x0032`).
+///
+/// The CID selects which region/carrier firmware a device accepts. Because
+/// it is a raw numeric code, arbitrary (undocumented) values remain
+/// representable; the documented codes are classified through [`Cid::kind`].
+/// The same code is stored *decimally* in a firmware's `vbmeta.img`
+/// (`HAB_META<codename>_<decimal>`, e.g. `HAB_METAeqs_50` → CID `0x0032`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Cid(u16);
+
+impl Cid {
+    /// Wraps a raw CID value.
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    /// The raw numeric value.
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+
+    /// Parses a CID from its hex text form as `getvar cid` reports it
+    /// (e.g. `0x0032`); the `0x` prefix is optional and case-insensitive.
+    pub fn from_code(code: &str) -> Option<Self> {
+        let code = code.trim();
+        let hex = code
+            .strip_prefix("0x")
+            .or_else(|| code.strip_prefix("0X"))
+            .unwrap_or(code);
+
+        u16::from_str_radix(hex, 16).ok().map(Self)
+    }
+
+    /// The documented CID this value corresponds to, if any.
+    pub fn kind(self) -> Option<CidKind> {
+        CidKind::from_value(self.0)
+    }
+}
+
+impl std::fmt::Display for Cid {
+    /// Formats as upper-case hex with a `0x` prefix, e.g. `0x0032`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x{:04X}", self.0)
+    }
+}
+
+/// The documented Motorola (Lenovo) CID values.
+///
+/// Codes shared by several carriers get a single entry; the carriers are
+/// listed in the variant's documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CidKind {
+    /// `0x0000` — super privilege: may flash firmware of any region for the
+    /// same model. Only changeable with after-sales/factory-level access;
+    /// never present on normal retail units.
+    Super,
+    /// `0x0002` — Verizon variant.
+    Verizon,
+    /// `0x000B` — China mainland variant.
+    ChinaMainland,
+    /// `0x0012` — Amazon, AT&T, or Cricket variant.
+    Amazon,
+    /// `0x0015` — T-Mobile or Boost variant.
+    TMobile,
+    /// `0x0032` — retail variant and other unlock-capable models.
+    Retail,
+    /// `0x0033` — TracFone variant.
+    Tracfone,
+    /// `0x0034` — Japan FCNT variant.
+    JapanFcnt,
+    /// `0x00FF` — factory super privilege: may use factory commands, but may
+    /// only flash factory firmware.
+    Factory,
+    /// `0xDEAD` — damaged CID: unknown or unreadable.
+    Damaged,
+}
+
+impl CidKind {
+    pub const ALL: [Self; 10] = [
+        Self::Super,
+        Self::Verizon,
+        Self::ChinaMainland,
+        Self::Amazon,
+        Self::TMobile,
+        Self::Retail,
+        Self::Tracfone,
+        Self::JapanFcnt,
+        Self::Factory,
+        Self::Damaged,
+    ];
+
+    /// The raw numeric value of this code.
+    pub const fn value(self) -> u16 {
+        match self {
+            Self::Super => 0x0000,
+            Self::Verizon => 0x0002,
+            Self::ChinaMainland => 0x000B,
+            Self::Amazon => 0x0012,
+            Self::TMobile => 0x0015,
+            Self::Retail => 0x0032,
+            Self::Tracfone => 0x0033,
+            Self::JapanFcnt => 0x0034,
+            Self::Factory => 0x00FF,
+            Self::Damaged => 0xDEAD,
+        }
+    }
+
+    /// The hex text of this code, e.g. `0x0032`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Super => "0x0000",
+            Self::Verizon => "0x0002",
+            Self::ChinaMainland => "0x000B",
+            Self::Amazon => "0x0012",
+            Self::TMobile => "0x0015",
+            Self::Retail => "0x0032",
+            Self::Tracfone => "0x0033",
+            Self::JapanFcnt => "0x0034",
+            Self::Factory => "0x00FF",
+            Self::Damaged => "0xDEAD",
+        }
+    }
+
+    /// The documented code with the given raw value, if any.
+    pub fn from_value(value: u16) -> Option<Self> {
+        Self::ALL.iter().copied().find(|kind| kind.value() == value)
+    }
+
+    /// Parses a documented code from its hex text form (see [`Cid::from_code`]).
+    pub fn from_code(code: &str) -> Option<Self> {
+        Cid::from_code(code).and_then(|cid| Self::from_value(cid.raw()))
+    }
+}
+
 /// Values read from `fastboot getvar all` that map onto the RETCN form.
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
@@ -384,5 +577,81 @@ mod tests {
         ]);
 
         assert!(!is_motorola(&non_moto));
+    }
+
+    #[test]
+    fn round_trips_bootloader_state_codes() {
+        for state in BootloaderState::ALL {
+            assert_eq!(BootloaderState::from_code(state.code()), Some(state));
+        }
+    }
+
+    #[test]
+    fn maps_every_bootloader_state_code() {
+        let codes = [
+            ("oem_locked", BootloaderState::OemLocked),
+            ("flashing_unlocked", BootloaderState::FlashingUnlocked),
+            ("flashing_locked", BootloaderState::FlashingLocked),
+            ("engineering", BootloaderState::Engineering),
+        ];
+
+        for (code, state) in codes {
+            assert_eq!(state.code(), code);
+            assert_eq!(BootloaderState::from_code(code), Some(state));
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_bootloader_state_codes() {
+        assert_eq!(BootloaderState::from_code(""), None);
+        assert_eq!(BootloaderState::from_code("oem_locked "), None);
+        assert_eq!(BootloaderState::from_code("OEM_LOCKED"), None);
+        assert_eq!(BootloaderState::from_code("unlocked"), None);
+    }
+
+    #[test]
+    fn parses_cid_from_getvar_hex() {
+        assert_eq!(Cid::from_code("0x0032"), Some(Cid::new(0x0032)));
+        assert_eq!(Cid::from_code("0X0033"), Some(Cid::new(0x0033)));
+        assert_eq!(Cid::from_code("0xDEAD"), Some(Cid::new(0xDEAD)));
+        // The `0x` prefix is optional.
+        assert_eq!(Cid::from_code("0032"), Some(Cid::new(0x0032)));
+    }
+
+    #[test]
+    fn rejects_invalid_cid_text() {
+        assert_eq!(Cid::from_code(""), None);
+        assert_eq!(Cid::from_code("0x"), None);
+        assert_eq!(Cid::from_code("0xZZZZ"), None);
+        // Overflow: wider than a u16.
+        assert_eq!(Cid::from_code("0x10000"), None);
+    }
+
+    #[test]
+    fn formats_cid_as_hex() {
+        assert_eq!(Cid::new(0x0032).to_string(), "0x0032");
+        assert_eq!(Cid::new(0xDEAD).to_string(), "0xDEAD");
+    }
+
+    #[test]
+    fn classifies_documented_cids() {
+        assert_eq!(Cid::new(0x0032).kind(), Some(CidKind::Retail));
+        assert_eq!(Cid::new(0x0033).kind(), Some(CidKind::Tracfone));
+        assert_eq!(Cid::new(0x0000).kind(), Some(CidKind::Super));
+        assert_eq!(Cid::new(0x000B).kind(), Some(CidKind::ChinaMainland));
+        assert_eq!(Cid::new(0x0034).kind(), Some(CidKind::JapanFcnt));
+        assert_eq!(Cid::new(0x00FF).kind(), Some(CidKind::Factory));
+        assert_eq!(Cid::new(0xDEAD).kind(), Some(CidKind::Damaged));
+        // Arbitrary (undocumented) values stay representable, unclassified.
+        assert_eq!(Cid::new(0x1234).kind(), None);
+    }
+
+    #[test]
+    fn cid_kind_round_trips() {
+        for kind in CidKind::ALL {
+            assert_eq!(CidKind::from_value(kind.value()), Some(kind));
+            assert_eq!(CidKind::from_code(kind.code()), Some(kind));
+            assert_eq!(Cid::new(kind.value()).to_string(), kind.code());
+        }
     }
 }
