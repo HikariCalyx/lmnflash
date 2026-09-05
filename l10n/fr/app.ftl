@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Recherche de firmware
-mode-2 = Mode 2
+mode-2 = Flash du smartphone
 mode-3 = Déchiffrement du firmware
+
+flash-bootloader-title = Déverrouillage du bootloader
+flash-bootloader-button = Déverrouiller le bootloader
+
+flash-bootloader-choose = Comment souhaitez-vous déverrouiller le bootloader ?
+flash-bootloader-assistive = Assisté
+flash-bootloader-manual = Manuel
+flash-bootloader-return = Retour
+flash-bootloader-manual-desc = Pour demander le déverrouillage du bootloader, vous devez obtenir le Device ID (aussi appelé Unlock Data) de l'appareil. Cliquez sur « Lire depuis Fastboot » pour le lire ; le Device ID obtenu sera copié dans le presse-papiers.
+flash-bootloader-open-site = Aller sur le site de déverrouillage du bootloader Motorola
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Copier
+flash-bootloader-read = Lire depuis Fastboot
+flash-bootloader-key-desc = Une fois la clé de déverrouillage obtenue, saisissez-la dans le champ ci-dessous, puis cliquez sur « Déverrouiller ».
+flash-bootloader-unlock = Déverrouiller
+flash-bootloader-copied = Device ID copié dans le presse-papiers.
+flash-bootloader-unlocked = Bootloader déverrouillé.
+flash-bootloader-key-required = Saisissez d'abord la clé de déverrouillage.
+flash-bootloader-oem-unlocking-required = Activez « Déverrouillage OEM » dans les Options pour développeurs, puis réessayez.
+flash-bootloader-unlock-cancelled = La demande de déverrouillage du bootloader a été annulée.
+flash-bootloader-unlock-wrong-key = Le déverrouillage du bootloader a échoué en raison d'une clé de déverrouillage incorrecte.
+flash-bootloader-obtain-key = Vous devez soumettre votre Device ID sur le site de déverrouillage du bootloader Motorola pour obtenir la clé de déverrouillage.
+flash-bootloader-warranty-note = Si vous ne pouvez pas visiter le site de déverrouillage du bootloader Motorola, vous pouvez envoyer le Device ID à quelqu'un qui peut le visiter. Gardez à l'esprit qu'une fois la clé de déverrouillage obtenue, votre téléphone sera marqué comme hors garantie dans le système du service client Motorola.
+flash-bootloader-key-is-device-id = Le Device ID n'est pas votre clé de déverrouillage
+flash-bootloader-unlocking = Déverrouillage du bootloader…
+flash-bootloader-checking = Vérification de l'éligibilité au déverrouillage du bootloader…
+flash-bootloader-eligible = Ce téléphone peut déverrouiller le bootloader.
+flash-bootloader-not-eligible = Ce téléphone ne peut peut-être pas déverrouiller le bootloader.
 
 login-dialog-title = LMN Flash — Connexion
 login-prompt = Connectez-vous pour rechercher un firmware

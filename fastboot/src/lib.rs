@@ -101,6 +101,54 @@ impl FastbootDevice {
         self.read_info()
     }
 
+    /// Like [`Self::oem_info`], but preserves the INFO lines the bootloader
+    /// sent *before* a FAILED packet.
+    ///
+    /// Motorola bootloaders often explain why a command failed via INFO text
+    /// (e.g. `Check 'OEM unlocking' in Android Settings > Developer`) that
+    /// `oem_info` would otherwise discard. On failure the returned error is
+    /// the FAIL payload plus those INFO lines, so callers can tell the
+    /// failure reason apart.
+    pub fn oem_info_with_fail_details(&self, command: &str) -> Result<Vec<String>, String> {
+        self.write(format!("oem {}", command).as_bytes())?;
+
+        let mut lines = Vec::new();
+        loop {
+            let (h, p) = self.read_packet()?;
+            match h.as_slice() {
+                b"INFO" => {
+                    let text =
+                        String::from_utf8_lossy(&p).trim_end_matches('\0').to_string();
+                    if !text.is_empty() {
+                        lines.push(text);
+                    }
+                }
+                b"OKAY" => {
+                    let text =
+                        String::from_utf8_lossy(&p).trim_end_matches('\0').to_string();
+                    if !text.is_empty() {
+                        lines.push(text);
+                    }
+                    return Ok(lines);
+                }
+                b"FAIL" => {
+                    let fail =
+                        String::from_utf8_lossy(&p).trim_end_matches('\0').to_string();
+                    if lines.is_empty() {
+                        return Err(fail);
+                    }
+                    return Err(format!("{fail} | {}", lines.join(" | ")));
+                }
+                _ => {
+                    return Err(format!(
+                        "Unexpected response: {}",
+                        String::from_utf8_lossy(&h)
+                    ));
+                }
+            }
+        }
+    }
+
     pub fn oem(&self, command: &str) -> Result<(), String> {
         self.simple_cmd(format!("oem {}", command).as_bytes())?;
         Ok(())

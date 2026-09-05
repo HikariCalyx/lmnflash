@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Поиск прошивки
-mode-2 = Режим 2
+mode-2 = Прошивка смартфона
 mode-3 = Расшифровка прошивки
+
+flash-bootloader-title = Разблокировка загрузчика
+flash-bootloader-button = Разблокировать загрузчик
+
+flash-bootloader-choose = Как вы хотите разблокировать загрузчик?
+flash-bootloader-assistive = Автоматически
+flash-bootloader-manual = Вручную
+flash-bootloader-return = Назад
+flash-bootloader-manual-desc = Чтобы запросить разблокировку загрузчика, нужно получить Device ID (также называемый Unlock Data) с устройства. Нажмите «Читать из Fastboot», чтобы прочитать его; полученный Device ID будет скопирован в буфер обмена.
+flash-bootloader-open-site = Перейти на сайт разблокировки загрузчика Motorola
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Копировать
+flash-bootloader-read = Читать из Fastboot
+flash-bootloader-key-desc = Получив ключ разблокировки, введите его в поле ниже и нажмите «Разблокировать».
+flash-bootloader-unlock = Разблокировать
+flash-bootloader-copied = Device ID скопирован в буфер обмена.
+flash-bootloader-unlocked = Загрузчик разблокирован.
+flash-bootloader-key-required = Сначала введите ключ разблокировки.
+flash-bootloader-oem-unlocking-required = Включите «Разблокировка OEM» в параметрах для разработчиков и повторите попытку.
+flash-bootloader-unlock-cancelled = Запрос на разблокировку загрузчика был отменён.
+flash-bootloader-unlock-wrong-key = Разблокировка загрузчика не удалась из-за неверного ключа разблокировки.
+flash-bootloader-obtain-key = Чтобы получить ключ разблокировки, отправьте свой Device ID на сайт разблокировки загрузчика Motorola.
+flash-bootloader-warranty-note = Если вы не можете посетить сайт разблокировки загрузчика Motorola, вы можете отправить Device ID тому, кто может. Имейте в виду: после получения ключа разблокировки ваш телефон будет отмечен как потерявший гарантию в системе обслуживания клиентов Motorola.
+flash-bootloader-key-is-device-id = Device ID — это не ваш ключ разблокировки
+flash-bootloader-unlocking = Разблокировка загрузчика…
+flash-bootloader-checking = Проверка возможности разблокировки загрузчика…
+flash-bootloader-eligible = Этот телефон подходит для разблокировки загрузчика.
+flash-bootloader-not-eligible = Возможно, этот телефон не подходит для разблокировки загрузчика.
 
 login-dialog-title = LMN Flash — вход
 login-prompt = Войдите, чтобы найти прошивку

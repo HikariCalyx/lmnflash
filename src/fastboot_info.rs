@@ -273,9 +273,293 @@ fn parse_dualsim(lines: &[String]) -> Option<u8> {
         })
 }
 
+/// Motorola's bootloader-unlock request page, where the Device ID is
+/// submitted to receive the unique unlock key.
+pub const UNLOCK_PAGE_URL: &str =
+    "https://en-us.support.motorola.com/app/standalone/bootloader/unlock-your-device-b";
+
+/// Parses the INFO payloads of `fastboot oem get_unlock_data` into the
+/// Device ID.
+///
+/// Bootloaders reply in one of two shapes:
+/// - modern ones return a single line prefixed `Unlock data:` that already
+///   holds the whole ID (`Unlock data:3A95…&#…`); the label is stripped;
+/// - older ones return the raw chunks, one per line (`0A4004…`, …), which
+///   are concatenated.
+///
+/// A "Failed to get unlock data." notice is surfaced as an error instead of
+/// being treated as part of the ID.
+fn parse_unlock_data(lines: &[String]) -> Result<String, String> {
+    let mut data = String::new();
+
+    for line in lines {
+        let text = line.trim();
+
+        if text.to_ascii_lowercase().contains("failed to get unlock data") {
+            return Err(
+                "Failed to get unlock data: the device did not return its Device ID.".to_string(),
+            );
+        }
+
+        // Strip an optional case-insensitive "Unlock data:" label.
+        let lower = text.to_ascii_lowercase();
+        let body = match lower.find("unlock data:") {
+            Some(start) => &text[start + "unlock data:".len()..],
+            None => text,
+        };
+        data.push_str(body);
+    }
+
+    if data.is_empty() {
+        return Err("No unlock data returned by the device.".to_string());
+    }
+
+    Ok(data)
+}
+
+/// Runs `fastboot oem get_unlock_data` and returns the Device ID.
+pub fn read_unlock_data(serial: &str) -> Result<String, String> {
+    let device = fastboot::FastbootDevice::connect(serial)?;
+    let lines = device.oem_info("get_unlock_data")?;
+    parse_unlock_data(&lines)
+}
+
+/// Why sending the unlock key to the bootloader failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnlockFailure {
+    /// The bootloader refuses because "OEM unlocking" is disabled in Android
+    /// Developer Options.
+    OemUnlockingDisabled,
+    /// The user declined the on-device unlock confirmation (or it timed out);
+    /// Motorola answers with an empty `FAILED (remote: '')` and no INFO.
+    Cancelled,
+    /// The unlock key was rejected (INFO "Code validation failure").
+    WrongKey,
+    /// Any other failure, carrying the bootloader's raw message.
+    Other(String),
+}
+
+/// Sends the Motorola unlock command `fastboot oem unlock <key>` and returns
+/// any INFO/OKAY text the bootloader reported.
+///
+/// The reply is classified so the UI can guide the user: a developer-option
+/// notice (`Check 'OEM unlocking'…` / `Check 'Allow OEM Unlock'…`) becomes
+/// [`UnlockFailure::OemUnlockingDisabled`], `Code validation failure` becomes
+/// [`UnlockFailure::WrongKey`], an empty failure becomes
+/// [`UnlockFailure::Cancelled`], and everything else is
+/// [`UnlockFailure::Other`] with the raw message.
+///
+/// Note that MediaTek bootloaders answer `OKAY` even when they only remind
+/// the user to enable the developer option, or when the key is wrong
+/// (`Code validation failure.`); those OKAY-but-not-unlocked replies are
+/// detected too. An *empty* OKAY means the user declined / timed out on
+/// MediaTek, but is a normal success on Qualcomm — so the device platform is
+/// detected first (reusing `detect_platform`) to disambiguate.
+pub fn unlock_bootloader(serial: &str, key: &str) -> Result<String, UnlockFailure> {
+    let device = fastboot::FastbootDevice::connect(serial).map_err(UnlockFailure::Other)?;
+
+    // Best-effort platform detection: MediaTek answers a bare OKAY when the
+    // user declines the unlock prompt (or times out), whereas Qualcomm FAILs
+    // in that situation — so an empty OKAY means different things per vendor.
+    let platform = device
+        .getvar_all()
+        .ok()
+        .map(|lines| parse_getvar_all(&lines))
+        .and_then(|variables| detect_platform(&variables));
+
+    let command = format!("unlock {}", key.trim());
+    match device.oem_info_with_fail_details(&command) {
+        Ok(lines) => unlock_reply(lines.join("\n"), platform),
+        Err(message) => Err(classify_unlock_failure(&message)),
+    }
+}
+
+/// True when a reply mentions the Developer Options toggle that must be
+/// enabled first. Qualcomm word it as "Check 'OEM unlocking'…", MediaTek as
+/// "Check 'Allow OEM Unlock'…".
+fn mentions_developer_toggle(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("oem unlocking") || lower.contains("allow oem unlock")
+}
+
+/// Turns a successful (OKAY) unlock response into a result. An OKAY does NOT
+/// always mean the bootloader was unlocked:
+///
+/// - MediaTek reminds the user to enable the developer option
+///   (`Check 'Allow OEM Unlock'…`) or rejects a wrong key
+///   (`Code validation failure.`) while still answering OKAY;
+/// - if the user declines the on-device prompt (or it times out), MediaTek
+///   answers a bare OKAY with **no** message — and no unlock happens
+///   (Qualcomm FAILs instead, so an empty OKAY there is a success);
+/// - a confirmed unlock is the one that carries an extra message (e.g.
+///   `Bootloader unlock success`) before the OKAY.
+fn unlock_reply(
+    text: String,
+    platform: Option<crate::firmware::Platform>,
+) -> Result<String, UnlockFailure> {
+    if mentions_developer_toggle(&text) {
+        Err(UnlockFailure::OemUnlockingDisabled)
+    } else if text.to_ascii_lowercase().contains("code validation failure") {
+        Err(UnlockFailure::WrongKey)
+    } else if text.trim().is_empty() {
+        // Empty OKAY = declined / timeout on MediaTek; a genuine success on
+        // Qualcomm (or when the platform could not be detected).
+        match platform {
+            Some(crate::firmware::Platform::MediaTek) => Err(UnlockFailure::Cancelled),
+            _ => Ok(text),
+        }
+    } else {
+        // Non-empty OKAY without a blocker notice = the unlock happened.
+        Ok(text)
+    }
+}
+
+/// Maps a bootloader failure message to an [`UnlockFailure`] kind. Motorola
+/// bootloaders preface the FAILED packet with INFO lines such as
+/// `Check 'OEM unlocking' in Android Settings > Developer` or
+/// `Code validation failure`; declining the on-device prompt (or a timeout)
+/// yields an empty FAILED with no INFO lines.
+fn classify_unlock_failure(message: &str) -> UnlockFailure {
+    let lower = message.to_ascii_lowercase();
+
+    if mentions_developer_toggle(message) {
+        UnlockFailure::OemUnlockingDisabled
+    } else if lower.contains("code validation failure") {
+        UnlockFailure::WrongKey
+    } else if message.trim().is_empty() {
+        UnlockFailure::Cancelled
+    } else {
+        UnlockFailure::Other(message.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_oem_unlock_disabled_failure() {
+        let message =
+            "Check 'OEM unlocking' in Android Settings > Developer | Options";
+        assert_eq!(
+            classify_unlock_failure(message),
+            UnlockFailure::OemUnlockingDisabled
+        );
+    }
+
+    #[test]
+    fn classifies_mtk_allow_oem_unlock_disabled() {
+        let message =
+            "Check 'Allow OEM Unlock' in Android Settings > Developer | Options";
+        assert_eq!(
+            classify_unlock_failure(message),
+            UnlockFailure::OemUnlockingDisabled
+        );
+        // MediaTek answers OKAY while only reminding the user: the success
+        // reply path must still be treated as blocked, not as unlocked.
+        assert_eq!(
+            unlock_reply(message.to_string(), Some(crate::firmware::Platform::MediaTek)),
+            Err(UnlockFailure::OemUnlockingDisabled)
+        );
+    }
+
+    #[test]
+    fn confirmed_unlock_reply_is_success() {
+        // A confirmed unlock carries an extra message before the OKAY.
+        assert_eq!(
+            unlock_reply(
+                "Bootloader unlock success".to_string(),
+                Some(crate::firmware::Platform::MediaTek)
+            ),
+            Ok("Bootloader unlock success".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_okay_depends_on_platform() {
+        // MediaTek answers a bare OKAY (no message) when the user declines
+        // the prompt or it times out — that is NOT an unlock.
+        assert_eq!(
+            unlock_reply(String::new(), Some(crate::firmware::Platform::MediaTek)),
+            Err(UnlockFailure::Cancelled)
+        );
+        // Qualcomm FAILs on decline/timeout instead, so an empty OKAY there
+        // is a genuine success.
+        assert_eq!(
+            unlock_reply(String::new(), Some(crate::firmware::Platform::Qualcomm)),
+            Ok(String::new())
+        );
+        // Unknown platform falls back to treating an empty OKAY as success.
+        assert_eq!(unlock_reply(String::new(), None), Ok(String::new()));
+    }
+
+    #[test]
+    fn mtk_wrong_key_okay_reply_is_rejected() {
+        assert_eq!(
+            unlock_reply(
+                "Code validation failure.".to_string(),
+                Some(crate::firmware::Platform::MediaTek)
+            ),
+            Err(UnlockFailure::WrongKey)
+        );
+    }
+
+    #[test]
+    fn classifies_wrong_key_failure() {
+        let message = "Code validation failure";
+        assert_eq!(classify_unlock_failure(message), UnlockFailure::WrongKey);
+    }
+
+    #[test]
+    fn classifies_cancelled_failure_when_empty() {
+        assert_eq!(classify_unlock_failure(""), UnlockFailure::Cancelled);
+    }
+
+    #[test]
+    fn classifies_other_unlock_failure() {
+        let message = "FAILED (remote: 'bad key')";
+        assert_eq!(
+            classify_unlock_failure(message),
+            UnlockFailure::Other(message.to_string())
+        );
+    }
+
+    #[test]
+    fn strips_unlock_data_label_from_single_line() {
+        let line = "Unlock data:3A95915042649321#5A5932324B525834524B006D6F746F726F6C0000#8226946C1000ED2C2C9D9A3A981F063D80A30825CA264A20E51C1EDCC25BD0C4#10CAE512002750E10000000000000000";
+        let parsed = parse_unlock_data(&[line.to_string()]).unwrap();
+
+        assert_eq!(parsed, line.strip_prefix("Unlock data:").unwrap());
+        assert!(!parsed.contains("Unlock data:"));
+    }
+
+    #[test]
+    fn concatenates_unprefixed_unlock_data_chunks() {
+        let chunks = [
+            "0A40040192024205#4C4D3556313230",
+            "30373731363031303332323239#BD00",
+            "8A672BA4746C2CE02328A2AC0C39F95",
+            "1A3E5#1F53280002000000000000000",
+            "0000000",
+        ];
+        let lines: Vec<String> = chunks.iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(parse_unlock_data(&lines).unwrap(), chunks.concat());
+    }
+
+    #[test]
+    fn rejects_failed_unlock_data_notice() {
+        let lines = ["Failed to get unlock data.".to_string()];
+        let error = parse_unlock_data(&lines).unwrap_err();
+
+        assert!(error.contains("Failed to get unlock data"));
+    }
+
+    #[test]
+    fn rejects_empty_unlock_data() {
+        let lines = ["".to_string()];
+        assert!(parse_unlock_data(&lines).is_err());
+    }
 
     #[test]
     fn parses_getvar_all_lines() {

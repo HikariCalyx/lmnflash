@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Ricerca firmware
-mode-2 = Modalità 2
+mode-2 = Flash dello smartphone
 mode-3 = Decifratura firmware
+
+flash-bootloader-title = Sblocco del bootloader
+flash-bootloader-button = Sblocca il bootloader
+
+flash-bootloader-choose = Come vuoi sbloccare il bootloader?
+flash-bootloader-assistive = Assistito
+flash-bootloader-manual = Manuale
+flash-bootloader-return = Indietro
+flash-bootloader-manual-desc = Per richiedere lo sblocco del bootloader, devi ottenere il Device ID (chiamato anche Unlock Data) dal dispositivo. Fai clic su "Leggi da Fastboot" per leggerlo; il Device ID ottenuto verrà copiato negli appunti.
+flash-bootloader-open-site = Vai al sito di sblocco del bootloader Motorola
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Copia
+flash-bootloader-read = Leggi da Fastboot
+flash-bootloader-key-desc = Una volta ottenuta la chiave di sblocco, inseriscila nel campo sottostante e fai clic su "Sblocca".
+flash-bootloader-unlock = Sblocca
+flash-bootloader-copied = Device ID copiato negli appunti.
+flash-bootloader-unlocked = Bootloader sbloccato.
+flash-bootloader-key-required = Inserisci prima la chiave di sblocco.
+flash-bootloader-oem-unlocking-required = Attiva “Sblocco OEM” nelle Opzioni sviluppatore, quindi riprova.
+flash-bootloader-unlock-cancelled = La richiesta di sblocco del bootloader è stata annullata.
+flash-bootloader-unlock-wrong-key = Lo sblocco del bootloader non è riuscito a causa di una chiave di sblocco errata.
+flash-bootloader-obtain-key = Devi inviare il tuo Device ID al sito di sblocco del bootloader Motorola per ottenere la chiave di sblocco.
+flash-bootloader-warranty-note = Se non puoi visitare il sito di sblocco del bootloader Motorola, puoi inviare il Device ID a qualcuno che può visitarlo. Tieni presente che, una volta ottenuta la chiave di sblocco, il tuo telefono sarà marcato come fuori garanzia nel sistema del servizio clienti Motorola.
+flash-bootloader-key-is-device-id = Il Device ID non è la tua chiave di sblocco
+flash-bootloader-unlocking = Sblocco del bootloader in corso…
+flash-bootloader-checking = Verifica dell'idoneità allo sblocco del bootloader…
+flash-bootloader-eligible = Questo telefono può sbloccare il bootloader.
+flash-bootloader-not-eligible = Questo telefono potrebbe non poter sbloccare il bootloader.
 
 login-dialog-title = LMN Flash — Accedi
 login-prompt = Accedi per cercare il firmware

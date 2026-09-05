@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Firmware zoeken
-mode-2 = Modus 2
+mode-2 = Smartphone flashen
 mode-3 = Firmware ontsleutelen
+
+flash-bootloader-title = Bootloader ontgrendelen
+flash-bootloader-button = Ontgrendel de bootloader
+
+flash-bootloader-choose = Hoe wil je de bootloader ontgrendelen?
+flash-bootloader-assistive = Assistent
+flash-bootloader-manual = Handmatig
+flash-bootloader-return = Terug
+flash-bootloader-manual-desc = Om bootloader-ontgrendeling aan te vragen, moet je eerst de Device ID (ook wel Unlock Data genoemd) van het apparaat ophalen. Klik op 'Lezen vanaf Fastboot' om deze te lezen; de verkregen Device ID wordt naar het klembord gekopieerd.
+flash-bootloader-open-site = Ga naar de Motorola-website voor bootloader-ontgrendeling
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Kopiëren
+flash-bootloader-read = Lezen vanaf Fastboot
+flash-bootloader-key-desc = Zodra je de ontgrendelsleutel hebt, typ je die in het veld hieronder en klik je op 'Ontgrendelen'.
+flash-bootloader-unlock = Ontgrendelen
+flash-bootloader-copied = Device ID naar het klembord gekopieerd.
+flash-bootloader-unlocked = Bootloader ontgrendeld.
+flash-bootloader-key-required = Voer eerst de ontgrendelsleutel in.
+flash-bootloader-oem-unlocking-required = Schakel “OEM-ontgrendeling” in onder Ontwikkelaarsopties en probeer het opnieuw.
+flash-bootloader-unlock-cancelled = Het verzoek om bootloader-ontgrendeling is geannuleerd.
+flash-bootloader-unlock-wrong-key = De bootloader-ontgrendeling is mislukt vanwege een onjuiste ontgrendelsleutel.
+flash-bootloader-obtain-key = Je moet je Device ID indienen op de Motorola-website voor bootloader-ontgrendeling om de ontgrendelsleutel te verkrijgen.
+flash-bootloader-warranty-note = Als je de Motorola-website voor bootloader-ontgrendeling niet kunt bezoeken, kun je de Device ID naar iemand sturen die dat wel kan. Houd er rekening mee dat je telefoon, zodra de ontgrendelsleutel is verkregen, in het klantenservicesysteem van Motorola als garantievervallen wordt gemarkeerd.
+flash-bootloader-key-is-device-id = De Device ID is niet je ontgrendelsleutel
+flash-bootloader-unlocking = Bootloader ontgrendelen…
+flash-bootloader-checking = Bezig met controleren of de bootloader kan worden ontgrendeld…
+flash-bootloader-eligible = Deze telefoon kan de bootloader ontgrendelen.
+flash-bootloader-not-eligible = Deze telefoon kan de bootloader mogelijk niet ontgrendelen.
 
 login-dialog-title = LMN Flash — Aanmelden
 login-prompt = Meld u aan om firmware te zoeken

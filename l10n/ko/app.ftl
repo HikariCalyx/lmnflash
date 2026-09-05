@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = 펌웨어 조회
-mode-2 = 모드 2
+mode-2 = 스마트폰 플래시
 mode-3 = 펌웨어 복호화
+
+flash-bootloader-title = 부트로더 잠금 해제
+flash-bootloader-button = 잠금 해제
+
+flash-bootloader-choose = 부트로더 잠금을 어떻게 해제할까요?
+flash-bootloader-assistive = 안내 모드
+flash-bootloader-manual = 수동
+flash-bootloader-return = 돌아가기
+flash-bootloader-manual-desc = 부트로더 잠금 해제를 요청하려면 기기에서 Device ID(Unlock Data라고도 함)를 가져와야 합니다. "Fastboot에서 읽기" 버튼을 눌러 읽어오세요. 가져온 Device ID는 클립보드에 복사됩니다.
+flash-bootloader-open-site = Motorola 부트로더 잠금 해제 웹사이트로 이동
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = 복사
+flash-bootloader-read = Fastboot에서 읽기
+flash-bootloader-key-desc = 잠금 해제 키를 받으면 아래 입력란에 입력한 후 "잠금 해제" 버튼을 누르세요.
+flash-bootloader-unlock = 잠금 해제
+flash-bootloader-copied = Device ID가 클립보드에 복사되었습니다.
+flash-bootloader-unlocked = 부트로더 잠금이 해제되었습니다.
+flash-bootloader-key-required = 먼저 잠금 해제 키를 입력하세요.
+flash-bootloader-oem-unlocking-required = 개발자 옵션에서 “OEM 잠금 해제”를 켠 후 다시 시도하세요.
+flash-bootloader-unlock-cancelled = 부트로더 잠금 해제 요청이 취소되었습니다.
+flash-bootloader-unlock-wrong-key = 잘못된 잠금 해제 키로 인해 부트로더 잠금 해제에 실패했습니다.
+flash-bootloader-obtain-key = 잠금 해제 키를 얻으려면 Motorola 부트로더 잠금 해제 웹사이트에 Device ID를 제출해야 합니다.
+flash-bootloader-warranty-note = Motorola 부트로더 잠금 해제 웹사이트를 방문할 수 없는 경우, 방문할 수 있는 사람에게 Device ID를 보낼 수 있습니다. 잠금 해제 키를 획득하면 Motorola 고객 서비스 시스템에서 휴대전화가 보증 무효로 표시된다는 점을 명심하세요.
+flash-bootloader-key-is-device-id = Device ID는 잠금 해제 키가 아닙니다
+flash-bootloader-unlocking = 부트로더 잠금을 해제하는 중…
+flash-bootloader-checking = 부트로더 잠금 해제 가능 여부를 확인하는 중…
+flash-bootloader-eligible = 이 휴대전화는 부트로더 잠금을 해제할 수 있습니다.
+flash-bootloader-not-eligible = 이 휴대전화는 부트로더 잠금을 해제하지 못할 수 있습니다.
 
 login-dialog-title = LMN Flash — 로그인
 login-prompt = 로그인하여 펌웨어 조회

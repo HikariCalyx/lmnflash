@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Firmwarehaku
-mode-2 = Tila 2
+mode-2 = Älypuhelimen flashaus
 mode-3 = Firmwaren salauksen purku
+
+flash-bootloader-title = Bootloaderin lukituksen avaus
+flash-bootloader-button = Avaa bootloaderin lukitus
+
+flash-bootloader-choose = Miten haluat avata bootloaderin lukituksen?
+flash-bootloader-assistive = Avustettu
+flash-bootloader-manual = Manuaalinen
+flash-bootloader-return = Takaisin
+flash-bootloader-manual-desc = Pyytääksesi bootloaderin avausta sinun on haettava laitteen Device ID (eli Unlock Data). Napsauta "Lue Fastbootista" -painiketta lukeaksesi sen; haettu Device ID kopioidaan leikepöydälle.
+flash-bootloader-open-site = Siirry Motorolan bootloaderin avaussivustolle
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Kopioi
+flash-bootloader-read = Lue Fastbootista
+flash-bootloader-key-desc = Kun olet saanut avausavaimen, kirjoita se alla olevaan kenttään ja napsauta "Avaa lukitus"-painiketta.
+flash-bootloader-unlock = Avaa lukitus
+flash-bootloader-copied = Device ID kopioitu leikepöydälle.
+flash-bootloader-unlocked = Bootloaderin lukitus avattu.
+flash-bootloader-key-required = Kirjoita avausavain ensin.
+flash-bootloader-oem-unlocking-required = Ota käyttöön “OEM-avaus” -asetus (Kehittäjäasetukset) ja yritä uudelleen.
+flash-bootloader-unlock-cancelled = Bootloaderin avauspyyntö on peruutettu.
+flash-bootloader-unlock-wrong-key = Bootloaderin avaus epäonnistui väärän avausavaimen vuoksi.
+flash-bootloader-obtain-key = Sinun on lähetettävä Device ID:si Motorolan bootloaderin avaussivustolle saadaksesi avausavaimen.
+flash-bootloader-warranty-note = Jos et voi käydä Motorolan bootloaderin avaussivustolla, voit lähettää Device ID:n jollekin, joka voi käydä siellä. Muista, että kun avausavain on saatu, puhelimesi merkitään takuun ulkopuolelle Motorolan asiakaspalvelujärjestelmässä.
+flash-bootloader-key-is-device-id = Device ID ei ole avausavaimesi
+flash-bootloader-unlocking = Avataan bootloaderin lukitusta…
+flash-bootloader-checking = Tarkistetaan bootloaderin avauskelpoisuutta…
+flash-bootloader-eligible = Tämä puhelin voi avata bootloaderin lukituksen.
+flash-bootloader-not-eligible = Tämä puhelin ei välttämättä voi avata bootloaderin lukitusta.
 
 login-dialog-title = LMN Flash — Kirjaudu sisään
 login-prompt = Kirjaudu sisään hakeaksesi firmwarea

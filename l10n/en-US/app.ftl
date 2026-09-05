@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Firmware Lookup
-mode-2 = Mode 2
+mode-2 = Smartphone Flash
 mode-3 = Firmware Decrypt
+
+flash-bootloader-title = Bootloader Unlock
+flash-bootloader-button = Unlock Bootloader
+
+flash-bootloader-choose = How do you want to unlock the bootloader?
+flash-bootloader-assistive = Assistive
+flash-bootloader-manual = Manual
+flash-bootloader-return = Return
+flash-bootloader-manual-desc = To request bootloader unlock, you need to obtain the Device ID (also called Unlock Data) from the device. Click "Read from Fastboot" to read it; the obtained Device ID will be copied to the clipboard.
+flash-bootloader-open-site = Head over to Motorola Bootloader Unlock Website
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Copy
+flash-bootloader-read = Read from Fastboot
+flash-bootloader-key-desc = Once you have the unlock key, type it into the field below, then click "Unlock".
+flash-bootloader-unlock = Unlock
+flash-bootloader-copied = Device ID copied to the clipboard.
+flash-bootloader-unlocked = Bootloader unlocked.
+flash-bootloader-key-required = Enter the unlock key first.
+flash-bootloader-oem-unlocking-required = Turn on "OEM unlocking" in Developer Options, then try again.
+flash-bootloader-unlock-cancelled = Bootloader unlock request has been cancelled.
+flash-bootloader-unlock-wrong-key = Bootloader unlock failed due to wrong unlock key.
+flash-bootloader-obtain-key = You need to submit your Device ID to Motorola Bootloader Unlock Website to obtain unlock key.
+flash-bootloader-warranty-note = If you're unable to visit Motorola Bootloader Unlock Website, you can send the Device ID to someone who can visit. Keep in mind, once the unlock key is obtained, your phone will be marked as warranty void on Motorola's customer service system.
+flash-bootloader-key-is-device-id = Device ID is not your Unlock Key
+flash-bootloader-unlocking = Unlocking bootloader…
+flash-bootloader-checking = Checking bootloader unlock eligibility…
+flash-bootloader-eligible = This phone is able to unlock the bootloader.
+flash-bootloader-not-eligible = This phone may be unable to unlock the bootloader.
 
 login-dialog-title = LMN Flash — Log in
 login-prompt = Log in to look up firmware

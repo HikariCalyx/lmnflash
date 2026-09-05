@@ -912,9 +912,72 @@ fn interface_name(url: &str) -> String {
     }
 }
 
+/// Motorola's "does this device qualify?" endpoint. The three path segments
+/// are taken from the Device ID (see [`unlock_eligibility_url`]).
+const VERIFY_PHONE_BASE: &str =
+    "https://en-us.support.motorola.com/cc/productRegistration/verifyPhone";
+
+/// Builds the URL used to ask Motorola whether a device qualifies for
+/// bootloader unlock.
+///
+/// The Device ID (from `fastboot oem get_unlock_data`) is split on `#`; the
+/// request path uses the 1st, 4th and 3rd chunks, e.g.
+/// `…/verifyPhone/<chunk0>/<chunk3>/<chunk2>/`.
+pub fn unlock_eligibility_url(device_id: &str) -> Result<String, String> {
+    let parts: Vec<&str> = device_id.split('#').collect();
+    if parts.len() < 4 {
+        return Err(
+            "Device ID has fewer than the 4 expected `#`-separated parts".to_string(),
+        );
+    }
+
+    Ok(format!("{}/{}/{}/{}/", VERIFY_PHONE_BASE, parts[0], parts[3], parts[2]))
+}
+
+/// Queries Motorola whether the device qualifies for bootloader unlock.
+/// Returns `Ok(true)` when the phone qualifies and `Ok(false)` when it does
+/// not.
+pub fn check_unlock_eligibility(device_id: &str) -> Result<bool, String> {
+    let url = unlock_eligibility_url(device_id)?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .build();
+
+    let body = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("unlock eligibility request failed: {e}"))?
+        .into_string()
+        .map_err(|e| format!("failed to read unlock eligibility response: {e}"))?;
+
+    let body = body.to_ascii_lowercase();
+    if body.contains("not qualified") {
+        Ok(false)
+    } else if body.contains("qualif") {
+        Ok(true)
+    } else {
+        Err("unexpected unlock eligibility response".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_unlock_eligibility_url() {
+        let device_id = "3A95915042649321#5A5932324B525834524B006D6F746F726F6C0000#8226946C1000ED2C2C9D9A3A981F063D80A30825CA264A20E51C1EDCC25BD0C4#10CAE512002750E10000000000000000";
+
+        assert_eq!(
+            unlock_eligibility_url(device_id).unwrap(),
+            "https://en-us.support.motorola.com/cc/productRegistration/verifyPhone/3A95915042649321/10CAE512002750E10000000000000000/8226946C1000ED2C2C9D9A3A981F063D80A30825CA264A20E51C1EDCC25BD0C4/"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_unlock_eligibility_url() {
+        assert!(unlock_eligibility_url("only-two#parts").is_err());
+    }
 
     #[test]
     fn accepts_valid_imei() {

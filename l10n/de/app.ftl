@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Firmware-Suche
-mode-2 = Modus 2
+mode-2 = Smartphone flashen
 mode-3 = Firmware entschlüsseln
+
+flash-bootloader-title = Bootloader-Entsperrung
+flash-bootloader-button = Bootloader entsperren
+
+flash-bootloader-choose = Wie möchtest du den Bootloader entsperren?
+flash-bootloader-assistive = Assistent
+flash-bootloader-manual = Manuell
+flash-bootloader-return = Zurück
+flash-bootloader-manual-desc = Für die Bootloader-Entsperrung musst du zuerst die Device ID (auch Unlock Data genannt) vom Gerät abrufen. Klicke auf „Von Fastboot lesen", um sie auszulesen; die abgerufene Device ID wird in die Zwischenablage kopiert.
+flash-bootloader-open-site = Zur Motorola-Website für die Bootloader-Entsperrung
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Kopieren
+flash-bootloader-read = Von Fastboot lesen
+flash-bootloader-key-desc = Sobald du den Entsperrschlüssel hast, gib ihn in das Feld unten ein und klicke auf „Entsperren".
+flash-bootloader-unlock = Entsperren
+flash-bootloader-copied = Device ID in die Zwischenablage kopiert.
+flash-bootloader-unlocked = Bootloader entsperrt.
+flash-bootloader-key-required = Gib zuerst den Entsperrschlüssel ein.
+flash-bootloader-oem-unlocking-required = Aktiviere „OEM-Entsperrung“ in den Entwickleroptionen und versuche es erneut.
+flash-bootloader-unlock-cancelled = Die Bootloader-Entsperrung wurde abgebrochen.
+flash-bootloader-unlock-wrong-key = Die Bootloader-Entsperrung ist aufgrund eines falschen Entsperrschlüssels fehlgeschlagen.
+flash-bootloader-obtain-key = Du musst deine Device ID auf der Motorola-Website für die Bootloader-Entsperrung einreichen, um den Entsperrschlüssel zu erhalten.
+flash-bootloader-warranty-note = Wenn du die Motorola-Website für die Bootloader-Entsperrung nicht besuchen kannst, kannst du die Device ID an jemanden senden, der sie besuchen kann. Bedenke: Sobald der Entsperrschlüssel erhalten wurde, wird dein Telefon im Motorola-Kundendienstsystem als garantieverfallen markiert.
+flash-bootloader-key-is-device-id = Die Device ID ist nicht dein Entsperrschlüssel
+flash-bootloader-unlocking = Bootloader wird entsperrt…
+flash-bootloader-checking = Bootloader-Entsperrberechtigung wird geprüft…
+flash-bootloader-eligible = Dieses Telefon kann den Bootloader entsperren.
+flash-bootloader-not-eligible = Dieses Telefon kann den Bootloader möglicherweise nicht entsperren.
 
 login-dialog-title = LMN Flash — Anmelden
 login-prompt = Melden Sie sich an, um Firmware zu suchen

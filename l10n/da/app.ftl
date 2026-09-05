@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Firmwareopslag
-mode-2 = Tilstand 2
+mode-2 = Flash af smartphone
 mode-3 = Firmware-dekryptering
+
+flash-bootloader-title = Oplåsning af bootloader
+flash-bootloader-button = Lås bootloaderen op
+
+flash-bootloader-choose = Hvordan vil du låse bootloaderen op?
+flash-bootloader-assistive = Assisteret
+flash-bootloader-manual = Manuel
+flash-bootloader-return = Tilbage
+flash-bootloader-manual-desc = For at anmode om bootloader-oplåsning skal du hente Device ID (også kaldet Unlock Data) fra enheden. Klik på "Læs fra Fastboot" for at hente det; det hentede Device ID kopieres til udklipsholderen.
+flash-bootloader-open-site = Gå til Motorolas bootloader-oplåsningsside
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Kopiér
+flash-bootloader-read = Læs fra Fastboot
+flash-bootloader-key-desc = Når du har fået oplåsningsnøglen, skal du skrive den i feltet nedenfor og klikke på "Lås op".
+flash-bootloader-unlock = Lås op
+flash-bootloader-copied = Device ID kopieret til udklipsholderen.
+flash-bootloader-unlocked = Bootloaderen er låst op.
+flash-bootloader-key-required = Indtast først oplåsningsnøglen.
+flash-bootloader-oem-unlocking-required = Slå “OEM-oplåsning” til under Udviklerindstillinger, og prøv igen.
+flash-bootloader-unlock-cancelled = Anmodningen om bootloader-oplåsning er blevet annulleret.
+flash-bootloader-unlock-wrong-key = Bootloader-oplåsningen mislykkedes på grund af forkert oplåsningsnøgle.
+flash-bootloader-obtain-key = Du skal indsende dit Device ID til Motorolas bootloader-oplåsningsside for at få oplåsningsnøglen.
+flash-bootloader-warranty-note = Hvis du ikke kan besøge Motorolas bootloader-oplåsningsside, kan du sende Device ID til en person, der kan besøge den. Husk, at din telefon bliver markeret som garantifraskrevet i Motorolas kundeservicesystem, når oplåsningsnøglen er opnået.
+flash-bootloader-key-is-device-id = Device ID er ikke din oplåsningsnøgle
+flash-bootloader-unlocking = Låser bootloaderen op…
+flash-bootloader-checking = Kontrollerer bootloader-oplåsningsberettigelse…
+flash-bootloader-eligible = Denne telefon kan låse bootloaderen op.
+flash-bootloader-not-eligible = Denne telefon kan muligvis ikke låse bootloaderen op.
 
 login-dialog-title = LMN Flash — Log ind
 login-prompt = Log ind for at slå firmware op

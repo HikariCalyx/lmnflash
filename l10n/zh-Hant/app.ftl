@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = 韌體查詢
-mode-2 = 模式 2
+mode-2 = 智慧型手機刷寫
 mode-3 = 韌體解密
+
+flash-bootloader-title = Bootloader 解鎖
+flash-bootloader-button = 解鎖
+
+flash-bootloader-choose = 您希望如何解鎖 Bootloader？
+flash-bootloader-assistive = 引導模式
+flash-bootloader-manual = 手動模式
+flash-bootloader-return = 返回
+flash-bootloader-manual-desc = 要請求解鎖 Bootloader，您需要先從裝置取得 Device ID（又稱 Unlock Data）。點擊「從 Fastboot 讀取」讀取；取得的 Device ID 將複製到剪貼簿。
+flash-bootloader-open-site = 前往 Motorola Bootloader 解鎖網站
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = 複製
+flash-bootloader-read = 從 Fastboot 讀取
+flash-bootloader-key-desc = 取得解鎖金鑰後，請在下方輸入框中輸入，然後點擊「解鎖」按鈕。
+flash-bootloader-unlock = 解鎖
+flash-bootloader-copied = Device ID 已複製到剪貼簿。
+flash-bootloader-unlocked = Bootloader 已解鎖。
+flash-bootloader-key-required = 請先輸入解鎖金鑰。
+flash-bootloader-oem-unlocking-required = 請在開發者選項中開啟「OEM 解鎖」，然後重試。
+flash-bootloader-unlock-cancelled = Bootloader 解鎖請求已被取消。
+flash-bootloader-unlock-wrong-key = 解鎖金鑰錯誤，Bootloader 解鎖失敗。
+flash-bootloader-obtain-key = 您需要將 Device ID 提交到 Motorola Bootloader 解鎖網站以取得解鎖金鑰。
+flash-bootloader-warranty-note = 如果您無法訪問 Motorola Bootloader 解鎖網站，您可以將 Device ID 發送給可以訪問的人。請注意，一旦取得解鎖金鑰，您的手機將在 Motorola 的客戶服務系統中被標記為保固失效。
+flash-bootloader-key-is-device-id = Device ID 不是您的解鎖金鑰
+flash-bootloader-unlocking = 正在解鎖 Bootloader…
+flash-bootloader-checking = 正在檢查此手機是否可以解鎖 Bootloader…
+flash-bootloader-eligible = 此手機可以解鎖 Bootloader。
+flash-bootloader-not-eligible = 此手機可能無法解鎖 Bootloader。
 
 login-dialog-title = LMN Flash — 登入
 login-prompt = 登入後查詢韌體

@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Búsqueda de firmware
-mode-2 = Modo 2
+mode-2 = Flash del smartphone
 mode-3 = Descifrar firmware
+
+flash-bootloader-title = Desbloqueo del bootloader
+flash-bootloader-button = Desbloquear el bootloader
+
+flash-bootloader-choose = ¿Cómo quieres desbloquear el bootloader?
+flash-bootloader-assistive = Asistido
+flash-bootloader-manual = Manual
+flash-bootloader-return = Volver
+flash-bootloader-manual-desc = Para solicitar el desbloqueo del bootloader, primero debes obtener el Device ID (también llamado Unlock Data) del dispositivo. Haz clic en "Leer desde Fastboot" para leerlo; el Device ID obtenido se copiará al portapapeles.
+flash-bootloader-open-site = Ir al sitio web de desbloqueo de bootloader de Motorola
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Copiar
+flash-bootloader-read = Leer desde Fastboot
+flash-bootloader-key-desc = Cuando tengas la clave de desbloqueo, escríbela en el campo de abajo y haz clic en "Desbloquear".
+flash-bootloader-unlock = Desbloquear
+flash-bootloader-copied = Device ID copiado al portapapeles.
+flash-bootloader-unlocked = Bootloader desbloqueado.
+flash-bootloader-key-required = Introduce primero la clave de desbloqueo.
+flash-bootloader-oem-unlocking-required = Activa “Desbloqueo de OEM” en Opciones de desarrollador e inténtalo de nuevo.
+flash-bootloader-unlock-cancelled = La solicitud de desbloqueo del bootloader se ha cancelado.
+flash-bootloader-unlock-wrong-key = El desbloqueo del bootloader falló debido a una clave de desbloqueo incorrecta.
+flash-bootloader-obtain-key = Debes enviar tu Device ID al sitio web de desbloqueo de bootloader de Motorola para obtener la clave de desbloqueo.
+flash-bootloader-warranty-note = Si no puedes visitar el sitio web de desbloqueo de bootloader de Motorola, puedes enviar el Device ID a alguien que sí pueda visitarlo. Ten en cuenta que, una vez obtenida la clave de desbloqueo, tu teléfono quedará marcado como sin garantía en el sistema de atención al cliente de Motorola.
+flash-bootloader-key-is-device-id = El Device ID no es tu clave de desbloqueo
+flash-bootloader-unlocking = Desbloqueando el bootloader…
+flash-bootloader-checking = Comprobando si el teléfono puede desbloquear el bootloader…
+flash-bootloader-eligible = Este teléfono puede desbloquear el bootloader.
+flash-bootloader-not-eligible = Este teléfono puede que no pueda desbloquear el bootloader.
 
 login-dialog-title = LMN Flash — Iniciar sesión
 login-prompt = Inicie sesión para buscar firmware

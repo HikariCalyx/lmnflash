@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = ファームウェア検索
-mode-2 = モード 2
+mode-2 = スマホ書き換え
 mode-3 = ファームウェア復号
+
+flash-bootloader-title = ブートローダーのロック解除
+flash-bootloader-button = ロックを解除
+
+flash-bootloader-choose = ブートローダーのロックを解除する方法を選択してください
+flash-bootloader-assistive = アシスト
+flash-bootloader-manual = 手動
+flash-bootloader-return = 戻る
+flash-bootloader-manual-desc = ブートローダーのロック解除をリクエストするには、デバイスから Device ID（Unlock Data とも呼ばれます）を取得する必要があります。「Fastboot から読み取り」をクリックして取得してください。取得した Device ID はクリップボードにコピーされます。
+flash-bootloader-open-site = Motorola ブートローダー ロック解除の Web サイトへ
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = コピー
+flash-bootloader-read = Fastboot から読み取り
+flash-bootloader-key-desc = ロック解除キーを入手したら、下の欄に入力して「ロック解除」ボタンをクリックしてください。
+flash-bootloader-unlock = ロック解除
+flash-bootloader-copied = Device ID をクリップボードにコピーしました。
+flash-bootloader-unlocked = ブートローダーのロックを解除しました。
+flash-bootloader-key-required = 先にロック解除キーを入力してください。
+flash-bootloader-oem-unlocking-required = 開発者オプションで「OEMロック解除」をオンにしてから、もう一度お試しください。
+flash-bootloader-unlock-cancelled = ブートローダーのロック解除リクエストがキャンセルされました。
+flash-bootloader-unlock-wrong-key = ロック解除キーが正しくないため、ブートローダーのロック解除に失敗しました。
+flash-bootloader-obtain-key = ロック解除キーを取得するには、Device ID を Motorola ブートローダー ロック解除 Web サイトに送信する必要があります。
+flash-bootloader-warranty-note = Motorola ブートローダー ロック解除 Web サイトにアクセスできない場合は、アクセスできる人に Device ID を送信できます。ロック解除キーを取得すると、Motorola のカスタマー サービス システムでこの端末が保証対象外としてマークされる点にご注意ください。
+flash-bootloader-key-is-device-id = Device ID はロック解除キーではありません
+flash-bootloader-unlocking = ブートローダーのロックを解除しています…
+flash-bootloader-checking = ブートローダー ロック解除の対象か確認しています…
+flash-bootloader-eligible = このスマートフォンはブートローダーのロック解除が可能です。
+flash-bootloader-not-eligible = このスマートフォンはブートローダーのロック解除ができない可能性があります。
 
 login-dialog-title = LMN Flash — ログイン
 login-prompt = ログインしてファームウェアを検索

@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Busca de firmware
-mode-2 = Modo 2
+mode-2 = Flash do smartphone
 mode-3 = Descriptografia de firmware
+
+flash-bootloader-title = Desbloqueio do bootloader
+flash-bootloader-button = Desbloquear o bootloader
+
+flash-bootloader-choose = Como você quer desbloquear o bootloader?
+flash-bootloader-assistive = Assistido
+flash-bootloader-manual = Manual
+flash-bootloader-return = Voltar
+flash-bootloader-manual-desc = Para solicitar o desbloqueio do bootloader, você precisa obter o Device ID (também chamado de Unlock Data) do dispositivo. Clique em "Ler do Fastboot" para lê-lo; o Device ID obtido será copiado para a área de transferência.
+flash-bootloader-open-site = Ir para o site de desbloqueio de bootloader da Motorola
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Copiar
+flash-bootloader-read = Ler do Fastboot
+flash-bootloader-key-desc = Ao obter a chave de desbloqueio, digite-a no campo abaixo e clique em "Desbloquear".
+flash-bootloader-unlock = Desbloquear
+flash-bootloader-copied = Device ID copiado para a área de transferência.
+flash-bootloader-unlocked = Bootloader desbloqueado.
+flash-bootloader-key-required = Digite primeiro a chave de desbloqueio.
+flash-bootloader-oem-unlocking-required = Ative “Desbloqueio OEM” em Opções do desenvolvedor e tente novamente.
+flash-bootloader-unlock-cancelled = A solicitação de desbloqueio do bootloader foi cancelada.
+flash-bootloader-unlock-wrong-key = O desbloqueio do bootloader falhou devido a uma chave de desbloqueio incorreta.
+flash-bootloader-obtain-key = Você precisa enviar seu Device ID ao site de desbloqueio de bootloader da Motorola para obter a chave de desbloqueio.
+flash-bootloader-warranty-note = Se você não conseguir visitar o site de desbloqueio de bootloader da Motorola, pode enviar o Device ID para alguém que consiga. Lembre-se: depois de obter a chave de desbloqueio, seu telefone será marcado como sem garantia no sistema de atendimento ao cliente da Motorola.
+flash-bootloader-key-is-device-id = O Device ID não é a sua chave de desbloqueio
+flash-bootloader-unlocking = Desbloqueando o bootloader…
+flash-bootloader-checking = Verificando se o bootloader pode ser desbloqueado…
+flash-bootloader-eligible = Este telefone pode desbloquear o bootloader.
+flash-bootloader-not-eligible = Este telefone pode não conseguir desbloquear o bootloader.
 
 login-dialog-title = LMN Flash — Entrar
 login-prompt = Entre para pesquisar firmware

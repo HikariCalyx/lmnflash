@@ -2,8 +2,36 @@
 app-title = LMN Flash
 
 mode-1 = Firmwaresökning
-mode-2 = Läge 2
+mode-2 = Flash av smarttelefonen
 mode-3 = Dekryptera firmware
+
+flash-bootloader-title = Upplåsning av bootloader
+flash-bootloader-button = Lås upp bootloader
+
+flash-bootloader-choose = Hur vill du låsa upp bootloadern?
+flash-bootloader-assistive = Assisterat
+flash-bootloader-manual = Manuellt
+flash-bootloader-return = Tillbaka
+flash-bootloader-manual-desc = För att begära upplåsning av bootloadern måste du hämta Device ID (även kallat Unlock Data) från enheten. Klicka på "Läs från Fastboot" för att läsa det; det hämtade Device ID:t kopieras till urklipp.
+flash-bootloader-open-site = Gå till Motorolas webbplats för upplåsning av bootloader
+flash-bootloader-device-id = Device ID
+flash-bootloader-copy = Kopiera
+flash-bootloader-read = Läs från Fastboot
+flash-bootloader-key-desc = När du har fått upplåsningsnyckeln skriver du in den i fältet nedan och klickar på "Lås upp".
+flash-bootloader-unlock = Lås upp
+flash-bootloader-copied = Device ID kopierat till urklipp.
+flash-bootloader-unlocked = Bootloadern är upplåst.
+flash-bootloader-key-required = Ange upplåsningsnyckeln först.
+flash-bootloader-oem-unlocking-required = Aktivera “OEM-upplåsning” i Utvecklaralternativ och försök igen.
+flash-bootloader-unlock-cancelled = Begäran om upplåsning av bootloadern har avbrutits.
+flash-bootloader-unlock-wrong-key = Upplåsningen av bootloadern misslyckades på grund av fel upplåsningsnyckel.
+flash-bootloader-obtain-key = Du måste skicka in ditt Device ID till Motorolas webbplats för upplåsning av bootloader för att få upplåsningsnyckeln.
+flash-bootloader-warranty-note = Om du inte kan besöka Motorolas webbplats för upplåsning av bootloader kan du skicka Device ID till någon som kan besöka den. Tänk på att din telefon kommer att markeras som garantifrånskriven i Motorolas kundservicesystem när upplåsningsnyckeln har erhållits.
+flash-bootloader-key-is-device-id = Device ID är inte din upplåsningsnyckel
+flash-bootloader-unlocking = Låser upp bootloadern…
+flash-bootloader-checking = Kontrollerar om bootloadern kan låsas upp…
+flash-bootloader-eligible = Den här telefonen kan låsa upp bootloadern.
+flash-bootloader-not-eligible = Den här telefonen kanske inte kan låsa upp bootloadern.
 
 login-dialog-title = LMN Flash — Logga in
 login-prompt = Logga in för att söka firmware

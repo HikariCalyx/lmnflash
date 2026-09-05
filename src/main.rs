@@ -2,6 +2,7 @@
 // `eprintln!` diagnostics remain visible with `cargo run`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bootloader;
 mod config;
 mod decrypt;
 mod fastboot_info;
@@ -160,6 +161,31 @@ impl Mode {
             Self::Mode1 => "mode-1",
             Self::Mode2 => "mode-2",
             Self::Mode3 => "mode-3",
+        }
+    }
+}
+
+/// A feature tile offered by the smartphone-firmware-flash mode (Mode 2).
+///
+/// Each variant maps to a localized title and action button; new flashing
+/// features are added here as they are implemented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmartphoneFeature {
+    BootloaderUnlock,
+}
+
+impl SmartphoneFeature {
+    const ALL: [Self; 1] = [Self::BootloaderUnlock];
+
+    fn title_id(self) -> &'static str {
+        match self {
+            Self::BootloaderUnlock => "flash-bootloader-title",
+        }
+    }
+
+    fn button_id(self) -> &'static str {
+        match self {
+            Self::BootloaderUnlock => "flash-bootloader-button",
         }
     }
 }
@@ -376,6 +402,65 @@ struct DecryptState {
     status: DecryptStatus,
 }
 
+/// State of the "Smartphone Flash" mode (Mode 2) feature tiles.
+#[derive(Default)]
+struct SmartphoneFlashState {
+    bootloader: BootloaderState,
+}
+
+/// Which Bootloader Unlock dialog is currently on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum BootloaderDialog {
+    #[default]
+    Closed,
+    /// Assistive-vs-Manual chooser shown after pressing the tile's button.
+    Choosing,
+    /// The manual unlock flow.
+    Manual,
+}
+
+/// The device operation pending a device choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootloaderDeviceAction {
+    ReadDeviceId,
+    Unlock,
+}
+
+/// Device picker shown when several fastboot devices are connected.
+#[derive(Debug, Clone)]
+struct BootloaderPicker {
+    serials: Vec<String>,
+    action: BootloaderDeviceAction,
+}
+
+/// State of the "Bootloader Unlock" feature (Mode 2).
+#[derive(Default)]
+struct BootloaderState {
+    dialog: BootloaderDialog,
+    picker: Option<BootloaderPicker>,
+    /// Device ID obtained with `fastboot oem get_unlock_data`.
+    device_id: String,
+    /// Unlock key typed into the manual flow.
+    key_input: String,
+    /// Snapshot of the key used by the pending unlock command.
+    pending_key: Option<String>,
+    reading: bool,
+    unlocking: bool,
+    /// Motorola unlock-eligibility check, run automatically after the Device
+    /// ID is read. Failures (e.g. no Internet connection) are kept silent.
+    checking: bool,
+    /// `true` = phone qualifies, `false` = not qualified (once checked).
+    eligible: Option<bool>,
+    /// Status line for the Device ID area (read / copy).
+    read_error: Option<String>,
+    read_info: Option<String>,
+    /// Status line for the Unlock area.
+    unlock_error: Option<String>,
+    /// Neutral notice in the Unlock area (e.g. the request was cancelled).
+    unlock_notice: Option<String>,
+    unlock_info: Option<String>,
+}
+
 #[derive(Default)]
 struct LookupState {
     mode: LookupMode,
@@ -419,6 +504,7 @@ struct State {
     login: LoginStatus,
     lookup: LookupState,
     decrypt: DecryptState,
+    flash: SmartphoneFlashState,
 }
 
 impl Default for State {
@@ -433,6 +519,7 @@ impl Default for State {
             login: LoginStatus::default(),
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
+            flash: SmartphoneFlashState::default(),
         }
     }
 }
@@ -537,6 +624,24 @@ enum Message {
     DecryptPasswordChanged(String),
     DecryptRequested,
     DecryptFinished(Result<decrypt::DecryptSummary, String>),
+    SmartphoneFeaturePressed(SmartphoneFeature),
+    BootloaderManualSelected,
+    BootloaderCancel,
+    BootloaderBackdropPressed,
+    BootloaderReturnToChooser,
+    BootloaderOpenSite,
+    BootloaderCopyDeviceId,
+    BootloaderReadRequested,
+    BootloaderDevicesFetched(Result<fastboot_info::DeviceList, String>),
+    BootloaderDeviceSelected(String),
+    BootloaderPickerCancelled,
+    BootloaderDeviceIdRead(Result<String, String>),
+    BootloaderEligibilityChecked(Result<bool, String>),
+    BootloaderKeyChanged(String),
+    BootloaderPasteRequested,
+    BootloaderPasteFetched(Option<String>),
+    BootloaderUnlockRequested,
+    BootloaderUnlockFinished(Result<String, fastboot_info::UnlockFailure>),
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -545,6 +650,110 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.mode = mode;
             Task::none()
         }
+        Message::SmartphoneFeaturePressed(feature) => match feature {
+            SmartphoneFeature::BootloaderUnlock => {
+                let bootloader = &mut state.flash.bootloader;
+                bootloader.dialog = BootloaderDialog::Choosing;
+                bootloader.picker = None;
+                bootloader.pending_key = None;
+                bootloader.reading = false;
+                bootloader.unlocking = false;
+                bootloader.checking = false;
+                bootloader.eligible = None;
+                bootloader.read_error = None;
+                bootloader.read_info = None;
+                bootloader.unlock_error = None;
+                bootloader.unlock_notice = None;
+                bootloader.unlock_info = None;
+                Task::none()
+            }
+        },
+        Message::BootloaderManualSelected => {
+            state.flash.bootloader.dialog = BootloaderDialog::Manual;
+            Task::none()
+        }
+        Message::BootloaderReturnToChooser => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.dialog = BootloaderDialog::Choosing;
+            bootloader.picker = None;
+            Task::none()
+        }
+        Message::BootloaderCancel => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.dialog = BootloaderDialog::Closed;
+            bootloader.picker = None;
+            bootloader.pending_key = None;
+            bootloader.reading = false;
+            bootloader.unlocking = false;
+            Task::none()
+        }
+        // Clicks on empty modal space are swallowed here so they neither
+        // dismiss the dialog nor reach the UI underneath.
+        Message::BootloaderBackdropPressed => Task::none(),
+        Message::BootloaderOpenSite => open_browser(fastboot_info::UNLOCK_PAGE_URL),
+        Message::BootloaderCopyDeviceId => {
+            let device_id = state.flash.bootloader.device_id.clone();
+            if device_id.is_empty() {
+                Task::none()
+            } else {
+                iced::clipboard::write::<Message>(device_id)
+            }
+        }
+        Message::BootloaderReadRequested => {
+            start_bootloader_list_devices(state, BootloaderDeviceAction::ReadDeviceId)
+        }
+        Message::BootloaderUnlockRequested => {
+            start_bootloader_list_devices(state, BootloaderDeviceAction::Unlock)
+        }
+        Message::BootloaderDevicesFetched(result) => {
+            finish_bootloader_device_list(state, result)
+        }
+        Message::BootloaderDeviceSelected(serial) => run_bootloader_picked_device(state, serial),
+        Message::BootloaderPickerCancelled => {
+            state.flash.bootloader.picker = None;
+            Task::none()
+        }
+        Message::BootloaderDeviceIdRead(result) => finish_bootloader_read(state, result),
+        Message::BootloaderEligibilityChecked(result) => {
+            let bootloader = &mut state.flash.bootloader;
+            if !bootloader.checking {
+                return Task::none();
+            }
+
+            bootloader.checking = false;
+            match result {
+                Ok(eligible) => bootloader.eligible = Some(eligible),
+                // No Internet connection (or any other check failure): stay
+                // silent rather than showing a misleading error banner.
+                Err(error) => {
+                    eprintln!("[bootloader] unlock eligibility check failed: {error}");
+                }
+            }
+            Task::none()
+        }
+        Message::BootloaderKeyChanged(input) => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.key_input = input;
+            bootloader.unlock_error = None;
+            Task::none()
+        }
+        // Right-click on the unlock-key field: read the clipboard and put the
+        // text in (for users who don't use Ctrl+V).
+        Message::BootloaderPasteRequested => {
+            if !matches!(state.flash.bootloader.dialog, BootloaderDialog::Manual) {
+                return Task::none();
+            }
+            iced::clipboard::read().map(Message::BootloaderPasteFetched)
+        }
+        Message::BootloaderPasteFetched(clipboard) => {
+            if let Some(text) = clipboard {
+                let bootloader = &mut state.flash.bootloader;
+                bootloader.key_input = text;
+                bootloader.unlock_error = None;
+            }
+            Task::none()
+        }
+        Message::BootloaderUnlockFinished(result) => finish_bootloader_unlock(state, result),
         Message::LanguageSelected(language) => {
             state.lang = language;
             state.l10n = l10n::bundle_for(language);
@@ -1289,11 +1498,319 @@ fn open_browser(url: &str) -> Task<Message> {
     )
 }
 
+/// Starts a bootloader device action (read Device ID / unlock): lists the
+/// connected fastboot devices in the background. A single supported device
+/// runs the action directly; several open the serial picker.
+fn start_bootloader_list_devices(
+    state: &mut State,
+    action: BootloaderDeviceAction,
+) -> Task<Message> {
+    // Resolve and validate the unlock key up front so we never borrow the
+    // bootloader state while asking the bundle for a localized message.
+    if action == BootloaderDeviceAction::Unlock {
+        let key = state.flash.bootloader.key_input.trim().to_string();
+        if key.is_empty() {
+            let message = state.l10n.tr("flash-bootloader-key-required");
+            state.flash.bootloader.unlock_error = Some(message);
+            return Task::none();
+        }
+        state.flash.bootloader.pending_key = Some(key);
+    }
+
+    let bootloader = &mut state.flash.bootloader;
+    if bootloader.reading || bootloader.unlocking {
+        return Task::none();
+    }
+    match action {
+        BootloaderDeviceAction::ReadDeviceId => {
+            bootloader.reading = true;
+            bootloader.read_error = None;
+            bootloader.read_info = None;
+        }
+        BootloaderDeviceAction::Unlock => {
+            bootloader.unlocking = true;
+            bootloader.unlock_error = None;
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = None;
+        }
+    }
+    bootloader.picker = None;
+
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(fastboot_info::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::BootloaderDevicesFetched,
+    )
+}
+
+/// Handles the background device listing: runs the requested action when
+/// exactly one supported device is connected, opens the picker for several,
+/// or reports that no supported device is present.
+fn finish_bootloader_device_list(
+    state: &mut State,
+    result: Result<fastboot_info::DeviceList, String>,
+) -> Task<Message> {
+    let (action, unlock_key) = {
+        let bootloader = &state.flash.bootloader;
+        if bootloader.reading {
+            (Some(BootloaderDeviceAction::ReadDeviceId), None)
+        } else if bootloader.unlocking {
+            (
+                Some(BootloaderDeviceAction::Unlock),
+                bootloader.pending_key.clone(),
+            )
+        } else {
+            (None, None)
+        }
+    };
+
+    let Some(action) = action else {
+        return Task::none();
+    };
+
+    match result {
+        Ok(list) if list.supported.len() == 1 => {
+            let serial = list.supported[0].clone();
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.pending_key = None;
+            // Keep the busy flag raised so the completion handler accepts the
+            // result: finish_bootloader_read / finish_bootloader_unlock only
+            // apply the outcome while their flag is still set.
+            match action {
+                BootloaderDeviceAction::ReadDeviceId => {
+                    bootloader.reading = true;
+                    start_bootloader_read(serial)
+                }
+                BootloaderDeviceAction::Unlock => {
+                    bootloader.unlocking = true;
+                    start_bootloader_unlock(serial, unlock_key.unwrap_or_default())
+                }
+            }
+        }
+        Ok(list) if list.supported.len() > 1 => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.reading = false;
+            bootloader.unlocking = false;
+            bootloader.picker = Some(BootloaderPicker {
+                serials: list.supported,
+                action,
+            });
+            Task::none()
+        }
+        Ok(list) => {
+            let error_id = if list.total == 0 {
+                "retcn-fill-fastboot-no-device"
+            } else {
+                "retcn-fill-fastboot-unsupported-device"
+            };
+            let message = state.l10n.tr(error_id);
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.reading = false;
+            bootloader.unlocking = false;
+            bootloader.pending_key = None;
+            match action {
+                BootloaderDeviceAction::ReadDeviceId => bootloader.read_error = Some(message),
+                BootloaderDeviceAction::Unlock => bootloader.unlock_error = Some(message),
+            }
+            Task::none()
+        }
+        Err(error) => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.reading = false;
+            bootloader.unlocking = false;
+            bootloader.pending_key = None;
+            match action {
+                BootloaderDeviceAction::ReadDeviceId => bootloader.read_error = Some(error),
+                BootloaderDeviceAction::Unlock => bootloader.unlock_error = Some(error),
+            }
+            Task::none()
+        }
+    }
+}
+
+/// Runs the picker's pending action on the device the user selected.
+fn run_bootloader_picked_device(state: &mut State, serial: String) -> Task<Message> {
+    let (action, unlock_key) = {
+        let bootloader = &state.flash.bootloader;
+        match bootloader.picker.as_ref().map(|picker| picker.action) {
+            Some(BootloaderDeviceAction::ReadDeviceId) => {
+                (BootloaderDeviceAction::ReadDeviceId, None)
+            }
+            Some(BootloaderDeviceAction::Unlock) => {
+                (BootloaderDeviceAction::Unlock, bootloader.pending_key.clone())
+            }
+            None => return Task::none(),
+        }
+    };
+
+    let bootloader = &mut state.flash.bootloader;
+    bootloader.picker = None;
+    match action {
+        BootloaderDeviceAction::ReadDeviceId => {
+            bootloader.reading = true;
+            bootloader.read_error = None;
+            bootloader.read_info = None;
+        }
+        BootloaderDeviceAction::Unlock => {
+            bootloader.unlocking = true;
+            bootloader.unlock_error = None;
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = None;
+        }
+    }
+
+    match action {
+        BootloaderDeviceAction::ReadDeviceId => start_bootloader_read(serial),
+        BootloaderDeviceAction::Unlock => {
+            start_bootloader_unlock(serial, unlock_key.unwrap_or_default())
+        }
+    }
+}
+
+/// Reads the Device ID (`fastboot oem get_unlock_data`) in the background.
+fn start_bootloader_read(serial: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::read_unlock_data(&serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::BootloaderDeviceIdRead,
+    )
+}
+
+/// Sends the unlock key (`fastboot oem unlock <key>`) in the background.
+fn start_bootloader_unlock(serial: String, key: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::unlock_bootloader(&serial, &key))
+                .await
+                .unwrap_or_else(|e| {
+                    Err(fastboot_info::UnlockFailure::Other(format!(
+                        "background task failed: {e}"
+                    )))
+                })
+        },
+        Message::BootloaderUnlockFinished,
+    )
+}
+
+/// Asks Motorola whether the device qualifies for bootloader unlock in the
+/// background (uses the Device ID just read from fastboot).
+fn start_unlock_eligibility_check(device_id: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || firmware::check_unlock_eligibility(&device_id))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::BootloaderEligibilityChecked,
+    )
+}
+
+/// Stores a successfully read Device ID (copies it to the clipboard and
+/// starts the unlock-eligibility check) or surfaces the read error.
+fn finish_bootloader_read(state: &mut State, result: Result<String, String>) -> Task<Message> {
+    if !state.flash.bootloader.reading {
+        return Task::none();
+    }
+
+    match result {
+        Ok(device_id) => {
+            let copied = state.l10n.tr("flash-bootloader-copied");
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.reading = false;
+            bootloader.checking = true;
+            bootloader.eligible = None;
+            bootloader.read_error = None;
+            bootloader.read_info = Some(copied);
+            bootloader.device_id = device_id.clone();
+            Task::batch([
+                iced::clipboard::write::<Message>(device_id.clone()),
+                start_unlock_eligibility_check(device_id),
+            ])
+        }
+        Err(error) => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.reading = false;
+            bootloader.checking = false;
+            bootloader.eligible = None;
+            bootloader.read_error = Some(error);
+            Task::none()
+        }
+    }
+}
+
+/// Handles the result of the `fastboot oem unlock <key>` command.
+fn finish_bootloader_unlock(
+    state: &mut State,
+    result: Result<String, fastboot_info::UnlockFailure>,
+) -> Task<Message> {
+    if !state.flash.bootloader.unlocking {
+        return Task::none();
+    }
+
+    match result {
+        Ok(_device_text) => {
+            let unlocked = state.l10n.tr("flash-bootloader-unlocked");
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.unlocking = false;
+            bootloader.unlock_error = None;
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = Some(unlocked);
+            bootloader.pending_key = None;
+            Task::none()
+        }
+        Err(fastboot_info::UnlockFailure::OemUnlockingDisabled) => {
+            let message = state.l10n.tr("flash-bootloader-oem-unlocking-required");
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.unlocking = false;
+            bootloader.unlock_error = Some(message);
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = None;
+            bootloader.pending_key = None;
+            Task::none()
+        }
+        Err(fastboot_info::UnlockFailure::Cancelled) => {
+            let message = state.l10n.tr("flash-bootloader-unlock-cancelled");
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.unlocking = false;
+            bootloader.unlock_error = None;
+            bootloader.unlock_notice = Some(message);
+            bootloader.unlock_info = None;
+            bootloader.pending_key = None;
+            Task::none()
+        }
+        Err(fastboot_info::UnlockFailure::WrongKey) => {
+            let message = state.l10n.tr("flash-bootloader-unlock-wrong-key");
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.unlocking = false;
+            bootloader.unlock_error = Some(message);
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = None;
+            bootloader.pending_key = None;
+            Task::none()
+        }
+        Err(fastboot_info::UnlockFailure::Other(error)) => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.unlocking = false;
+            bootloader.unlock_error = Some(error);
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = None;
+            bootloader.pending_key = None;
+            Task::none()
+        }
+    }
+}
+
 fn view(state: &State) -> Element<'_, Message> {
     let content = match state.mode {
         Mode::Mode1 => firmware_lookup_view(state),
+        Mode::Mode2 => smartphone_flash_view(state),
         Mode::Mode3 => decrypt_view(state),
-        _ => placeholder_view(state),
     };
 
     let language_options: Vec<Labeled<l10n::Language>> = l10n::Language::ALL
@@ -1341,6 +1858,12 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let base = column![content_area, horizontal_rule(1), tab_bar];
 
+    // Bootloader Unlock dialog (chooser / manual flow) drawn over the whole
+    // window (including the tab bar) when a dialog is open.
+    if let Some(overlay) = bootloader::overlay(state) {
+        return stack![base, overlay].into();
+    }
+
     // Device picker modal: shown when more than one fastboot device is
     // connected. Clicks on the dimmed backdrop cancel the selection.
     if let DevicePicker::Open(devices) = &state.lookup.retcn.device_picker {
@@ -1386,19 +1909,47 @@ fn view(state: &State) -> Element<'_, Message> {
     base.into()
 }
 
-fn placeholder_view(state: &State) -> Element<'_, Message> {
-    container(
-        column![
-            text(state.l10n.tr("app-title")).size(52.0),
-            text(state.l10n.tr(state.mode.message_id())).size(20.0),
-        ]
-        .spacing(8)
-        .align_x(Alignment::Center),
+/// The smartphone-firmware-flash UI (Mode 2): a grid of feature tiles, each
+/// carrying an action button. Features are added to the grid incrementally.
+fn smartphone_flash_view(state: &State) -> Element<'_, Message> {
+    let tiles: Vec<Element<'_, Message>> = SmartphoneFeature::ALL
+        .iter()
+        .map(|&feature| smartphone_feature_tile(state, feature))
+        .collect();
+
+    let grid = container(
+        iced::widget::Row::with_children(tiles)
+            .spacing(12)
+            .align_y(Alignment::Start)
+            .wrap(),
     )
     .width(Fill)
-    .height(Fill)
-    .center_x(Fill)
-    .center_y(Fill)
+    .padding(8);
+
+    container(scrollable(grid).width(Fill).height(Fill))
+        .width(Fill)
+        .height(Fill)
+        .padding(16)
+        .into()
+}
+
+/// A single feature tile in the smartphone-flash grid.
+fn smartphone_feature_tile(state: &State, feature: SmartphoneFeature) -> Element<'_, Message> {
+    let l10n = &state.l10n;
+
+    container(
+        column![
+            text(l10n.tr(feature.title_id())).size(16.0),
+            button(text(l10n.tr(feature.button_id())))
+                .width(Fill)
+                .on_press(Message::SmartphoneFeaturePressed(feature)),
+        ]
+        .spacing(12)
+        .align_x(Alignment::Start),
+    )
+    .width(300)
+    .padding(16)
+    .style(container::rounded_box)
     .into()
 }
 
