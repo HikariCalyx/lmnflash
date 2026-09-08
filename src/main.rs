@@ -10,6 +10,7 @@ mod firmware;
 mod guided;
 mod l10n;
 mod login;
+mod telemetry;
 mod webview;
 
 use iced::widget::{
@@ -503,6 +504,16 @@ struct BootloaderState {
     guided: GuidedState,
 }
 
+/// Inputs captured when a lookup starts, kept until it finishes so the
+/// best-effort telemetry event reflects the original request even if the user
+/// edits the form while the lookup runs (see `mod telemetry`).
+#[derive(Debug, Clone)]
+enum TelemetryContext {
+    RowSmartphone { imei: String },
+    RetcnSmartphone(firmware::RetcnRequest),
+    Tablet { serial_number: String },
+}
+
 #[derive(Default)]
 struct LookupState {
     mode: LookupMode,
@@ -514,6 +525,9 @@ struct LookupState {
     retcn: RetcnInput,
     tablet: TabletInput,
     by_model: ByModelInput,
+    /// The in-flight lookup's inputs, used for the best-effort telemetry POST
+    /// once a firmware image is found; cleared when no lookup is pending.
+    pending_telemetry: Option<TelemetryContext>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -698,6 +712,9 @@ enum Message {
     GuidedRequestConfirmYes,
     GuidedRequestConfirmNo,
     GuidedKeyRequestFinished(Result<(), String>),
+    /// The best-effort telemetry POST finished (only logged; telemetry must
+    /// never affect the app).
+    TelemetrySent(Result<(), String>),
     /// UI animation tick, emitted while a busy indicator is shown (drives the
     /// spinners without blocking the UI thread).
     AnimTick,
@@ -1221,6 +1238,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::CopyDownloadUri(uri) => iced::clipboard::write::<Message>(uri),
         Message::CopyToolUri(uri) => iced::clipboard::write::<Message>(uri),
         Message::CopyRawJson(raw) => iced::clipboard::write::<Message>(raw),
+        Message::TelemetrySent(result) => {
+            if cfg!(debug_assertions) {
+                if let Err(error) = result {
+                    eprintln!("[telemetry] {error}");
+                }
+            }
+            Task::none()
+        }
         Message::CancelLogin => {
             state.login = LoginStatus::LoggedOut;
             state.lookup.retry_after_login = false;
@@ -1229,6 +1254,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::LookupModeSelected(mode) => {
             state.lookup.mode = mode;
             state.lookup.status = LookupStatus::Idle;
+            state.lookup.pending_telemetry = None;
             Task::none()
         }
         Message::ImeiInputChanged(input) => {
@@ -1369,11 +1395,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
 
             match result {
-                Ok(result) => state.lookup.status = LookupStatus::Done(result),
-                Err(error) => state.lookup.status = LookupStatus::Error(error),
+                Ok(result) => {
+                    let telemetry =
+                        tablet_telemetry(state.lookup.pending_telemetry.take(), &result);
+                    state.lookup.status = LookupStatus::Done(result);
+                    telemetry
+                }
+                Err(error) => {
+                    state.lookup.status = LookupStatus::Error(error);
+                    Task::none()
+                }
             }
-
-            Task::none()
         }
         Message::ModelInputChanged(input) => {
             let by_model = &mut state.lookup.by_model;
@@ -1486,7 +1518,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             match result {
                 Ok(info) => {
+                    let telemetry =
+                        standard_lookup_telemetry(state.lookup.pending_telemetry.take(), &info);
                     state.lookup.status = LookupStatus::Done(LookupResult::Standard(info));
+                    telemetry
                 }
                 Err(firmware::FirmwareError::AuthExpired(message)) => {
                     // Token expired: forget it, log in again, and re-run the
@@ -1499,10 +1534,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
                 Err(firmware::FirmwareError::Other(error)) => {
                     state.lookup.status = LookupStatus::Error(error);
+                    Task::none()
                 }
             }
-
-            Task::none()
         }
         Message::BrowserOpened => Task::none(),
     }
@@ -1542,6 +1576,10 @@ fn request_tablet_lookup(state: &mut State) -> Task<Message> {
         return Task::none();
     }
 
+    // Remember the submitted serial so a found image can report telemetry
+    // even if the serial box is edited while the lookup runs.
+    state.lookup.pending_telemetry =
+        Some(TelemetryContext::Tablet { serial_number: sn.clone() });
     state.lookup.status = LookupStatus::Fetching;
     let uuid = state.client_uuid.clone();
 
@@ -1602,6 +1640,11 @@ fn request_lookup(state: &mut State) -> Task<Message> {
         }
     };
 
+    // Remember which request this lookup is for, so a found firmware image
+    // can report best-effort telemetry even if the IMEI box is edited while
+    // the request runs.
+    state.lookup.pending_telemetry =
+        Some(TelemetryContext::RowSmartphone { imei: imei.clone() });
     state.lookup.status = LookupStatus::Fetching;
     let uuid = state.client_uuid.clone();
 
@@ -1716,6 +1759,10 @@ fn request_retcn_lookup(state: &mut State) -> Task<Message> {
             .then(|| retcn.sim_count.count()),
     };
 
+    // Remember the request so a found image can report telemetry even if the
+    // form is edited while the lookup runs.
+    state.lookup.pending_telemetry =
+        Some(TelemetryContext::RetcnSmartphone(request.clone()));
     state.lookup.status = LookupStatus::Fetching;
     let uuid = state.client_uuid.clone();
 
@@ -1752,6 +1799,9 @@ fn request_model_lookup(state: &mut State) -> Task<Message> {
         state.lookup.status = LookupStatus::Error(message);
         return Task::none();
     }
+
+    // Model-based lookups have no telemetry schema; drop any stale context.
+    state.lookup.pending_telemetry = None;
 
     let uuid = state.client_uuid.clone();
 
@@ -1808,6 +1858,73 @@ fn request_model_lookup(state: &mut State) -> Task<Message> {
             Message::LookupFinished,
         )
     }
+}
+
+/// Returns the best-effort telemetry POST for a successful smartphone-style
+/// lookup (ROW/RETCN, which arrive through [`Message::LookupFinished`]). Only
+/// lookups that found a downloadable firmware image are reported; "Lookup by
+/// Model" and tablet lookups have no ROW/RETCN event, so no task is returned.
+fn standard_lookup_telemetry(
+    context: Option<TelemetryContext>,
+    info: &firmware::FirmwareInfo,
+) -> Task<Message> {
+    // Report only "firmware image found" lookups (the Android implementation
+    // also gated telemetry on a nonblank download URL).
+    if info.rom_uri.trim().is_empty() {
+        return Task::none();
+    }
+
+    let lookup = match context {
+        Some(TelemetryContext::RowSmartphone { imei }) => telemetry::Lookup::RowSmartphone {
+            imei,
+        },
+        Some(TelemetryContext::RetcnSmartphone(request)) => {
+            telemetry::Lookup::RetcnSmartphone(request)
+        }
+        // "Lookup by Model" has no telemetry schema, and tablets report
+        // through the tablet result path.
+        Some(TelemetryContext::Tablet { .. }) | None => return Task::none(),
+    };
+
+    submit_telemetry(lookup, telemetry::Found::Standard(info.clone()))
+}
+
+/// Returns the best-effort telemetry POST for a successful tablet lookup
+/// (either the CN-tablet result or the ROW fallback, which arrive through
+/// [`Message::TabletLookupFinished`]), gated on a firmware image being
+/// present.
+fn tablet_telemetry(context: Option<TelemetryContext>, result: &LookupResult) -> Task<Message> {
+    let Some(TelemetryContext::Tablet { serial_number }) = context else {
+        return Task::none();
+    };
+
+    let found = match result {
+        LookupResult::Standard(info) if !info.rom_uri.trim().is_empty() => {
+            telemetry::Found::Standard(info.clone())
+        }
+        LookupResult::CnTablet(info) if !info.download_url.trim().is_empty() => {
+            telemetry::Found::CnTablet(info.clone())
+        }
+        _ => return Task::none(),
+    };
+
+    submit_telemetry(telemetry::Lookup::Tablet { serial_number }, found)
+}
+
+/// Launches the best-effort telemetry POST in the background. The payload is
+/// built up front (cheap) and only the blocking HTTP request runs on a worker
+/// thread; its outcome reaches [`Message::TelemetrySent`], which only logs it.
+fn submit_telemetry(lookup: telemetry::Lookup, found: telemetry::Found) -> Task<Message> {
+    let payload = telemetry::build(&lookup, &found);
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || telemetry::post(payload))
+                .await
+                .unwrap_or_else(|e| Err(format!("telemetry background task failed: {e}")))
+        },
+        Message::TelemetrySent,
+    )
 }
 
 /// Opens the login URL in the system web browser without blocking the UI.

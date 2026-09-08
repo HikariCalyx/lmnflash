@@ -1,4 +1,10 @@
 fn main() {
+    // Expose the Rust build target triple to the crate (`env!("TARGET")` is
+    // only defined in build scripts, not while compiling the crate itself).
+    // The telemetry fingerprint uses it to identify the running platform.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    println!("cargo:rustc-env=TARGET_TRIPLE={target}");
+
     #[cfg(windows)]
     {
         // Generate version info from Cargo package version
