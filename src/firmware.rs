@@ -960,9 +960,207 @@ pub fn check_unlock_eligibility(device_id: &str) -> Result<bool, String> {
     }
 }
 
+/// Motorola's "request the unlock key" endpoint (also uses the 1st, 4th and
+/// 3rd `#`-separated chunks of the Device ID).
+const UNLOCK_REQUEST_BASE: &str =
+    "https://en-us.support.motorola.com/cc/productRegistration/unlockPhone";
+
+/// The logged-in account/profile page (parsed for the display name and the
+/// e-mail).
+pub const PORTAL_PROFILE_URL: &str = "https://en-us.support.motorola.com/app/account/profile";
+
+/// Logs the Motorola portal session out. Used before a "Change Account" so the
+/// login page actually appears instead of the webview reusing the still-valid
+/// session and bouncing straight to the account profile.
+const PORTAL_LOGOUT_URL: &str =
+    "https://en-us.support.motorola.com/cc/logoutCustom/doLogout";
+
+/// The Motorola portal login entry (redirects to the login page, then back to
+/// the bootloader unlock page once authenticated).
+pub const PORTAL_LOGIN_URL: &str =
+    "https://en-us.support.motorola.com/app/utils/welcome/redirect/standalone%252Fbootloader%252Funlock-your-device-b";
+
+/// The page the portal redirects to after an unlock key was successfully
+/// requested.
+const UNLOCK_REQUEST_SUCCESS_HINT: &str = "unlock-your-device-c";
+
+/// Builds the URL that requests an unlock key for the device (needs a logged-in
+/// portal session cookie).
+pub fn unlock_request_url(device_id: &str) -> Result<String, String> {
+    let parts: Vec<&str> = device_id.split('#').collect();
+    if parts.len() < 4 {
+        return Err(
+            "Device ID has fewer than the 4 expected `#`-separated parts".to_string(),
+        );
+    }
+
+    Ok(format!(
+        "{}/{}/{}/{}/",
+        UNLOCK_REQUEST_BASE, parts[0], parts[3], parts[2]
+    ))
+}
+
+/// Returns the text between `open` and `close` (first occurrence).
+fn html_between<'a>(haystack: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let start = haystack.find(open)? + open.len();
+    let rest = &haystack[start..];
+    let end = rest.find(close)?;
+    Some(&rest[..end])
+}
+
+/// Fetches the logged-in account name and e-mail from the portal profile page
+/// using the session cookie captured by the webview login.
+pub fn fetch_portal_profile(cookie_header: &str) -> Result<(String, String), String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .build();
+
+    let response = agent
+        .get(PORTAL_PROFILE_URL)
+        .set("Cookie", cookie_header)
+        .call()
+        .map_err(|e| format!("portal profile request failed: {e}"))?;
+    let status = response.status();
+    let final_url = response.get_url().to_string();
+    let body = response
+        .into_string()
+        .map_err(|e| format!("failed to read portal profile response: {e}"))?;
+
+    #[cfg(debug_assertions)]
+    {
+        eprintln!(
+            "[portal-profile] GET {PORTAL_PROFILE_URL}\n  -> {final_url} (http {status}, {} bytes)",
+            body.len()
+        );
+        let cookie_count = cookie_header
+            .split(';')
+            .filter(|part| !part.trim().is_empty())
+            .count();
+        eprintln!("[portal-profile] sent {cookie_count} cookie part(s)");
+
+        let has_name = body.contains("loggedin_div_img_name");
+        let has_mail = body.contains("mailto:");
+        eprintln!("[portal-profile] name marker={has_name}; mailto marker={has_mail}");
+        if !has_name {
+            // The page Motorola returned didn't contain the expected marker —
+            // show its start so the user can see what it actually is (e.g. a
+            // login/error page instead of the profile page).
+            let preview: String = body.chars().take(1500).collect();
+            eprintln!("[portal-profile] page preview:\n{preview}");
+        }
+    }
+
+    let name = html_between(&body, "loggedin_div_img_name\">", "</div>")
+        .map(|text| text.trim().to_string())
+        .ok_or_else(|| "profile page did not expose the logged-in name".to_string())?;
+
+    let email = html_between(&body, "mailto:", "\"")
+        .map(|text| text.trim().to_string())
+        .ok_or_else(|| "profile page did not expose the logged-in e-mail".to_string())?;
+
+    Ok((name, email))
+}
+
+/// Logs the current Motorola portal session out using the session cookie.
+///
+/// Once the old session is invalid server-side, the next portal login shows
+/// its sign-in page again (and lets the user pick a different account)
+/// instead of instantly redirecting to the logged-in profile.
+pub fn logout_portal(cookie_header: &str) -> Result<(), String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirects(5)
+        .build();
+
+    let response = agent
+        .post(PORTAL_LOGOUT_URL)
+        .set(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        )
+        .set("Accept", "application/json, text/javascript, */*; q=0.01")
+        .set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+        .set("Origin", "https://en-us.support.motorola.com")
+        .set("Referer", PORTAL_PROFILE_URL)
+        .set("X-Requested-With", "XMLHttpRequest")
+        .set("Cookie", cookie_header)
+        .send_string("currentUrl=%2Fapp%2Faccount%2Fprofile&redirectUrl=%2Fapp%2Fhome")
+        .map_err(|e| format!("portal logout failed: {e}"))?;
+
+    let status = response.status();
+    if (200..400).contains(&status) {
+        Ok(())
+    } else {
+        Err(format!("portal logout returned http {status}"))
+    }
+}
+
+/// Requests the unlock key for the device, retrying up to 10 times when the
+/// portal answers with its `0020` error page. Succeeds when the portal
+/// redirects to the "request done" page.
+pub fn request_unlock_key(device_id: &str, cookie_header: &str) -> Result<(), String> {
+    let url = unlock_request_url(device_id)?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirects(20)
+        .build();
+
+    for _ in 0..10 {
+        let response = agent
+            .get(&url)
+            .set("Cookie", cookie_header)
+            .call()
+            .map_err(|e| format!("unlock key request failed: {e}"))?;
+        let final_url = response.get_url().to_string();
+        let body = response
+            .into_string()
+            .map_err(|e| format!("failed to read unlock key response: {e}"))?;
+
+        let haystack = format!("{final_url} {body}").to_ascii_lowercase();
+        if haystack.contains(UNLOCK_REQUEST_SUCCESS_HINT) {
+            return Ok(());
+        }
+        if haystack.contains("error_id/0020") {
+            // Retryable error page: try again.
+            continue;
+        }
+        // Any other landing page: treat as retryable too.
+    }
+
+    Err("Bootloader Unlock Key cannot be requested".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_unlock_request_url() {
+        let device_id = "3A95915042649321#5A5932324B525834524B006D6F746F726F6C0000#8226946C1000ED2C2C9D9A3A981F063D80A30825CA264A20E51C1EDCC25BD0C4#10CAE512002750E10000000000000000";
+
+        assert_eq!(
+            unlock_request_url(device_id).unwrap(),
+            "https://en-us.support.motorola.com/cc/productRegistration/unlockPhone/3A95915042649321/10CAE512002750E10000000000000000/8226946C1000ED2C2C9D9A3A981F063D80A30825CA264A20E51C1EDCC25BD0C4/"
+        );
+    }
+
+    #[test]
+    fn parses_portal_profile_html() {
+        let html = r#"<div class="loggedin_div_img_name">Calyx Hikari</div></div>
+            <h2 class="user-data-mail" data-cs-mask>
+                <a href="mailto:mega98x@gmail.com">mega98x@gmail.com</a>
+            </h2>"#;
+
+        assert_eq!(
+            html_between(html, "loggedin_div_img_name\">", "</div>"),
+            Some("Calyx Hikari")
+        );
+        assert_eq!(
+            html_between(html, "mailto:", "\""),
+            Some("mega98x@gmail.com")
+        );
+    }
+
 
     #[test]
     fn builds_unlock_eligibility_url() {

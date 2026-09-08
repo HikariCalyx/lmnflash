@@ -335,6 +335,9 @@ pub enum UnlockFailure {
     Cancelled,
     /// The unlock key was rejected (INFO "Code validation failure").
     WrongKey,
+    /// The bootloader reports the device is already unlocked, so the unlock
+    /// command is a no-op (e.g. `Already Unlocked`).
+    AlreadyUnlocked,
     /// Any other failure, carrying the bootloader's raw message.
     Other(String),
 }
@@ -401,6 +404,10 @@ fn unlock_reply(
         Err(UnlockFailure::OemUnlockingDisabled)
     } else if text.to_ascii_lowercase().contains("code validation failure") {
         Err(UnlockFailure::WrongKey)
+    } else if text.to_ascii_lowercase().contains("already unlock") {
+        // The bootloader reports the phone is already unlocked (e.g. "Already
+        // Unlocked") — nothing to do, but it is not an error either.
+        Err(UnlockFailure::AlreadyUnlocked)
     } else if text.trim().is_empty() {
         // Empty OKAY = declined / timeout on MediaTek; a genuine success on
         // Qualcomm (or when the platform could not be detected).
@@ -426,6 +433,10 @@ fn classify_unlock_failure(message: &str) -> UnlockFailure {
         UnlockFailure::OemUnlockingDisabled
     } else if lower.contains("code validation failure") {
         UnlockFailure::WrongKey
+    } else if lower.contains("already unlock") {
+        // The device is already unlocked (e.g. `FAILED (remote: 'Already
+        // Unlocked')`), so the command was a no-op.
+        UnlockFailure::AlreadyUnlocked
     } else if message.trim().is_empty() {
         UnlockFailure::Cancelled
     } else {
@@ -521,6 +532,32 @@ mod tests {
         assert_eq!(
             classify_unlock_failure(message),
             UnlockFailure::Other(message.to_string())
+        );
+    }
+
+    #[test]
+    fn classifies_already_unlocked() {
+        // Qualcomm reports an already-unlocked phone as a FAILED packet.
+        assert_eq!(
+            classify_unlock_failure("FAILED (remote: 'Already Unlocked')"),
+            UnlockFailure::AlreadyUnlocked
+        );
+        assert_eq!(
+            classify_unlock_failure("already unlocked"),
+            UnlockFailure::AlreadyUnlocked
+        );
+        // A bare message without the keyword still lands in Other.
+        assert_eq!(
+            classify_unlock_failure("FAILED (remote: 'oops')"),
+            UnlockFailure::Other("FAILED (remote: 'oops')".to_string())
+        );
+        // An OKAY that reports the phone is already unlocked is handled too.
+        assert_eq!(
+            unlock_reply(
+                "Already Unlocked".to_string(),
+                Some(crate::firmware::Platform::MediaTek)
+            ),
+            Err(UnlockFailure::AlreadyUnlocked)
         );
     }
 

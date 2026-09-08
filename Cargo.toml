@@ -4,7 +4,7 @@ version = "0.1.6"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.13", features = ["tokio", "system", "image"] }
+iced = { version = "0.13", features = ["tokio", "system", "image", "canvas"] }
 fluent = "0.16"
 unic-langid = "0.9"
 wry = "0.50"

@@ -7,6 +7,7 @@ mod config;
 mod decrypt;
 mod fastboot_info;
 mod firmware;
+mod guided;
 mod l10n;
 mod login;
 mod webview;
@@ -46,6 +47,7 @@ pub fn main() -> iced::Result {
         })
         .window_size(Size::new(720.0, 720.0))
         .centered()
+        .subscription(subscription)
         .run_with(|| (State::initial(), Task::none()))
 }
 
@@ -413,10 +415,48 @@ struct SmartphoneFlashState {
 enum BootloaderDialog {
     #[default]
     Closed,
-    /// Assistive-vs-Manual chooser shown after pressing the tile's button.
+    /// Guided-vs-Manual chooser shown after pressing the tile's button.
     Choosing,
     /// The manual unlock flow.
     Manual,
+    /// The guided (webview wizard) unlock flow.
+    Guided,
+}
+
+/// Step shown by the guided (wizard) flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GuidedStep {
+    #[default]
+    Login,
+    Read,
+    Request,
+    Key,
+}
+
+/// State of the guided (webview-driven) unlock flow.
+#[derive(Default)]
+struct GuidedState {
+    step: GuidedStep,
+    /// Set once the Motorola portal login has completed.
+    logged_in: bool,
+    /// Logged-in account display name (from the portal profile page).
+    account_name: Option<String>,
+    /// Logged-in account e-mail (from the portal profile page).
+    account_email: Option<String>,
+    /// `true` while the logged-in account profile (name/e-mail) is still being
+    /// fetched after a successful portal login.
+    fetching_account: bool,
+    /// Portal session cookie captured by the webview login.
+    cookie_header: String,
+    logging_in: bool,
+    /// `true` while the previous session is being signed out ("Change
+    /// Account"): the webview is reopened with a fresh login afterwards.
+    logging_out: bool,
+    login_error: Option<String>,
+    /// `true` while the "request unlock key?" confirm prompt is shown.
+    confirming_request: bool,
+    requesting: bool,
+    request_error: Option<String>,
 }
 
 /// The device operation pending a device choice.
@@ -459,6 +499,8 @@ struct BootloaderState {
     /// Neutral notice in the Unlock area (e.g. the request was cancelled).
     unlock_notice: Option<String>,
     unlock_info: Option<String>,
+    /// Guided (wizard) flow state.
+    guided: GuidedState,
 }
 
 #[derive(Default)]
@@ -505,6 +547,9 @@ struct State {
     lookup: LookupState,
     decrypt: DecryptState,
     flash: SmartphoneFlashState,
+    /// Monotonic UI animation tick, advanced by a time subscription while a
+    /// busy indicator (spinner) is visible.
+    anim_tick: u64,
 }
 
 impl Default for State {
@@ -520,6 +565,7 @@ impl Default for State {
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
             flash: SmartphoneFlashState::default(),
+            anim_tick: 0,
         }
     }
 }
@@ -626,6 +672,7 @@ enum Message {
     DecryptFinished(Result<decrypt::DecryptSummary, String>),
     SmartphoneFeaturePressed(SmartphoneFeature),
     BootloaderManualSelected,
+    BootloaderGuidedSelected,
     BootloaderCancel,
     BootloaderBackdropPressed,
     BootloaderReturnToChooser,
@@ -642,12 +689,45 @@ enum Message {
     BootloaderPasteFetched(Option<String>),
     BootloaderUnlockRequested,
     BootloaderUnlockFinished(Result<String, fastboot_info::UnlockFailure>),
+    GuidedLogin,
+    GuidedLoginFinished(Result<webview::PortalLogin, String>),
+    GuidedLogoutFinished(Result<(), String>),
+    GuidedAccountFetched(Result<(String, String), String>),
+    GuidedNext,
+    GuidedRequestKey,
+    GuidedRequestConfirmYes,
+    GuidedRequestConfirmNo,
+    GuidedKeyRequestFinished(Result<(), String>),
+    /// UI animation tick, emitted while a busy indicator is shown (drives the
+    /// spinners without blocking the UI thread).
+    AnimTick,
+}
+
+/// Drives the small UI spinner animations while a busy status is shown.
+/// Returns an idle stream when nothing needs to animate, so the UI only ticks
+/// (and redraws) while a spinner is actually visible.
+fn subscription(state: &State) -> iced::Subscription<Message> {
+    let guided = &state.flash.bootloader.guided;
+    let animating = guided.logging_in
+        || guided.logging_out
+        || guided.fetching_account
+        || guided.requesting;
+    if animating {
+        iced::time::every(std::time::Duration::from_millis(64))
+            .map(|_| Message::AnimTick)
+    } else {
+        iced::Subscription::none()
+    }
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::ModeSelected(mode) => {
             state.mode = mode;
+            Task::none()
+        }
+        Message::AnimTick => {
+            state.anim_tick = state.anim_tick.wrapping_add(1);
             Task::none()
         }
         Message::SmartphoneFeaturePressed(feature) => match feature {
@@ -665,11 +745,31 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 bootloader.unlock_error = None;
                 bootloader.unlock_notice = None;
                 bootloader.unlock_info = None;
+                bootloader.guided = GuidedState::default();
                 Task::none()
             }
         },
         Message::BootloaderManualSelected => {
             state.flash.bootloader.dialog = BootloaderDialog::Manual;
+            Task::none()
+        }
+        Message::BootloaderGuidedSelected => {
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.dialog = BootloaderDialog::Guided;
+            bootloader.picker = None;
+            bootloader.pending_key = None;
+            bootloader.reading = false;
+            bootloader.unlocking = false;
+            bootloader.checking = false;
+            bootloader.eligible = None;
+            bootloader.read_error = None;
+            bootloader.read_info = None;
+            bootloader.unlock_error = None;
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = None;
+            bootloader.device_id.clear();
+            bootloader.key_input.clear();
+            bootloader.guided = GuidedState::default();
             Task::none()
         }
         Message::BootloaderReturnToChooser => {
@@ -740,7 +840,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         // Right-click on the unlock-key field: read the clipboard and put the
         // text in (for users who don't use Ctrl+V).
         Message::BootloaderPasteRequested => {
-            if !matches!(state.flash.bootloader.dialog, BootloaderDialog::Manual) {
+            if !matches!(
+                state.flash.bootloader.dialog,
+                BootloaderDialog::Manual | BootloaderDialog::Guided
+            ) {
                 return Task::none();
             }
             iced::clipboard::read().map(Message::BootloaderPasteFetched)
@@ -754,6 +857,234 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::BootloaderUnlockFinished(result) => finish_bootloader_unlock(state, result),
+        Message::GuidedLogin => {
+            let guided = &mut state.flash.bootloader.guided;
+            // Only one portal window (or logout) at a time. When already
+            // logged in the button means "change account": the current session
+            // is signed out first so the portal shows its login page again
+            // instead of bouncing straight to the logged-in account profile.
+            if guided.logging_in || guided.logging_out {
+                return Task::none();
+            }
+            guided.login_error = None;
+
+            if guided.logged_in && !guided.cookie_header.trim().is_empty() {
+                guided.logging_out = true;
+                let cookie = guided.cookie_header.clone();
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || firmware::logout_portal(&cookie))
+                            .await
+                            .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+                    },
+                    Message::GuidedLogoutFinished,
+                );
+            }
+
+            guided.logging_in = true;
+            let title = state.l10n.tr("guided-login-dialog-title");
+            let url = firmware::PORTAL_LOGIN_URL.to_string();
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        webview::show_portal_login(&title, &url)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+                },
+                Message::GuidedLoginFinished,
+            )
+        }
+        Message::GuidedLogoutFinished(result) => {
+            let guided = &mut state.flash.bootloader.guided;
+            guided.logging_out = false;
+            match result {
+                Ok(()) => {
+                    // The old session is invalid now. Drop it and open the
+                    // portal login page fresh so a different account can be
+                    // chosen.
+                    guided.logged_in = false;
+                    guided.account_name = None;
+                    guided.account_email = None;
+                    guided.cookie_header.clear();
+                    guided.logging_in = true;
+                    let title = state.l10n.tr("guided-login-dialog-title");
+                    let url = firmware::PORTAL_LOGIN_URL.to_string();
+                    Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                webview::show_portal_login(&title, &url)
+                            })
+                            .await
+                            .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+                        },
+                        Message::GuidedLoginFinished,
+                    )
+                }
+                Err(error) => {
+                    // Logout failed: keep the current session and surface the
+                    // error next to the "Change Account" button.
+                    guided.login_error = Some(error);
+                    Task::none()
+                }
+            }
+        }
+        Message::GuidedLoginFinished(result) => match result {
+            Ok(login) => {
+                let guided = &mut state.flash.bootloader.guided;
+                guided.logging_in = false;
+                // The profile fetch and the unlock-key request both need the
+                // portal session cookie. On platforms where the webview can't
+                // expose cookies (e.g. Linux GTK) a "successful" login is
+                // useless, so report it as a failure instead of pretending the
+                // user is signed in.
+                if login.cookie_header.trim().is_empty() {
+                    let message = state.l10n.tr("guided-login-required");
+                    guided.logged_in = false;
+                    guided.login_error = Some(message);
+                    return Task::none();
+                }
+                guided.logged_in = true;
+                guided.login_error = None;
+                guided.cookie_header = login.cookie_header.clone();
+                guided.fetching_account = true;
+
+                #[cfg(debug_assertions)]
+                {
+                    eprintln!("[guided] portal login landed on: {}", login.url);
+                    let names: Vec<&str> = login
+                        .cookie_header
+                        .split(';')
+                        .filter_map(|c| c.trim().split_once('=').map(|(n, _)| n))
+                        .collect();
+                    eprintln!(
+                        "[guided] portal session cookies ({}): {}",
+                        names.len(),
+                        names.join(", ")
+                    );
+                }
+
+                let cookie = login.cookie_header;
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            firmware::fetch_portal_profile(&cookie)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+                    },
+                    Message::GuidedAccountFetched,
+                )
+            }
+            Err(error) => {
+                let guided = &mut state.flash.bootloader.guided;
+                guided.logging_in = false;
+                guided.login_error = Some(error);
+                Task::none()
+            }
+        },
+        Message::GuidedAccountFetched(result) => {
+            let guided = &mut state.flash.bootloader.guided;
+            guided.fetching_account = false;
+            match result {
+                Ok((name, email)) => {
+                    guided.account_name = Some(name);
+                    guided.account_email = Some(email);
+                    guided.login_error = None;
+                }
+                Err(error) => {
+                    // Login itself succeeded; only the profile info is missing.
+                    eprintln!("[guided] failed to fetch portal profile: {error}");
+                }
+            }
+            Task::none()
+        }
+        Message::GuidedNext => {
+            let guided = &mut state.flash.bootloader.guided;
+            // Don't advance past the login step while a sign-in window or a
+            // "change account" sign-out is still in progress.
+            if guided.step == GuidedStep::Login
+                && guided.logged_in
+                && !guided.logging_in
+                && !guided.logging_out
+            {
+                guided.step = GuidedStep::Read;
+            }
+            Task::none()
+        }
+        Message::GuidedRequestKey => {
+            let bootloader = &mut state.flash.bootloader;
+            let guided = &mut bootloader.guided;
+            // Triggered from the Read step (first request) or, after a failed
+            // request, from the "Try Again" button on the Request step.
+            let can_request = match guided.step {
+                GuidedStep::Read => !bootloader.device_id.trim().is_empty(),
+                GuidedStep::Request => guided.request_error.is_some(),
+                _ => false,
+            };
+            if can_request && !guided.confirming_request && !guided.requesting {
+                guided.step = GuidedStep::Request;
+                guided.confirming_request = true;
+                guided.request_error = None;
+            }
+            Task::none()
+        }
+        Message::GuidedRequestConfirmYes => {
+            let bootloader = &mut state.flash.bootloader;
+            let device_id = bootloader.device_id.clone();
+            let cookie = bootloader.guided.cookie_header.clone();
+            let guided = &mut bootloader.guided;
+
+            guided.confirming_request = false;
+            if cookie.is_empty() {
+                // No usable portal session: send the user back to sign in
+                // rather than looping on the confirm prompt.
+                let message = state.l10n.tr("guided-login-required");
+                guided.logged_in = false;
+                guided.account_name = None;
+                guided.account_email = None;
+                guided.login_error = Some(message);
+                guided.step = GuidedStep::Login;
+                return Task::none();
+            }
+
+            guided.requesting = true;
+            guided.request_error = None;
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        firmware::request_unlock_key(&device_id, &cookie)
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+                },
+                Message::GuidedKeyRequestFinished,
+            )
+        }
+        Message::GuidedRequestConfirmNo => {
+            // "No": do not request the key — go back to Step 2 (Read) so the
+            // user can re-read or change their mind.
+            let bootloader = &mut state.flash.bootloader;
+            let guided = &mut bootloader.guided;
+            guided.confirming_request = false;
+            guided.request_error = None;
+            guided.step = GuidedStep::Read;
+            Task::none()
+        }
+        Message::GuidedKeyRequestFinished(result) => {
+            let guided = &mut state.flash.bootloader.guided;
+            guided.requesting = false;
+            match result {
+                Ok(()) => {
+                    guided.request_error = None;
+                    guided.step = GuidedStep::Key;
+                }
+                Err(error) => guided.request_error = Some(error),
+            }
+            Task::none()
+        }
         Message::LanguageSelected(language) => {
             state.lang = language;
             state.l10n = l10n::bundle_for(language);
@@ -1711,27 +2042,46 @@ fn start_unlock_eligibility_check(device_id: String) -> Task<Message> {
     )
 }
 
-/// Stores a successfully read Device ID (copies it to the clipboard and
-/// starts the unlock-eligibility check) or surfaces the read error.
+/// Stores a successfully read Device ID (and starts the unlock-eligibility
+/// check) or surfaces the read error.
+///
+/// Only the Manual flow copies the Device ID to the clipboard (so the user
+/// can paste it into Motorola's site); the Guided flow consumes the ID
+/// internally and never needs the clipboard.
 fn finish_bootloader_read(state: &mut State, result: Result<String, String>) -> Task<Message> {
     if !state.flash.bootloader.reading {
         return Task::none();
     }
 
+    let manual = matches!(
+        state.flash.bootloader.dialog,
+        BootloaderDialog::Manual
+    );
+    // Only the Manual flow needs the "copied to clipboard" confirmation.
+    let copied = if manual {
+        Some(state.l10n.tr("flash-bootloader-copied"))
+    } else {
+        None
+    };
+
     match result {
         Ok(device_id) => {
-            let copied = state.l10n.tr("flash-bootloader-copied");
             let bootloader = &mut state.flash.bootloader;
             bootloader.reading = false;
             bootloader.checking = true;
             bootloader.eligible = None;
             bootloader.read_error = None;
-            bootloader.read_info = Some(copied);
+            bootloader.read_info = copied;
             bootloader.device_id = device_id.clone();
-            Task::batch([
-                iced::clipboard::write::<Message>(device_id.clone()),
-                start_unlock_eligibility_check(device_id),
-            ])
+            if manual {
+                Task::batch([
+                    iced::clipboard::write::<Message>(device_id.clone()),
+                    start_unlock_eligibility_check(device_id),
+                ])
+            } else {
+                // Guided flow: no clipboard write, no "copied" status line.
+                start_unlock_eligibility_check(device_id)
+            }
         }
         Err(error) => {
             let bootloader = &mut state.flash.bootloader;
@@ -1791,6 +2141,18 @@ fn finish_bootloader_unlock(
             bootloader.unlock_error = Some(message);
             bootloader.unlock_notice = None;
             bootloader.unlock_info = None;
+            bootloader.pending_key = None;
+            Task::none()
+        }
+        Err(fastboot_info::UnlockFailure::AlreadyUnlocked) => {
+            // The device is already unlocked — not an error, so show it as a
+            // success-style info line.
+            let message = state.l10n.tr("flash-bootloader-already-unlocked");
+            let bootloader = &mut state.flash.bootloader;
+            bootloader.unlocking = false;
+            bootloader.unlock_error = None;
+            bootloader.unlock_notice = None;
+            bootloader.unlock_info = Some(message);
             bootloader.pending_key = None;
             Task::none()
         }

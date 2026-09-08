@@ -1,9 +1,10 @@
 //! The "Bootloader Unlock" dialog (Mode 2, Smartphone Flash).
 //!
 //! This module renders the overlay that appears when the Bootloader Unlock
-//! feature tile is pressed: first an "Assistive vs Manual" chooser, then the
-//! manual unlock flow (read the Device ID from fastboot, open Motorola's page,
-//! and unlock with the returned key). The flow *state* and its update handlers
+//! feature tile is pressed: first a "Guided vs Manual" chooser, then the
+//! chosen flow (the guided webview wizard, or the manual unlock flow that
+//! reads the Device ID from fastboot and unlocks with a key returned by
+//! Motorola). The flow *state* and its update handlers
 //! live in `crate` (`State::flash.bootloader`); this module only describes how
 //! that state is presented and which messages its widgets send.
 
@@ -19,7 +20,7 @@ use crate::{BootloaderDialog, Message, State};
 /// A brighter success green than the theme default, used for positive status
 /// lines (e.g. "Device ID copied to the clipboard.") so they stand out on the
 /// dark dialog background.
-fn bright_success(_theme: &iced::Theme) -> iced::widget::text::Style {
+pub(crate) fn bright_success(_theme: &iced::Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(iced::Color::from_rgb8(0x46, 0xE8, 0x8E)),
     }
@@ -27,7 +28,7 @@ fn bright_success(_theme: &iced::Theme) -> iced::widget::text::Style {
 
 /// An orange used for warnings (e.g. "this phone may be unable to unlock the
 /// bootloader") so it reads as a caution rather than an outright error.
-fn warning_orange(_theme: &iced::Theme) -> iced::widget::text::Style {
+pub(crate) fn warning_orange(_theme: &iced::Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(iced::Color::from_rgb8(0xFF, 0xA5, 0x00)),
     }
@@ -35,10 +36,8 @@ fn warning_orange(_theme: &iced::Theme) -> iced::widget::text::Style {
 
 /// The rounded-box card style used by the dialogs, but with a much darker
 /// background so the popup clearly stands out from the page behind it.
-///
-/// On light themes the standard card colour is kept (darkening a white card
-/// would make the dark text illegible).
-fn darker_card(theme: &iced::Theme) -> iced::widget::container::Style {
+/// (On light themes the standard card colour is kept.)
+pub(crate) fn darker_card(theme: &iced::Theme) -> iced::widget::container::Style {
     let mut style = iced::widget::container::rounded_box(theme);
     let background = theme.palette().background;
 
@@ -110,17 +109,23 @@ pub(crate) fn overlay(state: &State) -> Option<Element<'_, Message>> {
             }
             Some(iced::widget::Stack::with_children(children).into())
         }
+        BootloaderDialog::Guided => crate::guided::overlay(state),
     }
 }
 
-/// The first "Bootloader Unlock" dialog: pick between an assistive (not yet
-/// available) and a manual unlock flow.
+/// The first "Bootloader Unlock" dialog: pick between the guided (webview
+/// wizard) and the manual unlock flow.
 fn chooser_card(state: &State) -> Element<'_, Message> {
     let l10n = &state.l10n;
 
-    // The assistive flow is not implemented yet, so its button has no
-    // action and iced renders it greyed out and unclickable.
-    let assistive = button(text(l10n.tr("flash-bootloader-assistive"))).width(Fill);
+    // The guided flow needs the embedded webview (used to sign in to
+    // Motorola and submit the unlock request). When it is not available
+    // (e.g. WebView2 missing) the button is disabled like an unimplemented
+    // action.
+    let mut guided = button(text(l10n.tr("flash-bootloader-guided"))).width(Fill);
+    if crate::webview::webview_available() {
+        guided = guided.on_press(Message::BootloaderGuidedSelected);
+    }
 
     let manual = button(text(l10n.tr("flash-bootloader-manual")))
         .width(Fill)
@@ -134,7 +139,7 @@ fn chooser_card(state: &State) -> Element<'_, Message> {
         column![
             text(l10n.tr("flash-bootloader-title")).size(18.0),
             text(l10n.tr("flash-bootloader-choose")).size(14.0),
-            assistive,
+            guided,
             manual,
             cancel,
         ]
@@ -315,7 +320,7 @@ fn manual_card(state: &State) -> Element<'_, Message> {
 }
 
 /// The fastboot device picker (shown when several devices are connected).
-fn device_picker_card(state: &State) -> Element<'_, Message> {
+pub(crate) fn device_picker_card(state: &State) -> Element<'_, Message> {
     let l10n = &state.l10n;
     let picker = state
         .flash
