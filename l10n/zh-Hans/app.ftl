@@ -76,8 +76,8 @@ login-back = 返回
 login-error = 登录失败：{ $error }
 login-webview-fallback = 无法打开内置登录窗口，请在浏览器中登录。
 
-lookup-mode-row = 全球版智能手机
-lookup-mode-retcn = 国行智能手机
+lookup-mode-row = 按 IMEI 查询
+lookup-mode-retcn = 按设备信息查询
 lookup-mode-tablet = 平板电脑
 lookup-mode-by-model = 按型号查询
 by-model-error-required = 需要输入型号名称

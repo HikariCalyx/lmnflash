@@ -76,8 +76,8 @@ login-back = Tillbaka
 login-error = Inloggningen misslyckades: { $error }
 login-webview-fallback = Det inbyggda inloggningsfönstret kunde inte öppnas. Logga in med webbläsaren i stället.
 
-lookup-mode-row = Smartphones (ROW)
-lookup-mode-retcn = Smartphones (RETCN)
+lookup-mode-row = Sök efter IMEI
+lookup-mode-retcn = Sök efter enhetsinformation
 lookup-mode-tablet = Surfplattor
 lookup-mode-by-model = Sök efter modell
 by-model-error-required = Modellnamn krävs

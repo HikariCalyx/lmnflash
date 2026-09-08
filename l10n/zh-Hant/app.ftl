@@ -76,8 +76,8 @@ login-back = 返回
 login-error = 登入失敗：{ $error }
 login-webview-fallback = 無法開啟內建登入視窗，請改用瀏覽器登入。
 
-lookup-mode-row = 全球版智慧型手機
-lookup-mode-retcn = 中國大陸版智慧型手機
+lookup-mode-row = 依 IMEI 查詢
+lookup-mode-retcn = 依裝置資訊查詢
 lookup-mode-tablet = 平板電腦
 lookup-mode-by-model = 依型號查詢
 by-model-error-required = 需要輸入型號名稱

@@ -76,8 +76,8 @@ login-back = Takaisin
 login-error = Kirjautuminen epäonnistui: { $error }
 login-webview-fallback = Sisäänrakennettua kirjautumisikkunaa ei voitu avata; kirjaudu selaimella.
 
-lookup-mode-row = Älypuhelimet (ROW)
-lookup-mode-retcn = Älypuhelimet (RETCN)
+lookup-mode-row = Haku IMEI-numerolla
+lookup-mode-retcn = Haku laitetiedoilla
 lookup-mode-tablet = Tabletit
 lookup-mode-by-model = Haku mallin mukaan
 by-model-error-required = Mallin nimi vaaditaan

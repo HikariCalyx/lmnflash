@@ -76,8 +76,8 @@ login-back = Terug
 login-error = Aanmelden mislukt: { $error }
 login-webview-fallback = Het ingebouwde aanmeldvenster kon niet worden geopend; meld u aan via uw browser.
 
-lookup-mode-row = Smartphones (ROW)
-lookup-mode-retcn = Smartphones (RETCN)
+lookup-mode-row = Zoeken op IMEI
+lookup-mode-retcn = Zoeken op apparaatinformatie
 lookup-mode-tablet = Tablets
 lookup-mode-by-model = Zoeken op model
 by-model-error-required = Modelnaam is vereist

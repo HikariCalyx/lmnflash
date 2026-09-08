@@ -76,8 +76,8 @@ login-back = 뒤로
 login-error = 로그인 실패: { $error }
 login-webview-fallback = 내장 로그인 창을 열 수 없습니다. 브라우저로 로그인하세요.
 
-lookup-mode-row = 글로벌 스마트폰
-lookup-mode-retcn = 중국 내수 스마트폰
+lookup-mode-row = IMEI로 조회
+lookup-mode-retcn = 기기 정보로 조회
 lookup-mode-tablet = 태블릿
 lookup-mode-by-model = 모델로 조회
 by-model-error-required = 모델 이름이 필요합니다

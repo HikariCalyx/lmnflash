@@ -76,8 +76,8 @@ login-back = Назад
 login-error = Помилка входу: { $error }
 login-webview-fallback = Не вдалося відкрити вбудоване вікно входу; увійдіть через браузер.
 
-lookup-mode-row = Смартфони (глобальні)
-lookup-mode-retcn = Смартфони (Китай)
+lookup-mode-row = Пошук за IMEI
+lookup-mode-retcn = Пошук за даними пристрою
 lookup-mode-tablet = Планшети
 lookup-mode-by-model = Пошук за моделлю
 by-model-error-required = Потрібна назва моделі

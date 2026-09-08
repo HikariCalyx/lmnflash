@@ -76,8 +76,8 @@ login-back = Atrás
 login-error = Error al iniciar sesión: { $error }
 login-webview-fallback = No se pudo abrir la ventana de inicio de sesión integrada; inicie sesión con su navegador.
 
-lookup-mode-row = Smartphones ROW
-lookup-mode-retcn = Smartphones RETCN
+lookup-mode-row = Buscar por IMEI
+lookup-mode-retcn = Buscar por información del dispositivo
 lookup-mode-tablet = Tablets
 lookup-mode-by-model = Buscar por modelo
 by-model-error-required = Se requiere el nombre del modelo

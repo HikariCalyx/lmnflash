@@ -103,6 +103,22 @@ fn luhn_sum(digits: &str, offset: usize) -> u32 {
         .sum()
 }
 
+/// Returns the IMEI2 value corresponding to a 15-digit `imei`: its 14-digit
+/// body incremented by one, with the Luhn check digit recomputed.
+///
+/// A device's IMEI2 is its IMEI body + 1 (e.g. the value printed for the
+/// second SIM slot), and Lenovo sometimes ties the firmware build to that
+/// IMEI instead of the primary one.
+fn imei2(imei: &str) -> Option<String> {
+    if imei.len() != 15 || imei.bytes().any(|byte| !byte.is_ascii_digit()) {
+        return None;
+    }
+
+    let body = &imei[..14];
+    let value: u64 = body.parse::<u64>().ok()?.checked_add(1)?;
+    Some(append_check_digit(&format!("{value:014}")))
+}
+
 /// Firmware information returned for a device.
 #[derive(Debug, Clone)]
 pub struct FirmwareInfo {
@@ -240,7 +256,37 @@ pub fn validate_imei_digits(imei: &str) -> Result<String, ImeiError> {
 }
 
 /// Looks up the firmware resource for `imei` (ROW smartphones).
+///
+/// The by-IMEI endpoint answers with business code `1000` when no build is
+/// tied to the given IMEI. Lenovo usually ties the firmware to the device's
+/// IMEI2 instead, so on a `1000` this retries ONCE with the IMEI2 value
+/// ([`imei2`]: 14-digit body + 1 with the Luhn check digit recomputed).
 pub fn fetch_firmware(
+    imei: &str,
+    token: &str,
+    client_uuid: &str,
+) -> Result<FirmwareInfo, FirmwareError> {
+    let first = lookup_imei_once(imei, token, client_uuid);
+
+    // `1000` = no matching resource for this IMEI. The entered value is
+    // usually the IMEI1 while the build is tied to the IMEI2, so try the
+    // IMEI2 once (no further retries if that also fails).
+    if matches!(&first, Err(error) if api_error_code(error) == Some(1000)) {
+        if let Some(alt) = imei2(imei) {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[firmware] IMEI {imei} returned code 1000; retrying once with IMEI2 {alt}"
+            );
+
+            return lookup_imei_once(&alt, token, client_uuid);
+        }
+    }
+
+    first
+}
+
+/// Runs a single by-IMEI lookup attempt (no IMEI2 retry).
+fn lookup_imei_once(
     imei: &str,
     token: &str,
     client_uuid: &str,
@@ -652,6 +698,21 @@ fn api_post(
             .unwrap_or(serde_json::Value::Null),
         raw_json,
     })
+}
+
+/// The LSA business result code behind a non-auth [`FirmwareError`] from
+/// [`api_post`], if any. [`api_post`] renders every non-`0000` business code
+/// as `API error <code>: <desc>`, which this helper re-parses (used to
+/// trigger the IMEI2 retry in [`fetch_firmware`] on code `1000`).
+fn api_error_code(error: &FirmwareError) -> Option<u32> {
+    let FirmwareError::Other(message) = error else {
+        return None;
+    };
+
+    message
+        .strip_prefix("API error ")
+        .and_then(|rest| rest.split(':').next())
+        .and_then(|code| code.trim().parse().ok())
 }
 
 /// Shared request + parsing logic for both lookup endpoints.
@@ -1221,6 +1282,53 @@ mod tests {
         assert_eq!(
             validate_imei("490154203237519"),
             Err(ImeiError::BadChecksum)
+        );
+    }
+
+    #[test]
+    fn imei2_increments_body_and_recomputes_check_digit() {
+        // 35807117181431 + 1 → 35807117181432, Luhn check digit 9.
+        assert_eq!(
+            imei2("358071171814311").as_deref(),
+            Some("358071171814329")
+        );
+        // The IMEI2 result must itself be a valid IMEI.
+        assert_eq!(
+            validate_imei("358071171814329").as_deref(),
+            Ok("358071171814329")
+        );
+    }
+
+    #[test]
+    fn imei2_carries_through_trailing_nines() {
+        // …399 + 1 → …400 (carry through the nines), check digit 6.
+        assert_eq!(imei2("358071171813990").as_deref(), Some("358071171814006"));
+    }
+
+    #[test]
+    fn imei2_requires_a_15_digit_numeric_imei() {
+        assert_eq!(imei2("1234"), None);
+        assert_eq!(imei2("49015420323751"), None); // 14 digits
+        assert_eq!(imei2("49015420323751A"), None); // 15 chars, non-digit
+    }
+
+    #[test]
+    fn api_error_code_reparses_the_business_code() {
+        assert_eq!(
+            api_error_code(&FirmwareError::Other(
+                "API error 1000: no such IMEI".to_string()
+            )),
+            Some(1000)
+        );
+        assert_eq!(
+            api_error_code(&FirmwareError::Other("API error 400: bad request".to_string())),
+            Some(400)
+        );
+        assert_eq!(api_error_code(&FirmwareError::Other("boom".to_string())), None);
+        // Auth-expired errors never carry a parseable business code here.
+        assert_eq!(
+            api_error_code(&FirmwareError::AuthExpired("API error 403: nope".to_string())),
+            None
         );
     }
 

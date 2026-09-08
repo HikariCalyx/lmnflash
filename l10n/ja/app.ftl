@@ -76,8 +76,8 @@ login-back = 戻る
 login-error = ログインに失敗しました：{ $error }
 login-webview-fallback = 内蔵ログイン ウィンドウを開けませんでした。ブラウザーでログインしてください。
 
-lookup-mode-row = グローバル版スマートフォン
-lookup-mode-retcn = 中国版スマートフォン
+lookup-mode-row = IMEI で検索
+lookup-mode-retcn = 端末情報で検索
 lookup-mode-tablet = タブレット
 lookup-mode-by-model = モデルで検索
 by-model-error-required = モデル名が必要です
