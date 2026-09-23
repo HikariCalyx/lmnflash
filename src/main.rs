@@ -8,6 +8,9 @@ mod decrypt;
 mod factory_reset;
 mod fastboot_info;
 mod firmware;
+mod firmware_flash;
+mod flash_engine;
+mod flashfile;
 mod guided;
 mod l10n;
 mod login;
@@ -177,22 +180,42 @@ impl Mode {
 enum SmartphoneFeature {
     BootloaderUnlock,
     FactoryReset,
+    FirmwareFlash,
 }
 
 impl SmartphoneFeature {
-    const ALL: [Self; 2] = [Self::BootloaderUnlock, Self::FactoryReset];
+    const ALL: [Self; 3] = [
+        Self::BootloaderUnlock,
+        Self::FactoryReset,
+        Self::FirmwareFlash,
+    ];
 
     fn title_id(self) -> &'static str {
         match self {
             Self::BootloaderUnlock => "flash-bootloader-title",
             Self::FactoryReset => "flash-factory-reset-title",
+            Self::FirmwareFlash => "flash-firmware-title",
         }
     }
 
-    fn button_id(self) -> &'static str {
+    /// The action buttons of the tile, paired with the FTL id of their label
+    /// and the message they send.
+    ///
+    /// `None` marks an action that is not implemented yet: its button is
+    /// rendered disabled (a button without `on_press`), so the tile already
+    /// shows what is coming without pretending to work.
+    fn actions(self) -> Vec<(&'static str, Option<Message>)> {
+        let pressed = || Some(Message::SmartphoneFeaturePressed(self));
+
         match self {
-            Self::BootloaderUnlock => "flash-bootloader-button",
-            Self::FactoryReset => "flash-factory-reset-button",
+            Self::BootloaderUnlock => vec![("flash-bootloader-button", pressed())],
+            Self::FactoryReset => vec![("flash-factory-reset-button", pressed())],
+            // Firmware flashing is offered per device type; tablet firmware
+            // flashing is not implemented yet.
+            Self::FirmwareFlash => vec![
+                ("flash-firmware-smartphone-button", pressed()),
+                ("flash-firmware-tablet-button", None),
+            ],
         }
     }
 }
@@ -414,6 +437,7 @@ struct DecryptState {
 struct SmartphoneFlashState {
     bootloader: BootloaderState,
     factory_reset: FactoryResetState,
+    firmware: FirmwareFlashState,
 }
 
 /// Which Bootloader Unlock dialog is currently on screen.
@@ -570,6 +594,114 @@ impl FactoryResetState {
                 None => serial.clone(),
             },
         )
+    }
+}
+
+/// Which Firmware Flash dialog is currently on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FirmwareFlashDialog {
+    #[default]
+    Closed,
+    /// The whole flow (package selection, device selection, confirmation,
+    /// flashing with progress and log) is presented by this one modal.
+    Open,
+}
+
+/// State of the "Firmware Flash" feature (Mode 2).
+struct FirmwareFlashState {
+    dialog: FirmwareFlashDialog,
+    /// Incremented for every job started by the dialog; events that carry an
+    /// older id belong to an abandoned job and are ignored.
+    job: u64,
+    /// Selected firmware package (a ZIP archive or a `flashfile.xml`).
+    package: Option<std::path::PathBuf>,
+    /// `true` while the package is unpacked / parsed.
+    loading: bool,
+    /// Unpacking progress of the selected ZIP, in bytes.
+    extracted: Option<(u64, u64)>,
+    /// The parsed package, ready to flash.
+    plan: Option<flashfile::FlashPackage>,
+    /// One flag per procedure of `plan` (parallel to `FlashPackage::steps`):
+    /// only the checked ones are executed.
+    enabled: Vec<bool>,
+    /// Erase groups added on top of the package ("Erase Userdata" / "Erase
+    /// NV cache"); they are independent of the package's own procedures.
+    erase_groups: Vec<flashfile::EraseGroup>,
+    /// `true` while the procedure checklist is shown.
+    editing: bool,
+    /// Package-loading failure.
+    error: Option<String>,
+    /// `mfastboot` builds found next to the application (newest first).
+    mfastboot: Vec<flash_engine::Mfastboot>,
+    /// Backend that runs the package's steps.
+    engine: flash_engine::Engine,
+    /// Verify the `MD5` recorded for every `flash` step.
+    verify_checksums: bool,
+    /// `true` while the connected devices are listed.
+    listing: bool,
+    /// Supported (Motorola) devices found, offered for selection.
+    devices: Vec<fastboot_info::DeviceEntry>,
+    /// Total number of fastboot devices found, including unsupported ones.
+    total: usize,
+    /// Failure of the device listing itself (e.g. a USB error).
+    list_error: Option<String>,
+    /// Serial of the device the package is flashed to.
+    selected: Option<String>,
+    /// `true` while the selected device's variables are read.
+    reading_device: bool,
+    /// `securestate`, `cid` and `product` of the selected device.
+    device_vars: Option<fastboot_info::DeviceVars>,
+    /// Failure of that read (the phone may have been unplugged).
+    device_vars_error: Option<String>,
+    /// `true` while the warning before flashing is shown.
+    confirming: bool,
+    /// `true` while the steps run.
+    running: bool,
+    step_index: usize,
+    step_total: usize,
+    step_label: String,
+    /// Byte progress inside the current step.
+    progress: Option<(u64, u64)>,
+    /// Output of the flashing tool (and the engine's own notes).
+    log: Vec<String>,
+    /// Result of the whole package, once it finished.
+    result: Option<Result<(), String>>,
+}
+
+impl Default for FirmwareFlashState {
+    fn default() -> Self {
+        Self {
+            dialog: FirmwareFlashDialog::default(),
+            job: 0,
+            package: None,
+            loading: false,
+            extracted: None,
+            plan: None,
+            enabled: Vec::new(),
+            erase_groups: Vec::new(),
+            editing: false,
+            error: None,
+            mfastboot: Vec::new(),
+            engine: flash_engine::Engine::Builtin,
+            // Checksum verification is on unless it is turned off explicitly.
+            verify_checksums: true,
+            listing: false,
+            devices: Vec::new(),
+            total: 0,
+            list_error: None,
+            selected: None,
+            reading_device: false,
+            device_vars: None,
+            device_vars_error: None,
+            confirming: false,
+            running: false,
+            step_index: 0,
+            step_total: 0,
+            step_label: String::new(),
+            progress: None,
+            log: Vec::new(),
+            result: None,
+        }
     }
 }
 
@@ -800,6 +932,56 @@ enum Message {
     FactoryResetBackdropPressed,
     /// Factory Reset: `erase userdata` / `erase metadata` finished.
     FactoryResetFinished(Result<(), String>),
+    /// Firmware Flash: the user asked for the package picker.
+    FirmwareFlashPickRequested,
+    /// Firmware Flash: the package picker closed (`None` = cancelled).
+    FirmwareFlashPicked(Option<std::path::PathBuf>),
+    /// Firmware Flash: the backend that runs the steps was switched.
+    FirmwareFlashEngineSelected(flash_engine::Engine),
+    /// Firmware Flash: the "verify checksums" box was toggled.
+    FirmwareFlashVerifyToggled(bool),
+    /// Firmware Flash: re-scan the USB bus for connected phones.
+    FirmwareFlashRescan,
+    /// Firmware Flash: the connected devices were listed.
+    FirmwareFlashDevicesFetched(Result<fastboot_info::DeviceList, String>),
+    /// Firmware Flash: the device to flash was selected.
+    FirmwareFlashDeviceSelected(String),
+    /// Firmware Flash: the selected device's `securestate`/`cid`/`product`
+    /// were read (the serial tells stale answers from a previous selection
+    /// apart).
+    FirmwareFlashDeviceVarsRead(String, Result<fastboot_info::DeviceVars, String>),
+    /// Firmware Flash: "Start Flashing" was pressed (asks for confirmation).
+    FirmwareFlashStart,
+    /// Firmware Flash: the warning was confirmed; run the package.
+    FirmwareFlashConfirmed,
+    /// Firmware Flash: back from the warning to the setup form.
+    FirmwareFlashBack,
+    /// Firmware Flash: open the procedure checklist.
+    FirmwareFlashEditProcedures,
+    /// Firmware Flash: one procedure of the checklist was (de)selected.
+    FirmwareFlashProcedureToggled(usize, bool),
+    /// Firmware Flash: check or uncheck every procedure.
+    FirmwareFlashSelectAllProcedures(bool),
+    /// Firmware Flash: check only the procedures of one firmware part (AP/BP/BL).
+    FirmwareFlashSelectPart(flashfile::FlashPart),
+    /// Firmware Flash: add or remove an erase group (user data / NV cache).
+    FirmwareFlashEraseGroupToggled(flashfile::EraseGroup),
+    /// Firmware Flash: copy the flashing log to the clipboard.
+    FirmwareFlashCopyLog,
+    /// Firmware Flash: leave the procedure checklist.
+    FirmwareFlashEditDone,
+    /// Firmware Flash: close the dialog.
+    FirmwareFlashCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    FirmwareFlashBackdropPressed,
+    /// Firmware Flash: progress of the package extraction / parsing.
+    FirmwareFlashPackageEvent(u64, flash_engine::PackageEvent),
+    /// Firmware Flash: progress of the flashing itself.
+    FirmwareFlashEvent(u64, flash_engine::FlashEvent),
+    /// A background firmware-flash job ended (only completes the task; the
+    /// results arrive through the event messages above).
+    FirmwareFlashWorkerDone,
     /// The best-effort telemetry POST finished (only logged; telemetry must
     /// never affect the app).
     TelemetrySent(Result<(), String>),
@@ -814,13 +996,18 @@ enum Message {
 fn subscription(state: &State) -> iced::Subscription<Message> {
     let guided = &state.flash.bootloader.guided;
     let reset = &state.flash.factory_reset;
+    let firmware = &state.flash.firmware;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
         || guided.requesting
         || reset.listing
         || reset.checking
-        || reset.resetting;
+        || reset.resetting
+        || firmware.listing
+        || firmware.loading
+        || firmware.running
+        || firmware.reading_device;
     if animating {
         iced::time::every(std::time::Duration::from_millis(64))
             .map(|_| Message::AnimTick)
@@ -858,6 +1045,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Task::none()
             }
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
+            SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
         },
         Message::FactoryResetDevicesFetched(result) => {
             let reset = &mut state.flash.factory_reset;
@@ -979,6 +1167,350 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         // Clicks on empty modal space are swallowed here so they neither
         // dismiss the dialog nor reach the UI underneath.
         Message::FactoryResetBackdropPressed => Task::none(),
+        Message::FirmwareFlashPickRequested => {
+            let flash = &mut state.flash.firmware;
+            if flash.loading || flash.running {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("firmware-flash-select");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("Firmware package", &["zip", "xml"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::FirmwareFlashPicked,
+            )
+        }
+        Message::FirmwareFlashPicked(path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            if state.flash.firmware.loading || state.flash.firmware.running {
+                return Task::none();
+            }
+
+            state.flash.firmware.package = Some(path.clone());
+            start_firmware_flash_load(state, path)
+        }
+        Message::FirmwareFlashEngineSelected(engine) => {
+            state.flash.firmware.engine = engine;
+            Task::none()
+        }
+        Message::FirmwareFlashVerifyToggled(verify_checksums) => {
+            state.flash.firmware.verify_checksums = verify_checksums;
+            Task::none()
+        }
+        Message::FirmwareFlashRescan => {
+            let flash = &mut state.flash.firmware;
+            if flash.listing || flash.loading || flash.running {
+                return Task::none();
+            }
+
+            flash.listing = true;
+            flash.devices.clear();
+            flash.total = 0;
+            flash.list_error = None;
+            flash.selected = None;
+            flash.reading_device = false;
+            flash.device_vars = None;
+            flash.device_vars_error = None;
+
+            start_firmware_flash_list_devices()
+        }
+        Message::FirmwareFlashDevicesFetched(result) => {
+            let flash = &mut state.flash.firmware;
+            flash.listing = false;
+
+            match result {
+                Ok(list) => {
+                    flash.total = list.total;
+                    flash.devices = list.devices;
+                    flash.list_error = None;
+                }
+                Err(error) => {
+                    flash.total = 0;
+                    flash.devices.clear();
+                    flash.list_error = Some(error);
+                }
+            }
+
+            // A single phone is what the dialog would flash anyway, so it is
+            // selected right away (and its variables are read).
+            let only = match flash.devices.as_slice() {
+                [device] => Some(device.serial.clone()),
+                _ => None,
+            };
+
+            match only {
+                Some(serial) => select_firmware_flash_device(state, serial),
+                None => Task::none(),
+            }
+        }
+        Message::FirmwareFlashDeviceSelected(serial) => {
+            select_firmware_flash_device(state, serial)
+        }
+        Message::FirmwareFlashDeviceVarsRead(serial, result) => {
+            let flash = &mut state.flash.firmware;
+            // Ignore an answer for a device that is no longer selected.
+            if flash.selected.as_deref() != Some(serial.as_str()) {
+                return Task::none();
+            }
+
+            flash.reading_device = false;
+
+            match result {
+                Ok(variables) => {
+                    flash.device_vars = Some(variables);
+                    flash.device_vars_error = None;
+                }
+                Err(error) => {
+                    flash.device_vars = None;
+                    flash.device_vars_error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashStart => {
+            let flash = &mut state.flash.firmware;
+            if flash.running
+                || flash.loading
+                || flash.plan.is_none()
+                || flash.selected.is_none()
+                || enabled_procedures(flash) == 0
+            {
+                return Task::none();
+            }
+
+            flash.editing = false;
+            flash.confirming = true;
+            Task::none()
+        }
+        Message::FirmwareFlashConfirmed => start_firmware_flash(state),
+        Message::FirmwareFlashEditProcedures => {
+            let flash = &mut state.flash.firmware;
+            if flash.loading || flash.running || flash.plan.is_none() {
+                return Task::none();
+            }
+
+            flash.editing = true;
+            flash.confirming = false;
+            Task::none()
+        }
+        Message::FirmwareFlashProcedureToggled(index, enabled) => {
+            let flash = &mut state.flash.firmware;
+            if flash.loading || flash.running {
+                return Task::none();
+            }
+
+            if let Some(flag) = flash.enabled.get_mut(index) {
+                *flag = enabled;
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashSelectAllProcedures(enabled) => {
+            let flash = &mut state.flash.firmware;
+            if flash.loading || flash.running {
+                return Task::none();
+            }
+
+            for flag in &mut flash.enabled {
+                *flag = enabled;
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashSelectPart(part) => {
+            let flash = &mut state.flash.firmware;
+            if flash.loading || flash.running {
+                return Task::none();
+            }
+
+            // Selecting a part ADDS its procedures to the selection; nothing
+            // is unchecked, so the parts can be combined. `erase`/`oem`
+            // commands belong to no part and are left as they are.
+            let matched: Vec<usize> = {
+                let Some(package) = &flash.plan else {
+                    return Task::none();
+                };
+
+                package
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, step)| step.part() == Some(part))
+                    .map(|(index, _)| index)
+                    .collect()
+            };
+
+            for index in matched {
+                if let Some(enabled) = flash.enabled.get_mut(index) {
+                    *enabled = true;
+                }
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashEditDone => {
+            state.flash.firmware.editing = false;
+            Task::none()
+        }
+        Message::FirmwareFlashEraseGroupToggled(group) => {
+            let flash = &mut state.flash.firmware;
+            if flash.loading || flash.running {
+                return Task::none();
+            }
+
+            // Unlike the part buttons these are standalone commands, so the
+            // button toggles: pressing it again takes the group back out.
+            let Some(index) = flash
+                .erase_groups
+                .iter()
+                .position(|active| *active == group)
+            else {
+                flash.erase_groups.push(group);
+                check_erase_rows(flash, group, true);
+                return Task::none();
+            };
+
+            flash.erase_groups.remove(index);
+            check_erase_rows(flash, group, false);
+
+            Task::none()
+        }
+        Message::FirmwareFlashBack => {
+            let flash = &mut state.flash.firmware;
+            if flash.running || flash.loading {
+                return Task::none();
+            }
+
+            // Returning from the warning or from the result keeps the loaded
+            // package and the selected device, so a retry does not have to
+            // unpack the firmware all over again.
+            flash.confirming = false;
+            flash.result = None;
+            flash.progress = None;
+            flash.step_index = 0;
+            flash.step_label.clear();
+
+            Task::none()
+        }
+        Message::FirmwareFlashCancel => {
+            let flash = &mut state.flash.firmware;
+            // Never close the dialog while a job is in flight: the phone must
+            // not be left half-flashed, and the unpacked package is still
+            // being read.
+            if flash.loading || flash.running {
+                return Task::none();
+            }
+
+            let job = flash.job + 1;
+            *flash = FirmwareFlashState {
+                job,
+                ..FirmwareFlashState::default()
+            };
+
+            cleanup_firmware_flash_package()
+        }
+        Message::FirmwareFlashBackdropPressed => Task::none(),
+        Message::FirmwareFlashPackageEvent(job, event) => {
+            let flash = &mut state.flash.firmware;
+            // Events from a package this dialog no longer works on.
+            if job != flash.job {
+                return Task::none();
+            }
+
+            match event {
+                flash_engine::PackageEvent::Extract { done, total } => {
+                    flash.extracted = Some((done, total));
+                }
+                flash_engine::PackageEvent::Log(line) => push_flash_log(&mut flash.log, line),
+                flash_engine::PackageEvent::Ready(package) => {
+                    flash.loading = false;
+                    flash.extracted = None;
+                    flash.error = None;
+                    // Every procedure is checked by default; the user can
+                    // uncheck the ones they do not want to run.
+                    flash.enabled = vec![true; package.steps.len()];
+                    flash.plan = Some(*package);
+                }
+                flash_engine::PackageEvent::Failed(error) => {
+                    flash.loading = false;
+                    flash.extracted = None;
+                    flash.plan = None;
+                    flash.error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashEvent(job, event) => {
+            let flash = &mut state.flash.firmware;
+            // Events from a flash this dialog no longer runs.
+            if job != flash.job {
+                return Task::none();
+            }
+
+            // New log lines pull the log viewport down, so the newest output
+            // stays visible without the user having to scroll.
+            let mut scroll_log = false;
+
+            match event {
+                flash_engine::FlashEvent::StepStarted {
+                    index,
+                    total,
+                    label,
+                } => {
+                    push_flash_log(
+                        &mut flash.log,
+                        format!("[{}/{}] {}", index + 1, total, label),
+                    );
+                    flash.step_index = index;
+                    flash.step_total = total;
+                    flash.step_label = label;
+                    flash.progress = None;
+                    scroll_log = true;
+                }
+                flash_engine::FlashEvent::Progress { done, total } => {
+                    flash.progress = Some((done, total));
+                }
+                flash_engine::FlashEvent::Log(line) => {
+                    push_flash_log(&mut flash.log, line);
+                    scroll_log = true;
+                }
+                flash_engine::FlashEvent::Finished(result) => {
+                    flash.running = false;
+                    flash.progress = None;
+                    flash.result = Some(result);
+                }
+            }
+
+            if scroll_log {
+                scroll_flash_log_to_end()
+            } else {
+                Task::none()
+            }
+        }
+        Message::FirmwareFlashWorkerDone => Task::none(),
+        Message::FirmwareFlashCopyLog => {
+            let log = &state.flash.firmware.log;
+
+            if log.is_empty() {
+                return Task::none();
+            }
+
+            iced::clipboard::write::<Message>(log.join("\n"))
+        }
         Message::BootloaderManualSelected => {
             state.flash.bootloader.dialog = BootloaderDialog::Manual;
             Task::none()
@@ -2208,6 +2740,301 @@ fn start_factory_reset(serial: String) -> Task<Message> {
     )
 }
 
+/// Opens the Firmware Flash dialog: finds the `mfastboot` builds shipped next
+/// to the application and lists the connected devices.
+fn start_firmware_flash_dialog(state: &mut State) -> Task<Message> {
+    // A fresh job id makes the events of a previous dialog stale.
+    let job = state.flash.firmware.job + 1;
+    let mfastboot = flash_engine::discover_mfastboot();
+    // Prefer the newest shipped mfastboot (the Windows release bundles three
+    // versions); the built-in fastboot covers platforms without one.
+    let engine = mfastboot
+        .first()
+        .cloned()
+        .map(flash_engine::Engine::Mfastboot)
+        .unwrap_or(flash_engine::Engine::Builtin);
+
+    state.flash.firmware = FirmwareFlashState {
+        dialog: FirmwareFlashDialog::Open,
+        job,
+        mfastboot,
+        engine,
+        listing: true,
+        ..FirmwareFlashState::default()
+    };
+
+    Task::batch([
+        start_firmware_flash_list_devices(),
+        // A previous dialog may have left a multi-gigabyte package behind.
+        cleanup_firmware_flash_package(),
+    ])
+}
+
+/// Lists the connected fastboot devices for the Firmware Flash dialog.
+fn start_firmware_flash_list_devices() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(fastboot_info::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FirmwareFlashDevicesFetched,
+    )
+}
+
+/// Marks a device as the one to flash and reads the variables the dialog
+/// shows for it (`securestate`, `cid`, `product`).
+fn select_firmware_flash_device(state: &mut State, serial: String) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    if flash.loading || flash.running {
+        return Task::none();
+    }
+
+    flash.selected = Some(serial.clone());
+    flash.reading_device = true;
+    flash.device_vars = None;
+    flash.device_vars_error = None;
+
+    let worker_serial = serial.clone();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::read_device_vars(&worker_serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        move |result| Message::FirmwareFlashDeviceVarsRead(serial.clone(), result),
+    )
+}
+
+/// Unpacks and parses the selected package on a worker thread, streaming the
+/// progress into [`Message::FirmwareFlashPackageEvent`].
+fn start_firmware_flash_load(state: &mut State, path: std::path::PathBuf) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    flash.loading = true;
+    flash.extracted = None;
+    flash.plan = None;
+    flash.enabled.clear();
+    flash.editing = false;
+    flash.error = None;
+    flash.log.clear();
+    flash.result = None;
+
+    let job = flash.job;
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    // Kept to report a worker panic, which would otherwise leave the dialog
+    // waiting for an event that never comes.
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker =
+                tokio::task::spawn_blocking(move || flash_engine::load_package(&path, &emit));
+
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(flash_engine::PackageEvent::Failed(format!(
+                    "background task failed: {error}"
+                )));
+            }
+        },
+        |()| Message::FirmwareFlashWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::FirmwareFlashPackageEvent(job, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// Runs every step of the loaded package on the selected device, streaming the
+/// progress into [`Message::FirmwareFlashEvent`].
+fn start_firmware_flash(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    let (Some(mut package), Some(serial)) = (flash.plan.clone(), flash.selected.clone()) else {
+        return Task::none();
+    };
+
+    if flash.running || flash.loading {
+        return Task::none();
+    }
+
+    // Only the procedures left checked in the checklist are executed; the
+    // loaded `plan` keeps the full list so the selection survives a retry.
+    let enabled: Vec<flashfile::FlashOp> = package
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| flash.enabled.get(*index).copied().unwrap_or(true))
+        .map(|(_, step)| step.clone())
+        .collect();
+
+    if enabled.is_empty() {
+        return Task::none();
+    }
+
+    package.steps = enabled;
+
+    // The "Erase …" groups add the erases the package has no step for; the
+    // partitions it does erase are handled by their (checked) rows.
+    let extra_erases = extra_erase_partitions(flash);
+
+    flash.running = true;
+    flash.editing = false;
+    flash.confirming = false;
+    flash.result = None;
+    flash.progress = None;
+    flash.step_index = 0;
+    flash.step_total = package.steps.len() + extra_erases.len();
+    flash.step_label.clear();
+
+    let job_id = flash.job;
+    let job = flash_engine::FlashJob {
+        package,
+        extra_erases,
+        engine: flash.engine.clone(),
+        serial,
+        verify_checksums: flash.verify_checksums,
+    };
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker = tokio::task::spawn_blocking(move || flash_engine::run(job, &emit));
+
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(flash_engine::FlashEvent::Finished(Err(
+                    format!("background task failed: {error}"),
+                )));
+            }
+        },
+        |()| Message::FirmwareFlashWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::FirmwareFlashEvent(job_id, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// Deletes the unpacked firmware package (several gigabytes) on a worker
+/// thread; a failure is irrelevant, the directory is cleared on the next run.
+fn cleanup_firmware_flash_package() -> Task<Message> {
+    Task::perform(
+        async {
+            let _ = tokio::task::spawn_blocking(flashfile::cleanup_work_directory).await;
+        },
+        |()| Message::FirmwareFlashWorkerDone,
+    )
+}
+
+/// Appends a line to the flashing log, keeping memory bounded (a factory
+/// firmware produces thousands of lines).
+fn push_flash_log(log: &mut Vec<String>, line: String) {
+    const MAX_LINES: usize = 500;
+
+    if log.len() >= MAX_LINES {
+        log.remove(0);
+    }
+
+    log.push(line);
+}
+
+/// Pins the flashing log to its last line. A build without the log on screen
+/// has no widget with that id, and the operation is then a no-op.
+fn scroll_flash_log_to_end() -> Task<Message> {
+    iced::widget::scrollable::snap_to(
+        iced::widget::scrollable::Id::new(firmware_flash::LOG_SCROLL_ID),
+        iced::widget::scrollable::RelativeOffset::END,
+    )
+}
+
+/// How many procedures of the loaded package are checked in the checklist.
+fn enabled_procedures(flash: &FirmwareFlashState) -> usize {
+    match &flash.plan {
+        Some(package) => package
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| flash.enabled.get(*index).copied().unwrap_or(true))
+            .count(),
+        None => 0,
+    }
+}
+
+/// Checks (or unchecks) the package's own `erase` steps that belong to one
+/// erase group, so the checklist shows what pressing the button did. Steps of
+/// the other group are left alone.
+fn check_erase_rows(
+    flash: &mut FirmwareFlashState,
+    group: flashfile::EraseGroup,
+    checked: bool,
+) {
+    let matched: Vec<usize> = match &flash.plan {
+        Some(package) => package
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| match step {
+                flashfile::FlashOp::Erase { partition } => group
+                    .partitions()
+                    .contains(&flashfile::normalize_partition(partition).as_str()),
+                _ => false,
+            })
+            .map(|(index, _)| index)
+            .collect(),
+        None => return,
+    };
+
+    for index in matched {
+        if let Some(enabled) = flash.enabled.get_mut(index) {
+            *enabled = checked;
+        }
+    }
+}
+
+/// Whether the loaded package erases `partition` with a step of its own
+/// (whether or not that step is checked).
+fn package_erases_partition(flash: &FirmwareFlashState, partition: &str) -> bool {
+    flash.plan.as_ref().is_some_and(|package| {
+        package.steps.iter().any(|step| match step {
+            flashfile::FlashOp::Erase { partition: name } => {
+                flashfile::normalize_partition(name) == partition
+            }
+            _ => false,
+        })
+    })
+}
+
+/// The partitions the active erase groups erase *on top of* the package: the
+/// ones it has no `erase` step for, which have to be added as extra commands.
+fn extra_erase_partitions(flash: &FirmwareFlashState) -> Vec<String> {
+    let mut extra: Vec<String> = Vec::new();
+
+    for group in &flash.erase_groups {
+        for partition in group.partitions() {
+            if extra.iter().any(|name| name.as_str() == *partition)
+                || package_erases_partition(flash, partition)
+            {
+                continue;
+            }
+
+            extra.push((*partition).to_owned());
+        }
+    }
+
+    extra
+}
+
 /// Starts a bootloader device action (read Device ID / unlock): lists the
 /// connected fastboot devices in the background. A single supported device
 /// runs the action directly; several open the serial picker.
@@ -2611,6 +3438,12 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, overlay].into();
     }
 
+    // Firmware Flash dialog (package + device selection, progress and log)
+    // drawn over the whole window while it is open.
+    if let Some(overlay) = firmware_flash::overlay(state) {
+        return stack![base, overlay].into();
+    }
+
     // Device picker modal: shown when more than one fastboot device is
     // connected. Clicks on the dimmed backdrop cancel the selection.
     if let DevicePicker::Open(devices) = &state.lookup.retcn.device_picker {
@@ -2684,17 +3517,30 @@ fn smartphone_flash_view(state: &State) -> Element<'_, Message> {
 fn smartphone_feature_tile(state: &State, feature: SmartphoneFeature) -> Element<'_, Message> {
     let l10n = &state.l10n;
 
+    let actions: Vec<Element<'_, Message>> = feature
+        .actions()
+        .into_iter()
+        .map(|(label_id, message)| -> Element<'_, Message> {
+            let action = button(text(l10n.tr(label_id))).width(Fill);
+
+            match message {
+                Some(message) => action.on_press(message).into(),
+                // Not available yet: iced greys out a button without `on_press`
+                // and ignores clicks on it.
+                None => action.into(),
+            }
+        })
+        .collect();
+
     container(
         column![
             text(l10n.tr(feature.title_id())).size(16.0),
-            button(text(l10n.tr(feature.button_id())))
-                .width(Fill)
-                .on_press(Message::SmartphoneFeaturePressed(feature)),
+            iced::widget::Row::with_children(actions).spacing(8),
         ]
         .spacing(12)
         .align_x(Alignment::Start),
     )
-    .width(300)
+    .width(320)
     .padding(16)
     .style(container::rounded_box)
     .into()

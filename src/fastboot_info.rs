@@ -591,6 +591,87 @@ fn fdr_is_allowed(value: &str) -> bool {
     matches!(normalize_variable(value).as_str(), "yes" | "true" | "1")
 }
 
+/// The bootloader unlock state a device reports in `securestate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecureState {
+    /// `oem_locked`: the stock, never-unlocked state.
+    Locked,
+    /// `flashing_unlocked`: the bootloader was unlocked and may flash.
+    Unlocked,
+    /// `flashing_locked`: the bootloader was unlocked once and has been
+    /// relocked.
+    Relocked,
+    /// `engineering`: a factory/prototype bootloader.
+    Engineering,
+}
+
+impl SecureState {
+    /// Parses a `securestate` value. Anything unexpected answers `None`, so
+    /// the caller can show what the bootloader actually reported.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "oem_locked" => Some(Self::Locked),
+            "flashing_unlocked" => Some(Self::Unlocked),
+            "flashing_locked" => Some(Self::Relocked),
+            "engineering" => Some(Self::Engineering),
+            _ => None,
+        }
+    }
+
+    /// FTL id of the localized name of this state.
+    pub fn message_id(self) -> &'static str {
+        match self {
+            Self::Locked => "firmware-flash-securestate-locked",
+            Self::Unlocked => "firmware-flash-securestate-unlocked",
+            Self::Relocked => "firmware-flash-securestate-relocked",
+            Self::Engineering => "firmware-flash-securestate-engineering",
+        }
+    }
+
+    /// Whether the bootloader acts on the carrier/region CID at all.
+    ///
+    /// An engineering (factory/prototype) bootloader ignores it, so firmware
+    /// of any region can be flashed to such a unit — its CID must not be
+    /// compared with the one a package is made for.
+    pub fn ignores_cid(self) -> bool {
+        matches!(self, Self::Engineering)
+    }
+}
+
+/// The device facts the Firmware Flash dialog shows for the selected phone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceVars {
+    /// Bootloader state (`securestate`) as the bootloader reports it.
+    pub securestate: Option<String>,
+    /// Carrier/region code (`cid`), e.g. `0x0032`.
+    pub cid: Option<String>,
+    /// Product codename (`product`), e.g. `arcfox`.
+    pub product: Option<String>,
+}
+
+/// Reads `securestate`, `cid` and `product` from one device.
+///
+/// Every variable is read on its own and best effort: a bootloader that does
+/// not know one of them still reports the others.
+pub fn read_device_vars(serial: &str) -> Result<DeviceVars, String> {
+    let device = fastboot::FastbootDevice::connect(serial)?;
+
+    let read = |name: &str| -> Option<String> {
+        let value = getvar_value(&device, name).ok()?;
+        let value = value.trim();
+
+        (!value.is_empty()).then(|| value.to_owned())
+    };
+
+    Ok(DeviceVars {
+        securestate: read("securestate"),
+        // Normalized so it can be compared with the CID of a firmware
+        // package, which is shown in the same form.
+        cid: read("cid").map(|cid| crate::flashfile::normalize_cid(&cid)),
+        product: read("product"),
+    })
+}
+
 /// Reads the factory-reset requirement variables from the device.
 pub fn check_factory_reset(serial: &str) -> Result<FactoryResetCheck, String> {
     let device = fastboot::FastbootDevice::connect(serial)?;
@@ -959,6 +1040,35 @@ mod tests {
             "no\nextra"
         );
         assert_eq!(parse_getvar_value("securestate", &[]), "");
+    }
+
+    #[test]
+    fn parses_the_four_secure_states() {
+        assert_eq!(SecureState::parse("oem_locked"), Some(SecureState::Locked));
+        assert_eq!(
+            SecureState::parse("flashing_unlocked"),
+            Some(SecureState::Unlocked)
+        );
+        assert_eq!(
+            SecureState::parse("flashing_locked"),
+            Some(SecureState::Relocked)
+        );
+        assert_eq!(
+            SecureState::parse("engineering"),
+            Some(SecureState::Engineering)
+        );
+
+        // Case and padding do not matter, but the states must match exactly —
+        // note `oem_locked` and `flashing_unlocked` both contain "locked".
+        assert_eq!(SecureState::parse(" OEM_LOCKED "), Some(SecureState::Locked));
+        assert_eq!(SecureState::parse("locked"), None);
+        assert_eq!(SecureState::parse(""), None);
+
+        // Only the engineering state ignores the CID.
+        assert!(SecureState::Engineering.ignores_cid());
+        assert!(!SecureState::Unlocked.ignores_cid());
+        assert!(!SecureState::Relocked.ignores_cid());
+        assert!(!SecureState::Locked.ignores_cid());
     }
 
     #[test]

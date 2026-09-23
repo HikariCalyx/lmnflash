@@ -38,6 +38,15 @@ env PKG_CONFIG_PATH="${X86_64_PKG_CONFIG_PATH:-}" \
     cargo build --manifest-path Cargo.toml --bin lmnflash --target=x86_64-apple-darwin --release
 lipo -create target/{aarch64-apple-darwin,x86_64-apple-darwin}/release/lmnflash -output LMNFlash.app/Contents/MacOS/lmnflash
 
+# Ship Motorola's mfastboot with the bundle: the firmware-flash feature prefers it
+# over the built-in fastboot. Only an x86_64 build is available, so it lives in a
+# platform folder and is ignored when the bundle runs on Apple silicon (where it
+# would need Rosetta).
+mkdir -p LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6
+cp prebuilt_binary/darwin_amd64/29.0.6/mfastboot \
+   LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6/mfastboot
+chmod +x LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6/mfastboot
+
 # Build DMG.
 mkdir -p dist
 python3 -m dmgbuild -s "$(dirname "${BASH_SOURCE[0]}")/dmgbuild.settings.py" LMNFlash dist/lmnflash-macos_unsigned.dmg

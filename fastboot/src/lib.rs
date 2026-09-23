@@ -48,6 +48,22 @@ pub struct FastbootDevice {
     max_download: usize,
 }
 
+/// Parses a size reported by `getvar`: `0x…` hex, bare hex (e.g. `1f000000`),
+/// or plain decimal.
+fn parse_size(value: &str) -> Option<u64> {
+    let value = value.trim();
+
+    if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse().ok();
+    }
+
+    u64::from_str_radix(value, 16).ok()
+}
+
 fn is_fastboot_iface(d: &rusb::InterfaceDescriptor) -> bool {
     d.class_code() == FB_CLASS && d.sub_class_code() == FB_SUBCLASS && d.protocol_code() == FB_PROTOCOL
 }
@@ -177,10 +193,31 @@ impl FastbootDevice {
     }
 
     /// Query the device's max-download-size and update the internal limit.
+    ///
+    /// Bootloaders report the size in an INFO packet (a `getvar:` reply
+    /// carries an empty OKAY), so the value has to be read with
+    /// [`Self::getvar_lines`]. The result is capped at 256 MiB: the limit is
+    /// used to size the re-sparsed buffers in memory, and flashing several
+    /// smaller downloads is cheaper than allocating a gigabyte.
     pub fn refresh_max_download(&mut self) {
-        if let Ok(val) = self.getvar("max-download-size") {
-            if let Ok(v) = u64::from_str_radix(val.trim_start_matches("0x"), 16) {
-                self.max_download = v as usize;
+        const CAP: usize = 256 * 1024 * 1024;
+
+        let Ok(lines) = self.getvar_lines("max-download-size") else {
+            return;
+        };
+
+        for line in lines {
+            // `(bootloader) max-download-size: 0x1f000000`
+            let value = match line.rsplit_once(':') {
+                Some((_, value)) => value,
+                None => line.as_str(),
+            };
+
+            if let Some(size) = parse_size(value) {
+                if size > 0 {
+                    self.max_download = (size as usize).min(CAP);
+                    return;
+                }
             }
         }
     }

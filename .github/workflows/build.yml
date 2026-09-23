@@ -176,6 +176,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -196,6 +198,29 @@ jobs:
 
           # macOS
           cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg
+
+      # The firmware-flash feature looks for mfastboot next to the binary; the
+      # platform folder keeps it from being used on architectures it was not
+      # built for (so the app falls back to its built-in fastboot there).
+      - name: Bundle mfastboot with the Windows build
+        run: |
+          set -euo pipefail
+          for version in 34.0.4 28.0.2 26.0.0; do
+            mkdir -p "bundle-win64/mfastboot/windows_amd64/$version"
+            cp prebuilt_binary/windows/$version/* "bundle-win64/mfastboot/windows_amd64/$version/"
+          done
+          cp release/lmnflash-win64.exe bundle-win64/lmnflash.exe
+          (cd bundle-win64 && zip -r -q ../release/lmnflash-win64.zip .)
+
+      - name: Bundle mfastboot with the Linux build
+        run: |
+          set -euo pipefail
+          mkdir -p bundle-linux-x86_64/mfastboot/linux_amd64/31.0.2
+          cp release/lmnflash-linux-x86_64 bundle-linux-x86_64/lmnflash
+          cp prebuilt_binary/linux_amd64/31.0.2/mfastboot \
+             bundle-linux-x86_64/mfastboot/linux_amd64/31.0.2/mfastboot
+          chmod +x bundle-linux-x86_64/lmnflash bundle-linux-x86_64/mfastboot/linux_amd64/31.0.2/mfastboot
+          tar -C bundle-linux-x86_64 -czf release/lmnflash-linux-x86_64.tar.gz .
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2

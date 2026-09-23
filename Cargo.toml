@@ -26,6 +26,15 @@ cbc = "0.1"
 sha2 = "0.10"
 rfd = { version = "0.17", default-features = false }
 
+# `flashfile.xml` parsing (firmware-flash mode).
+roxmltree = "0.20"
+
+# Firmware packages are ZIP archives; only Deflate is needed (no encryption).
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+# `flashfile.xml` carries an MD5 for every image file.
+md5 = "0.7"
+
 # Native folder picker backend on Linux. GTK3 only: rfd 0.17 forbids
 # enabling `gtk3` and `xdg-portal` at the same time, and GTK3 is already
 # a dependency of the Linux webview dialog anyway.
