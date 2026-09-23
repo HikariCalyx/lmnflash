@@ -59,6 +59,21 @@ flash-bootloader-checking = Bezig met controleren of de bootloader kan worden on
 flash-bootloader-eligible = Deze telefoon kan de bootloader ontgrendelen.
 flash-bootloader-not-eligible = Deze telefoon kan de bootloader mogelijk niet ontgrendelen.
 
+flash-factory-reset-title = Fabrieksinstellingen herstellen
+flash-factory-reset-button = Herstellen
+factory-reset-desc = Wist alle gebruikersgegevens van de telefoon (fabrieksreset). De telefoon moet in fastboot-modus (bootloader) zijn aangesloten. Alle gegevens worden permanent verwijderd en kunnen niet worden hersteld.
+factory-reset-no-frp = Let op: een fabrieksreset via deze weg verwijdert de fabrieksresetbeveiliging (FRP) die door je Google-account is geactiveerd niet.
+factory-reset-select-device = Selecteer een apparaat
+factory-reset-reading-devices = Apparaten lezen…
+factory-reset-checking = Apparaatvereisten controleren…
+factory-reset-confirm = Hiermee worden alle gebruikersgegevens van de telefoon gewist (fabrieksreset) en dit kan niet ongedaan worden gemaakt. Doorgaan?
+factory-reset-resetting = Fabrieksreset uitvoeren… Koppel de telefoon niet los.
+factory-reset-done = Fabrieksreset voltooid.
+factory-reset-failed = Fabrieksreset mislukt
+factory-reset-blocked-locked = De bootloader is opnieuw vergrendeld. Ontgrendel de bootloader of probeer het in de recovery-modus.
+factory-reset-blocked-fdr = De bootloader staat geen fabrieksreset toe. Schakel “Bescherming tegen apparaatreset” uit in Instellingen - Beveiliging - Meer beveiligingsinstellingen.
+factory-reset-refresh = Vernieuwen
+
 login-dialog-title = LMN Flash — Aanmelden
 login-prompt = Meld u aan om firmware te zoeken
 login-button = Aanmelden

@@ -59,6 +59,21 @@ flash-bootloader-checking = 正在檢查此手機是否可以解鎖 Bootloader�
 flash-bootloader-eligible = 此手機可以解鎖 Bootloader。
 flash-bootloader-not-eligible = 此手機可能無法解鎖 Bootloader。
 
+flash-factory-reset-title = 恢復原廠設定
+flash-factory-reset-button = 恢復原廠設定
+factory-reset-desc = 清除手機上的所有使用者資料（恢復原廠設定）。手機需以 fastboot 模式（Bootloader）連接。資料將被永久刪除，且無法復原。
+factory-reset-no-frp = 注意：在此處恢復原廠設定不會清除由 Google 帳號觸發的恢復原廠設定保護（FRP）。
+factory-reset-select-device = 選擇裝置
+factory-reset-reading-devices = 正在讀取裝置…
+factory-reset-checking = 正在檢查裝置條件…
+factory-reset-confirm = 這將清除手機上的所有使用者資料（恢復原廠設定），且無法復原。是否繼續？
+factory-reset-resetting = 正在執行恢復原廠設定… 請勿中斷手機連接。
+factory-reset-done = 恢復原廠設定已完成。
+factory-reset-failed = 恢復原廠設定失敗
+factory-reset-blocked-locked = Bootloader 已被重新鎖定。請解鎖 Bootloader，或嘗試在 Recovery 模式下操作。
+factory-reset-blocked-fdr = Bootloader 不允許恢復原廠設定。請在設定 - 安全性 - 其他安全性設定中關閉「裝置重設保護」。
+factory-reset-refresh = 重新整理
+
 login-dialog-title = LMN Flash — 登入
 login-prompt = 登入後查詢韌體
 login-button = 登入

@@ -59,6 +59,21 @@ flash-bootloader-checking = 부트로더 잠금 해제 가능 여부를 확인�
 flash-bootloader-eligible = 이 휴대전화는 부트로더 잠금을 해제할 수 있습니다.
 flash-bootloader-not-eligible = 이 휴대전화는 부트로더 잠금을 해제하지 못할 수 있습니다.
 
+flash-factory-reset-title = 공장 초기화
+flash-factory-reset-button = 초기화
+factory-reset-desc = 휴대전화의 모든 사용자 데이터를 삭제합니다(공장 초기화). 휴대전화는 fastboot 모드(부트로더)로 연결되어 있어야 합니다. 데이터는 영구적으로 삭제되며 복구할 수 없습니다.
+factory-reset-no-frp = 참고: 여기에서 초기화해도 Google 계정으로 설정된 초기화 보호(FRP)는 해제되지 않습니다.
+factory-reset-select-device = 기기를 선택하세요
+factory-reset-reading-devices = 기기를 읽는 중…
+factory-reset-checking = 기기 요구 사항을 확인하는 중…
+factory-reset-confirm = 휴대전화의 모든 사용자 데이터가 삭제되며(공장 초기화) 되돌릴 수 없습니다. 계속하시겠습니까?
+factory-reset-resetting = 공장 초기화를 수행하는 중… 휴대전화를 분리하지 마세요.
+factory-reset-done = 공장 초기화가 완료되었습니다.
+factory-reset-failed = 공장 초기화 실패
+factory-reset-blocked-locked = 부트로더가 다시 잠겼습니다. 부트로더 잠금을 해제하거나 복구 모드에서 시도해 보세요.
+factory-reset-blocked-fdr = 부트로더가 초기화를 허용하지 않습니다. 설정 - 보안 - 추가 보안 설정에서 “기기 초기화 보호”를 끄세요.
+factory-reset-refresh = 새로 고침
+
 login-dialog-title = LMN Flash — 로그인
 login-prompt = 로그인하여 펌웨어 조회
 login-button = 로그인

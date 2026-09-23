@@ -59,6 +59,21 @@ flash-bootloader-checking = Bootloader-Entsperrberechtigung wird geprüft…
 flash-bootloader-eligible = Dieses Telefon kann den Bootloader entsperren.
 flash-bootloader-not-eligible = Dieses Telefon kann den Bootloader möglicherweise nicht entsperren.
 
+flash-factory-reset-title = Auf Werkseinstellungen zurücksetzen
+flash-factory-reset-button = Zurücksetzen
+factory-reset-desc = Löscht alle Benutzerdaten des Telefons (Werksreset). Das Telefon muss im Fastboot-Modus (Bootloader) verbunden sein. Alle Daten werden dauerhaft gelöscht und können nicht wiederhergestellt werden.
+factory-reset-no-frp = Hinweis: Ein Werksreset hier entfernt nicht den Geräteschutz (Factory Reset Protection), der durch dein Google-Konto ausgelöst wurde.
+factory-reset-select-device = Gerät auswählen
+factory-reset-reading-devices = Geräte werden gelesen…
+factory-reset-checking = Geräteanforderungen werden geprüft…
+factory-reset-confirm = Dadurch werden alle Benutzerdaten des Telefons gelöscht (Werksreset), und dies kann nicht rückgängig gemacht werden. Fortfahren?
+factory-reset-resetting = Werksreset wird durchgeführt… Das Telefon nicht trennen.
+factory-reset-done = Werksreset abgeschlossen.
+factory-reset-failed = Werksreset fehlgeschlagen
+factory-reset-blocked-locked = Der Bootloader ist erneut gesperrt. Bitte entsperre den Bootloader oder versuche es im Recovery-Modus.
+factory-reset-blocked-fdr = Der Bootloader erlaubt keinen Werksreset. Deaktiviere „Geräte-Reset-Schutz“ unter Einstellungen - Sicherheit - Weitere Sicherheitseinstellungen.
+factory-reset-refresh = Aktualisieren
+
 login-dialog-title = LMN Flash — Anmelden
 login-prompt = Melden Sie sich an, um Firmware zu suchen
 login-button = Anmelden

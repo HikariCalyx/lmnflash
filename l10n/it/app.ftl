@@ -59,6 +59,21 @@ flash-bootloader-checking = Verifica dell'idoneità allo sblocco del bootloader�
 flash-bootloader-eligible = Questo telefono può sbloccare il bootloader.
 flash-bootloader-not-eligible = Questo telefono potrebbe non poter sbloccare il bootloader.
 
+flash-factory-reset-title = Ripristino di fabbrica
+flash-factory-reset-button = Ripristina
+factory-reset-desc = Cancella tutti i dati utente dal telefono (ripristino di fabbrica). Il telefono deve essere collegato in modalità fastboot (bootloader). Tutti i dati vengono eliminati definitivamente e non possono essere recuperati.
+factory-reset-no-frp = Nota: il ripristino di fabbrica eseguito da qui non rimuove la Protezione ripristino di fabbrica attivata dal tuo account Google.
+factory-reset-select-device = Seleziona un dispositivo
+factory-reset-reading-devices = Lettura dei dispositivi…
+factory-reset-checking = Verifica dei requisiti del dispositivo…
+factory-reset-confirm = Questa operazione cancellerà tutti i dati utente dal telefono (ripristino di fabbrica) ed è irreversibile. Continuare?
+factory-reset-resetting = Ripristino di fabbrica in corso… Non scollegare il telefono.
+factory-reset-done = Ripristino di fabbrica completato.
+factory-reset-failed = Ripristino di fabbrica non riuscito
+factory-reset-blocked-locked = Il bootloader è stato nuovamente bloccato. Sblocca il bootloader oppure prova a farlo in modalità recovery.
+factory-reset-blocked-fdr = Il bootloader non consente il ripristino di fabbrica. Disattiva “Protezione ripristino dispositivo” in Impostazioni - Sicurezza - Altre impostazioni di sicurezza.
+factory-reset-refresh = Aggiorna
+
 login-dialog-title = LMN Flash — Accedi
 login-prompt = Accedi per cercare il firmware
 login-button = Accedi

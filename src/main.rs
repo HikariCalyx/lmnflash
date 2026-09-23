@@ -5,6 +5,7 @@
 mod bootloader;
 mod config;
 mod decrypt;
+mod factory_reset;
 mod fastboot_info;
 mod firmware;
 mod guided;
@@ -175,20 +176,23 @@ impl Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmartphoneFeature {
     BootloaderUnlock,
+    FactoryReset,
 }
 
 impl SmartphoneFeature {
-    const ALL: [Self; 1] = [Self::BootloaderUnlock];
+    const ALL: [Self; 2] = [Self::BootloaderUnlock, Self::FactoryReset];
 
     fn title_id(self) -> &'static str {
         match self {
             Self::BootloaderUnlock => "flash-bootloader-title",
+            Self::FactoryReset => "flash-factory-reset-title",
         }
     }
 
     fn button_id(self) -> &'static str {
         match self {
             Self::BootloaderUnlock => "flash-bootloader-button",
+            Self::FactoryReset => "flash-factory-reset-button",
         }
     }
 }
@@ -285,7 +289,7 @@ enum DevicePicker {
     #[default]
     Closed,
     Fetching,
-    Open(Vec<String>),
+    Open(Vec<fastboot_info::DeviceEntry>),
 }
 
 /// Status of the firmware-decrypt mode (Mode 3).
@@ -409,6 +413,7 @@ struct DecryptState {
 #[derive(Default)]
 struct SmartphoneFlashState {
     bootloader: BootloaderState,
+    factory_reset: FactoryResetState,
 }
 
 /// Which Bootloader Unlock dialog is currently on screen.
@@ -470,7 +475,7 @@ enum BootloaderDeviceAction {
 /// Device picker shown when several fastboot devices are connected.
 #[derive(Debug, Clone)]
 struct BootloaderPicker {
-    serials: Vec<String>,
+    devices: Vec<fastboot_info::DeviceEntry>,
     action: BootloaderDeviceAction,
 }
 
@@ -502,6 +507,70 @@ struct BootloaderState {
     unlock_info: Option<String>,
     /// Guided (wizard) flow state.
     guided: GuidedState,
+}
+
+/// Which Factory Reset dialog is currently on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FactoryResetDialog {
+    #[default]
+    Closed,
+    /// The whole factory-reset flow (device selection, requirement checks,
+    /// confirmation, erase) is presented by this one modal.
+    Open,
+}
+
+/// Outcome of the factory-reset requirement checks
+/// (`getvar securestate`, `fdr-allowed`).
+#[derive(Debug, Clone)]
+enum ResetCheckOutcome {
+    /// All requirements are met; the reset may be confirmed. `frp_protected`
+    /// warns that the bootloader will not clear Google's Factory Reset
+    /// Protection.
+    Allowed { frp_protected: bool },
+    /// A requirement is not met, so the device must not be reset.
+    Blocked(fastboot_info::FactoryResetBlocker),
+    /// The device could not be queried (USB / command failure).
+    Failed(String),
+}
+
+/// State of the "Factory Reset" feature (Mode 2).
+#[derive(Default)]
+struct FactoryResetState {
+    dialog: FactoryResetDialog,
+    /// `true` while the connected devices are being listed.
+    listing: bool,
+    /// Supported (Motorola) devices found, offered for selection.
+    devices: Vec<fastboot_info::DeviceEntry>,
+    /// Total number of fastboot devices found, including unsupported ones
+    /// (so the UI can tell "no device" from "unsupported device").
+    total: usize,
+    /// Failure of the device listing itself (e.g. a USB error).
+    list_error: Option<String>,
+    /// Serial of the device the user selected.
+    selected: Option<String>,
+    /// `true` while the requirement checks run on the selected device.
+    checking: bool,
+    /// Requirement-check result, once it finished.
+    check: Option<ResetCheckOutcome>,
+    /// `true` while `erase userdata` / `erase metadata` run.
+    resetting: bool,
+    /// Result of the erase, once it finished.
+    result: Option<Result<(), String>>,
+}
+
+impl FactoryResetState {
+    /// Label of the selected device (serial, XT code and codename), so the
+    /// dialog can show which phone it is working on.
+    fn selected_label(&self) -> Option<String> {
+        let serial = self.selected.as_ref()?;
+
+        Some(
+            match self.devices.iter().find(|device| &device.serial == serial) {
+                Some(device) => device.label(),
+                None => serial.clone(),
+            },
+        )
+    }
 }
 
 /// Inputs captured when a lookup starts, kept until it finishes so the
@@ -712,6 +781,25 @@ enum Message {
     GuidedRequestConfirmYes,
     GuidedRequestConfirmNo,
     GuidedKeyRequestFinished(Result<(), String>),
+    /// Factory Reset: the connected fastboot devices were listed.
+    FactoryResetDevicesFetched(Result<fastboot_info::DeviceList, String>),
+    /// Factory Reset: the user picked the device to reset.
+    FactoryResetDeviceSelected(String),
+    /// Factory Reset: the requirement checks finished.
+    FactoryResetCheckFinished(Result<fastboot_info::FactoryResetCheck, String>),
+    /// Factory Reset: the user confirmed the destructive reset.
+    FactoryResetConfirmed,
+    /// Factory Reset: re-scan for connected devices.
+    FactoryResetRescan,
+    /// Factory Reset: go back to the device list.
+    FactoryResetBack,
+    /// Factory Reset: close the dialog.
+    FactoryResetCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    FactoryResetBackdropPressed,
+    /// Factory Reset: `erase userdata` / `erase metadata` finished.
+    FactoryResetFinished(Result<(), String>),
     /// The best-effort telemetry POST finished (only logged; telemetry must
     /// never affect the app).
     TelemetrySent(Result<(), String>),
@@ -725,10 +813,14 @@ enum Message {
 /// (and redraws) while a spinner is actually visible.
 fn subscription(state: &State) -> iced::Subscription<Message> {
     let guided = &state.flash.bootloader.guided;
+    let reset = &state.flash.factory_reset;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
-        || guided.requesting;
+        || guided.requesting
+        || reset.listing
+        || reset.checking
+        || reset.resetting;
     if animating {
         iced::time::every(std::time::Duration::from_millis(64))
             .map(|_| Message::AnimTick)
@@ -765,7 +857,128 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 bootloader.guided = GuidedState::default();
                 Task::none()
             }
+            SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
         },
+        Message::FactoryResetDevicesFetched(result) => {
+            let reset = &mut state.flash.factory_reset;
+            reset.listing = false;
+
+            match result {
+                Ok(list) => {
+                    reset.total = list.total;
+                    reset.devices = list.devices;
+                    reset.list_error = None;
+                }
+                Err(error) => {
+                    reset.total = 0;
+                    reset.devices.clear();
+                    reset.list_error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::FactoryResetDeviceSelected(serial) => {
+            let reset = &mut state.flash.factory_reset;
+            reset.selected = Some(serial.clone());
+            reset.checking = true;
+            reset.check = None;
+            reset.result = None;
+
+            start_factory_reset_check(serial)
+        }
+        Message::FactoryResetCheckFinished(result) => {
+            let reset = &mut state.flash.factory_reset;
+            if !reset.checking {
+                return Task::none();
+            }
+
+            reset.checking = false;
+            reset.check = Some(match result {
+                Ok(check) => match check.blocker() {
+                    Some(blocker) => ResetCheckOutcome::Blocked(blocker),
+                    None => ResetCheckOutcome::Allowed {
+                        frp_protected: check.frp_protected(),
+                    },
+                },
+                Err(error) => ResetCheckOutcome::Failed(error),
+            });
+
+            Task::none()
+        }
+        Message::FactoryResetConfirmed => {
+            let reset = &mut state.flash.factory_reset;
+            let Some(serial) = reset.selected.clone() else {
+                return Task::none();
+            };
+
+            // Only erase once the requirement checks passed and nothing else
+            // is running.
+            if reset.resetting
+                || !matches!(reset.check, Some(ResetCheckOutcome::Allowed { .. }))
+            {
+                return Task::none();
+            }
+
+            reset.resetting = true;
+            reset.result = None;
+
+            start_factory_reset(serial)
+        }
+        Message::FactoryResetFinished(result) => {
+            let reset = &mut state.flash.factory_reset;
+            if !reset.resetting {
+                return Task::none();
+            }
+
+            reset.resetting = false;
+            reset.result = Some(result);
+
+            Task::none()
+        }
+        Message::FactoryResetRescan => {
+            let reset = &mut state.flash.factory_reset;
+            if reset.listing || reset.checking || reset.resetting {
+                return Task::none();
+            }
+
+            reset.listing = true;
+            reset.devices.clear();
+            reset.total = 0;
+            reset.list_error = None;
+            reset.selected = None;
+            reset.check = None;
+            reset.result = None;
+
+            start_factory_reset_list_devices()
+        }
+        Message::FactoryResetBack => {
+            let reset = &mut state.flash.factory_reset;
+            if reset.listing || reset.checking || reset.resetting {
+                return Task::none();
+            }
+
+            reset.selected = None;
+            reset.check = None;
+            reset.result = None;
+
+            Task::none()
+        }
+        Message::FactoryResetCancel => {
+            let reset = &mut state.flash.factory_reset;
+            // Never close the dialog while an operation is in flight, so the
+            // device is not left half-erased.
+            if reset.listing || reset.checking || reset.resetting {
+                return Task::none();
+            }
+
+            *reset = FactoryResetState::default();
+
+            Task::none()
+        }
+        // Clicks on empty modal space are swallowed here so they neither
+        // dismiss the dialog nor reach the UI underneath.
+        Message::FactoryResetBackdropPressed => Task::none(),
         Message::BootloaderManualSelected => {
             state.flash.bootloader.dialog = BootloaderDialog::Manual;
             Task::none()
@@ -1299,14 +1512,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             )
         }
         Message::FastbootDevicesFetched(result) => match result {
-            Ok(list) if list.supported.len() == 1 => {
+            Ok(list) if list.devices.len() == 1 => {
                 state.lookup.retcn.device_picker = DevicePicker::Closed;
-                let serial = list.supported[0].clone();
+                let serial = list.devices[0].serial.clone();
                 start_fastboot_fill(serial)
             }
-            Ok(list) if list.supported.len() > 1 => {
+            Ok(list) if list.devices.len() > 1 => {
                 state.lookup.retcn.fastboot_status = None;
-                state.lookup.retcn.device_picker = DevicePicker::Open(list.supported);
+                state.lookup.retcn.device_picker = DevicePicker::Open(list.devices);
                 Task::none()
             }
             Ok(list) => {
@@ -1946,6 +2159,55 @@ fn open_browser(url: &str) -> Task<Message> {
     )
 }
 
+/// Opens the Factory Reset dialog and lists the connected devices so the user
+/// can pick the one to reset.
+fn start_factory_reset_dialog(state: &mut State) -> Task<Message> {
+    state.flash.factory_reset = FactoryResetState {
+        dialog: FactoryResetDialog::Open,
+        listing: true,
+        ..FactoryResetState::default()
+    };
+
+    start_factory_reset_list_devices()
+}
+
+/// Lists the connected fastboot devices for the Factory Reset dialog.
+fn start_factory_reset_list_devices() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(fastboot_info::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FactoryResetDevicesFetched,
+    )
+}
+
+/// Checks the factory-reset requirements (`securestate`, `fdr-allowed`) on
+/// the selected device in the background.
+fn start_factory_reset_check(serial: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::check_factory_reset(&serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FactoryResetCheckFinished,
+    )
+}
+
+/// Erases `userdata` and `metadata` on the selected device in the background.
+fn start_factory_reset(serial: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::factory_reset(&serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FactoryResetFinished,
+    )
+}
+
 /// Starts a bootloader device action (read Device ID / unlock): lists the
 /// connected fastboot devices in the background. A single supported device
 /// runs the action directly; several open the serial picker.
@@ -2020,8 +2282,8 @@ fn finish_bootloader_device_list(
     };
 
     match result {
-        Ok(list) if list.supported.len() == 1 => {
-            let serial = list.supported[0].clone();
+        Ok(list) if list.devices.len() == 1 => {
+            let serial = list.devices[0].serial.clone();
             let bootloader = &mut state.flash.bootloader;
             bootloader.pending_key = None;
             // Keep the busy flag raised so the completion handler accepts the
@@ -2038,12 +2300,12 @@ fn finish_bootloader_device_list(
                 }
             }
         }
-        Ok(list) if list.supported.len() > 1 => {
+        Ok(list) if list.devices.len() > 1 => {
             let bootloader = &mut state.flash.bootloader;
             bootloader.reading = false;
             bootloader.unlocking = false;
             bootloader.picker = Some(BootloaderPicker {
-                serials: list.supported,
+                devices: list.devices,
                 action,
             });
             Task::none()
@@ -2343,14 +2605,20 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, overlay].into();
     }
 
+    // Factory Reset dialog (device selection / requirement checks / confirm)
+    // drawn over the whole window when it is open.
+    if let Some(overlay) = factory_reset::overlay(state) {
+        return stack![base, overlay].into();
+    }
+
     // Device picker modal: shown when more than one fastboot device is
     // connected. Clicks on the dimmed backdrop cancel the selection.
     if let DevicePicker::Open(devices) = &state.lookup.retcn.device_picker {
         let device_buttons = iced::widget::Column::with_children(
-            devices.iter().map(|serial| {
-                button(text(serial.clone()))
+            devices.iter().map(|device| {
+                button(text(device.label()))
                     .width(Fill)
-                    .on_press(Message::FastbootDeviceSelected(serial.clone()))
+                    .on_press(Message::FastbootDeviceSelected(device.serial.clone()))
                     .into()
             }),
         )

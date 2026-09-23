@@ -59,6 +59,21 @@ flash-bootloader-checking = Tarkistetaan bootloaderin avauskelpoisuutta…
 flash-bootloader-eligible = Tämä puhelin voi avata bootloaderin lukituksen.
 flash-bootloader-not-eligible = Tämä puhelin ei välttämättä voi avata bootloaderin lukitusta.
 
+flash-factory-reset-title = Palauta tehdasasetukset
+flash-factory-reset-button = Palauta
+factory-reset-desc = Poistaa puhelimen kaikki käyttäjätiedot (tehdasasetusten palautus). Puhelimen on oltava kytkettynä fastboot-tilassa (bootloader). Kaikki tiedot poistetaan pysyvästi, eikä niitä voi palauttaa.
+factory-reset-no-frp = Huomautus: Tässä tehty tehdasasetusten palautus ei poista Google-tilisi käynnistämää tehdasasetusten palautussuojausta.
+factory-reset-select-device = Valitse laite
+factory-reset-reading-devices = Luetaan laitteita…
+factory-reset-checking = Tarkistetaan laitteen vaatimuksia…
+factory-reset-confirm = Tämä poistaa puhelimen kaikki käyttäjätiedot (tehdasasetusten palautus), eikä sitä voi peruuttaa. Jatketaanko?
+factory-reset-resetting = Palautetaan tehdasasetuksia… Älä irrota puhelinta.
+factory-reset-done = Tehdasasetusten palautus valmis.
+factory-reset-failed = Tehdasasetusten palautus epäonnistui
+factory-reset-blocked-locked = Bootloaderin lukitus on palautettu. Avaa bootloaderin lukitus tai yritä sitä recovery-tilassa.
+factory-reset-blocked-fdr = Bootloader ei salli tehdasasetusten palautusta. Poista “Laitteen palautussuojaus” käytöstä kohdassa Asetukset - Turvallisuus - Lisäturva-asetukset.
+factory-reset-refresh = Päivitä
+
 login-dialog-title = LMN Flash — Kirjaudu sisään
 login-prompt = Kirjaudu sisään hakeaksesi firmwarea
 login-button = Kirjaudu sisään

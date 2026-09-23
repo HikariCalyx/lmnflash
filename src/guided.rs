@@ -485,7 +485,7 @@ impl<Message> canvas::Program<Message> for Spinner {
 }
 
 /// A 16×16 spinner driven by the app's animation tick.
-fn spinner<'a>(anim_tick: u64) -> Element<'a, Message> {
+pub(crate) fn spinner<'a>(anim_tick: u64) -> Element<'a, Message> {
     let phase = (anim_tick % 32) as f32 / 32.0;
     canvas::Canvas::new(Spinner { phase })
         .width(16)

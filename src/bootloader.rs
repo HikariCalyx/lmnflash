@@ -330,10 +330,10 @@ pub(crate) fn device_picker_card(state: &State) -> Element<'_, Message> {
         .expect("picker card is only rendered while a picker is open");
 
     let device_buttons = iced::widget::Column::with_children(
-        picker.serials.iter().map(|serial| {
-            button(text(serial.clone()))
+        picker.devices.iter().map(|device| {
+            button(text(device.label()))
                 .width(Fill)
-                .on_press(Message::BootloaderDeviceSelected(serial.clone()))
+                .on_press(Message::BootloaderDeviceSelected(device.serial.clone()))
                 .into()
         }),
     )

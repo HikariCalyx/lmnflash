@@ -59,6 +59,21 @@ flash-bootloader-checking = ブートローダー ロック解除の対象か確
 flash-bootloader-eligible = このスマートフォンはブートローダーのロック解除が可能です。
 flash-bootloader-not-eligible = このスマートフォンはブートローダーのロック解除ができない可能性があります。
 
+flash-factory-reset-title = 工場出荷時設定へのリセット
+flash-factory-reset-button = リセット
+factory-reset-desc = スマートフォンのユーザーデータをすべて消去します（工場出荷時設定へのリセット）。スマートフォンは fastboot モード（ブートローダー）で接続してください。データは完全に削除され、元に戻すことはできません。
+factory-reset-no-frp = 注: ここでリセットしても、Google アカウントによって有効になっている「工場出荷時設定へのリセット保護（FRP）」は解除されません。
+factory-reset-select-device = デバイスを選択
+factory-reset-reading-devices = デバイスを読み取り中…
+factory-reset-checking = デバイスの条件を確認しています…
+factory-reset-confirm = スマートフォンのユーザーデータをすべて消去します（工場出荷時設定へのリセット）。この操作は元に戻せません。続行しますか？
+factory-reset-resetting = リセットを実行しています… スマートフォンを切断しないでください。
+factory-reset-done = リセットが完了しました。
+factory-reset-failed = リセットに失敗しました
+factory-reset-blocked-locked = ブートローダーが再ロックされています。ブートローダーのロックを解除するか、リカバリーモードで実行してみてください。
+factory-reset-blocked-fdr = ブートローダーがリセットを許可していません。「設定 - セキュリティ - セキュリティの詳細設定」で「デバイスのリセット保護」をオフにしてください。
+factory-reset-refresh = 更新
+
 login-dialog-title = LMN Flash — ログイン
 login-prompt = ログインしてファームウェアを検索
 login-button = ログイン

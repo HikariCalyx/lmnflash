@@ -59,6 +59,21 @@ flash-bootloader-checking = Kontrollerar om bootloadern kan låsas upp…
 flash-bootloader-eligible = Den här telefonen kan låsa upp bootloadern.
 flash-bootloader-not-eligible = Den här telefonen kanske inte kan låsa upp bootloadern.
 
+flash-factory-reset-title = Fabriksåterställning
+flash-factory-reset-button = Återställ
+factory-reset-desc = Raderar all användardata på telefonen (fabriksåterställning). Telefonen måste vara ansluten i fastboot-läge (bootloader). All data raderas permanent och kan inte återställas.
+factory-reset-no-frp = Obs: En fabriksåterställning här tar inte bort fabriksåterställningsskyddet (FRP) som aktiverats av ditt Google-konto.
+factory-reset-select-device = Välj en enhet
+factory-reset-reading-devices = Läser enheter…
+factory-reset-checking = Kontrollerar enhetens krav…
+factory-reset-confirm = Detta raderar all användardata på telefonen (fabriksåterställning) och kan inte ångras. Fortsätta?
+factory-reset-resetting = Utför fabriksåterställning… Koppla inte från telefonen.
+factory-reset-done = Fabriksåterställningen är klar.
+factory-reset-failed = Fabriksåterställningen misslyckades
+factory-reset-blocked-locked = Bootloadern är återlåst. Lås upp bootloadern eller försök göra det i återställningsläge (recovery).
+factory-reset-blocked-fdr = Bootloadern tillåter inte fabriksåterställning. Stäng av “Skydd mot återställning av enheten” i Inställningar - Säkerhet - Fler säkerhetsinställningar.
+factory-reset-refresh = Uppdatera
+
 login-dialog-title = LMN Flash — Logga in
 login-prompt = Logga in för att söka firmware
 login-button = Logga in

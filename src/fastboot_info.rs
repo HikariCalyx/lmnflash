@@ -20,41 +20,86 @@ pub struct DeviceInfo {
     pub sim_count: Option<u8>,
 }
 
+/// A supported (Motorola) fastboot device, with the identity variables read
+/// from `fastboot getvar all`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceEntry {
+    /// Serial number (`serialno`), used to connect to the device.
+    pub serial: String,
+    /// XT model code (`sku`), e.g. `XT2451-2`.
+    pub model: String,
+    /// Project codename (`product`), e.g. `arcfox`.
+    pub codename: String,
+}
+
+impl DeviceEntry {
+    /// Label for the device lists: `serial (XT code, codename)`.
+    ///
+    /// Whatever the bootloader did not report is omitted (as is a codename
+    /// that merely repeats the model code), so the label is just the serial
+    /// when the extra variables are unavailable. Several attached phones of
+    /// the same model are told apart by their serial number, which always
+    /// comes first.
+    pub fn label(&self) -> String {
+        let model = self.model.trim();
+        let codename = self.codename.trim();
+
+        let mut details: Vec<&str> = Vec::new();
+        if !model.is_empty() {
+            details.push(model);
+        }
+        if !codename.is_empty() && !codename.eq_ignore_ascii_case(model) {
+            details.push(codename);
+        }
+
+        if details.is_empty() {
+            self.serial.clone()
+        } else {
+            format!("{} ({})", self.serial, details.join(", "))
+        }
+    }
+}
+
 /// Fastboot devices found on the USB bus.
 #[derive(Debug, Clone)]
 pub struct DeviceList {
-    /// Serial numbers of supported (Motorola) devices.
-    pub supported: Vec<String>,
+    /// Supported (Motorola) devices, in discovery order.
+    pub devices: Vec<DeviceEntry>,
     /// Total number of fastboot devices found, including unsupported ones.
     pub total: usize,
 }
 
-/// Lists the serial numbers of all connected Motorola fastboot devices
-/// (other vendors are filtered out).
+/// Lists all connected Motorola fastboot devices (other vendors are filtered
+/// out).
 pub fn list_devices() -> Result<DeviceList, String> {
     let serials = fastboot::FastbootDevice::list_devices()?;
     let total = serials.len();
 
-    let mut supported = Vec::new();
+    let mut devices = Vec::new();
     for serial in serials {
-        if is_supported_device(&serial) {
-            supported.push(serial);
+        if let Some(device) = read_device_entry(&serial) {
+            devices.push(device);
         }
     }
 
-    Ok(DeviceList { supported, total })
+    Ok(DeviceList { devices, total })
 }
 
-/// True if the device with the given serial looks like a Motorola device.
-fn is_supported_device(serial: &str) -> bool {
-    let Ok(device) = fastboot::FastbootDevice::connect(serial) else {
-        return false;
-    };
-    let Ok(lines) = device.getvar_all() else {
-        return false;
-    };
+/// Reads a device's identity variables, or `None` when it is not a Motorola
+/// device (or cannot be queried).
+fn read_device_entry(serial: &str) -> Option<DeviceEntry> {
+    let device = fastboot::FastbootDevice::connect(serial).ok()?;
+    let variables = parse_getvar_all(&device.getvar_all().ok()?);
 
-    is_motorola(&parse_getvar_all(&lines))
+    if !is_motorola(&variables) {
+        return None;
+    }
+
+    Some(DeviceEntry {
+        serial: serial.to_string(),
+        model: variables.get("sku").cloned().unwrap_or_default(),
+        codename: variables.get("product").cloned().unwrap_or_default(),
+    })
 }
 
 /// True if the variables identify a Motorola (Lenovo) device.
@@ -444,6 +489,167 @@ fn classify_unlock_failure(message: &str) -> UnlockFailure {
     }
 }
 
+/// The device variables read to decide whether a factory reset is allowed.
+///
+/// All three are queried with `fastboot getvar <name>`:
+/// - `securestate` must not be `flashing_locked` — that is the only unlock
+///   state which refuses a factory data reset, while `oem_locked`,
+///   `flashing_unlocked` and `engineering` all allow it;
+/// - `fdr-allowed` must be `yes` — the bootloader has to permit a factory
+///   data reset;
+/// - `frp-state` reports whether Google's Factory Reset Protection is armed,
+///   which the bootloader does **not** erase. It never blocks the reset, it
+///   only makes the UI warn first.
+///
+/// There is deliberately no fastbootD check: a phone running fastbootD is
+/// not found by [`list_devices`] at all, so it never reaches these checks —
+/// it has to be restarted into the bootloader first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactoryResetCheck {
+    /// `getvar securestate` — `oem_locked` / `flashing_unlocked` /
+    /// `engineering` / `flashing_locked`.
+    pub secure_state: String,
+    /// `getvar fdr-allowed` — `yes` when a factory data reset is permitted.
+    pub fdr_allowed: String,
+    /// `getvar frp-state` — e.g. `no protection (0)` when nothing is armed
+    /// and `no protection (272)` on a phone with a Google account signed in.
+    pub frp_state: String,
+}
+
+/// A device requirement that blocks a factory reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryResetBlocker {
+    /// The bootloader reports `securestate: flashing_locked`, the one unlock
+    /// state that refuses a factory data reset.
+    Locked,
+    /// The bootloader refuses the factory reset (`fdr-allowed: no`).
+    FdrNotAllowed,
+}
+
+impl FactoryResetCheck {
+    /// `Some(blocker)` when a requirement is not met, `None` when the device
+    /// may be factory reset.
+    pub fn blocker(&self) -> Option<FactoryResetBlocker> {
+        if is_flashing_locked(&self.secure_state) {
+            Some(FactoryResetBlocker::Locked)
+        } else if !fdr_is_allowed(&self.fdr_allowed) {
+            Some(FactoryResetBlocker::FdrNotAllowed)
+        } else {
+            None
+        }
+    }
+
+    /// `true` when Google's Factory Reset Protection is armed.
+    ///
+    /// The bootloader reports `frp-state` as free-form text whose meaningful
+    /// part is the code in parentheses: `no protection (0)` when nothing is
+    /// armed, `no protection (272)` on a phone with a Google account signed
+    /// in (the wording is boilerplate). Erasing `userdata` from the
+    /// bootloader does **not** clear that protection, so the UI warns
+    /// whenever the code is not `0` — including when the variable is missing
+    /// or unreadable, rather than letting the user be surprised by the
+    /// Google sign-in prompt after the reset.
+    pub fn frp_protected(&self) -> bool {
+        frp_code(&self.frp_state) != Some(0)
+    }
+}
+
+/// Extracts the code from an `frp-state` value: the number in parentheses
+/// (`no protection (272)` → `272`), or a bare number when there is none.
+/// `None` when no number can be read at all.
+fn frp_code(state: &str) -> Option<u32> {
+    let value = normalize_variable(state);
+
+    let code = match (value.rfind('('), value.rfind(')')) {
+        (Some(open), Some(close)) if close > open => &value[open + 1..close],
+        _ => value.as_str(),
+    };
+
+    code.trim().parse().ok()
+}
+
+/// Trims and lower-cases a `getvar` value for comparison.
+fn normalize_variable(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+/// True when `securestate` is the single unlock state that refuses a factory
+/// data reset.
+///
+/// A Motorola bootloader reports one of four unlock states — `oem_locked`
+/// (factory-locked), `flashing_unlocked`, `engineering` and `flashing_locked`
+/// — and only `flashing_locked` blocks `erase`. Note that `oem_locked` *also*
+/// ends in `locked`, so the value has to be matched exactly instead of by
+/// substring.
+fn is_flashing_locked(value: &str) -> bool {
+    normalize_variable(value) == "flashing_locked"
+}
+
+/// True when `fdr-allowed` permits a factory data reset. Every other answer
+/// (including a missing or unrecognized one) blocks it.
+fn fdr_is_allowed(value: &str) -> bool {
+    matches!(normalize_variable(value).as_str(), "yes" | "true" | "1")
+}
+
+/// Reads the factory-reset requirement variables from the device.
+pub fn check_factory_reset(serial: &str) -> Result<FactoryResetCheck, String> {
+    let device = fastboot::FastbootDevice::connect(serial)?;
+
+    let secure_state = getvar_value(&device, "securestate")?;
+    let fdr_allowed = getvar_value(&device, "fdr-allowed")?;
+    // Best effort, and queried last: a bootloader that does not know
+    // `frp-state` must not fail the whole check — an unreadable value just
+    // warns (see `FactoryResetCheck::frp_protected`).
+    let frp_state = getvar_value(&device, "frp-state").unwrap_or_default();
+
+    Ok(FactoryResetCheck {
+        secure_state,
+        fdr_allowed,
+        frp_state,
+    })
+}
+
+/// Reads a single `getvar` value, keeping the INFO payload the bootloader
+/// reports it in (see `FastbootDevice::getvar_lines`).
+fn getvar_value(device: &fastboot::FastbootDevice, name: &str) -> Result<String, String> {
+    let lines = device.getvar_lines(name)?;
+
+    Ok(parse_getvar_value(name, &lines))
+}
+
+/// Extracts a variable's value from the lines of a `getvar:<name>` reply,
+/// dropping an optional `(bootloader)` prefix and the echoed `<name>:`
+/// label (e.g. `(bootloader) securestate: flashing_unlocked`).
+fn parse_getvar_value(name: &str, lines: &[String]) -> String {
+    let text = lines.join("\n");
+    let text = text.trim();
+
+    let text = text
+        .strip_prefix("(bootloader)")
+        .map(str::trim_start)
+        .unwrap_or(text);
+
+    let label = format!("{}:", name.to_ascii_lowercase());
+    let lower = text.to_ascii_lowercase();
+
+    match lower.strip_prefix(&label) {
+        // `to_ascii_lowercase` keeps the byte length, so the offset of the
+        // value is the same in `text`.
+        Some(rest) => text[text.len() - rest.len()..].trim().to_string(),
+        None => text.to_string(),
+    }
+}
+
+/// Performs a factory reset by erasing the `userdata` and `metadata`
+/// partitions, destroying all of the phone's user data.
+pub fn factory_reset(serial: &str) -> Result<(), String> {
+    let device = fastboot::FastbootDevice::connect(serial)?;
+    device.erase("userdata")?;
+    device.erase("metadata")?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,5 +911,130 @@ mod tests {
         ]);
 
         assert!(!is_motorola(&non_moto));
+    }
+
+    #[test]
+    fn device_labels_show_model_and_codename() {
+        let device = |model: &str, codename: &str| DeviceEntry {
+            serial: "ZY22KRX4RK".to_string(),
+            model: model.to_string(),
+            codename: codename.to_string(),
+        };
+
+        assert_eq!(
+            device("XT2451-2", "arcfox").label(),
+            "ZY22KRX4RK (XT2451-2, arcfox)"
+        );
+        // Missing variables fall back to the parts that are available.
+        assert_eq!(device("XT2451-2", "").label(), "ZY22KRX4RK (XT2451-2)");
+        assert_eq!(device("", "arcfox").label(), "ZY22KRX4RK (arcfox)");
+        assert_eq!(device("", "").label(), "ZY22KRX4RK");
+        // A codename that repeats the model code is not printed twice.
+        assert_eq!(device("arcfox", "arcfox").label(), "ZY22KRX4RK (arcfox)");
+    }
+
+    #[test]
+    fn parses_getvar_value_lines() {
+        // Bootloaders echo `key: value` in an INFO line, prefixed with
+        // `(bootloader)`.
+        assert_eq!(
+            parse_getvar_value(
+                "is-userspace",
+                &["(bootloader) is-userspace: no".to_string()]
+            ),
+            "no"
+        );
+        assert_eq!(
+            parse_getvar_value("securestate", &["securestate: flashing_unlocked".to_string()]),
+            "flashing_unlocked"
+        );
+        // Some bootloaders return the bare value (no `key:` label).
+        assert_eq!(
+            parse_getvar_value("fdr-allowed", &["yes".to_string()]),
+            "yes"
+        );
+        // A multi-line reply is joined; a missing variable yields nothing.
+        assert_eq!(
+            parse_getvar_value("is-userspace", &["no".to_string(), "extra".to_string()]),
+            "no\nextra"
+        );
+        assert_eq!(parse_getvar_value("securestate", &[]), "");
+    }
+
+    #[test]
+    fn only_flashing_locked_blocks_the_factory_reset() {
+        // A Motorola bootloader reports one of four unlock states, and only
+        // `flashing_locked` refuses a factory data reset. `oem_locked` and
+        // `flashing_unlocked` both *contain* the substring `locked`, so the
+        // value must be matched exactly.
+        assert!(is_flashing_locked("flashing_locked"));
+        assert!(is_flashing_locked(" FLASHING_LOCKED "));
+        assert!(!is_flashing_locked("oem_locked"));
+        assert!(!is_flashing_locked("flashing_unlocked"));
+        assert!(!is_flashing_locked("engineering"));
+        // An unreadable answer is not treated as the blocking state.
+        assert!(!is_flashing_locked(""));
+    }
+
+    #[test]
+    fn factory_reset_requirements_block_the_reset() {
+        let check = |secure_state: &str, fdr_allowed: &str| {
+            FactoryResetCheck {
+                secure_state: secure_state.to_string(),
+                fdr_allowed: fdr_allowed.to_string(),
+                frp_state: String::new(),
+            }
+            .blocker()
+        };
+
+        // Both requirements met: every unlock state except `flashing_locked`
+        // allows the reset.
+        for secure_state in ["oem_locked", "flashing_unlocked", "engineering"] {
+            assert_eq!(check(secure_state, "yes"), None, "{secure_state}");
+        }
+        // The one unlock state that refuses the reset, reported before the
+        // FDR answer.
+        assert_eq!(
+            check("flashing_locked", "yes"),
+            Some(FactoryResetBlocker::Locked)
+        );
+        assert_eq!(
+            check("flashing_locked", "no"),
+            Some(FactoryResetBlocker::Locked)
+        );
+        // The bootloader refuses the factory data reset; an empty or
+        // unrecognized answer counts as refusing too.
+        assert_eq!(
+            check("flashing_unlocked", "no"),
+            Some(FactoryResetBlocker::FdrNotAllowed)
+        );
+        assert_eq!(
+            check("oem_locked", ""),
+            Some(FactoryResetBlocker::FdrNotAllowed)
+        );
+    }
+
+    #[test]
+    fn frp_protection_is_read_from_the_state_code() {
+        let armed = |frp_state: &str| {
+            FactoryResetCheck {
+                secure_state: "flashing_unlocked".to_string(),
+                fdr_allowed: "yes".to_string(),
+                frp_state: frp_state.to_string(),
+            }
+            .frp_protected()
+        };
+
+        // Only code 0 means nothing is armed.
+        assert!(!armed("no protection (0)"));
+        assert!(!armed(" no protection (0) "));
+        assert!(!armed("0"));
+        // A phone with a Google account signed in reports a non-zero code —
+        // the "no protection" wording is boilerplate.
+        assert!(armed("no protection (272)"));
+        assert!(armed("1"));
+        // A missing or unreadable answer warns instead of passing silently.
+        assert!(armed(""));
+        assert!(armed("unknown"));
     }
 }

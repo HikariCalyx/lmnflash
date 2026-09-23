@@ -59,6 +59,21 @@ flash-bootloader-checking = 正在检查该手机是否可以解锁 Bootloader�
 flash-bootloader-eligible = 该手机可以解锁 Bootloader。
 flash-bootloader-not-eligible = 该手机可能无法解锁 Bootloader。
 
+flash-factory-reset-title = 恢复出厂设置
+flash-factory-reset-button = 恢复出厂设置
+factory-reset-desc = 擦除手机上的所有用户数据（恢复出厂设置）。手机需以 fastboot 模式（Bootloader）连接。数据将被永久删除，且无法恢复。
+factory-reset-no-frp = 注意：在此处恢复出厂设置不会清除由 Google 账号触发的恢复出厂设置保护（FRP）。
+factory-reset-select-device = 选择设备
+factory-reset-reading-devices = 正在读取设备…
+factory-reset-checking = 正在检查设备条件…
+factory-reset-confirm = 这将擦除手机上的所有用户数据（恢复出厂设置），且无法撤销。是否继续？
+factory-reset-resetting = 正在执行恢复出厂设置… 请勿断开手机连接。
+factory-reset-done = 恢复出厂设置已完成。
+factory-reset-failed = 恢复出厂设置失败
+factory-reset-blocked-locked = Bootloader 已被重新锁定。请解锁 Bootloader，或尝试在 Recovery 模式下操作。
+factory-reset-blocked-fdr = Bootloader 不允许恢复出厂设置。请在设置 - 安全与密码 - 更多安全设置中关闭“设备重置保护”。
+factory-reset-refresh = 刷新
+
 login-dialog-title = LMN Flash — 登录
 login-prompt = 登录后查询固件
 login-button = 登录

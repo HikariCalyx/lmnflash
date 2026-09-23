@@ -159,6 +159,16 @@ impl FastbootDevice {
         Ok(String::from_utf8_lossy(&r).trim_end_matches('\0').to_string())
     }
 
+    /// Runs `getvar:<name>` and returns the INFO lines the device reported.
+    ///
+    /// Bootloaders answer a `getvar:` query with an INFO packet carrying the
+    /// variable (e.g. `(bootloader) is-userspace: no`) and an empty OKAY, so
+    /// [`Self::getvar`] — which reads only the OKAY payload — loses the value.
+    pub fn getvar_lines(&self, name: &str) -> Result<Vec<String>, String> {
+        self.write(format!("getvar:{}", name).as_bytes())?;
+        self.read_info()
+    }
+
     /// Runs `getvar all` and returns every line the device reports
     /// (e.g. `(bootloader) serialno: ZY22ABC`).
     pub fn getvar_all(&self) -> Result<Vec<String>, String> {

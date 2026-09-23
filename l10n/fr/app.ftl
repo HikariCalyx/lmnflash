@@ -59,6 +59,21 @@ flash-bootloader-checking = Vérification de l'éligibilité au déverrouillage 
 flash-bootloader-eligible = Ce téléphone peut déverrouiller le bootloader.
 flash-bootloader-not-eligible = Ce téléphone ne peut peut-être pas déverrouiller le bootloader.
 
+flash-factory-reset-title = Réinitialisation d'usine
+flash-factory-reset-button = Réinitialiser
+factory-reset-desc = Efface toutes les données utilisateur du téléphone (réinitialisation d'usine). Le téléphone doit être connecté en mode fastboot (bootloader). Toutes les données sont définitivement supprimées et ne peuvent pas être récupérées.
+factory-reset-no-frp = Remarque : la réinitialisation d'usine effectuée ici n'effacera pas la protection contre la réinitialisation d'usine déclenchée par votre compte Google.
+factory-reset-select-device = Sélectionnez un appareil
+factory-reset-reading-devices = Lecture des appareils…
+factory-reset-checking = Vérification des prérequis de l'appareil…
+factory-reset-confirm = Cette opération effacera toutes les données utilisateur du téléphone (réinitialisation d'usine) et est irréversible. Continuer ?
+factory-reset-resetting = Réinitialisation d'usine en cours… Ne déconnectez pas le téléphone.
+factory-reset-done = Réinitialisation d'usine terminée.
+factory-reset-failed = Échec de la réinitialisation d'usine
+factory-reset-blocked-locked = Le bootloader est reverrouillé. Déverrouillez le bootloader ou essayez de le faire en mode recovery.
+factory-reset-blocked-fdr = Le bootloader n'autorise pas la réinitialisation d'usine. Désactivez « Protection contre la réinitialisation de l'appareil » dans Paramètres - Sécurité - Autres paramètres de sécurité.
+factory-reset-refresh = Actualiser
+
 login-dialog-title = LMN Flash — Connexion
 login-prompt = Connectez-vous pour rechercher un firmware
 login-button = Se connecter

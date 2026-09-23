@@ -59,6 +59,21 @@ flash-bootloader-checking = Checking bootloader unlock eligibility…
 flash-bootloader-eligible = This phone is able to unlock the bootloader.
 flash-bootloader-not-eligible = This phone may be unable to unlock the bootloader.
 
+flash-factory-reset-title = Factory Reset
+flash-factory-reset-button = Factory Reset
+factory-reset-desc = Erase all user data from the phone (factory data reset). The phone must be connected in fastboot mode (bootloader). This permanently deletes all data and cannot be undone.
+factory-reset-no-frp = Note: Doing factory reset here will not erase Factory Reset Protection triggered by your Google Account.
+factory-reset-select-device = Select a device
+factory-reset-reading-devices = Reading devices…
+factory-reset-checking = Checking the device requirements…
+factory-reset-confirm = This will erase all user data from the phone (factory data reset) and cannot be undone. Proceed?
+factory-reset-resetting = Performing the factory reset… Do not disconnect the phone.
+factory-reset-done = Factory reset completed.
+factory-reset-failed = Factory reset failed
+factory-reset-blocked-locked = The bootloader is relocked. Please unlock the bootloader, or try to do it under recovery mode.
+factory-reset-blocked-fdr = The bootloader does not allow a factory data reset. Please turn off "Device Reset Protection" in Settings - Security - More security settings.
+factory-reset-refresh = Refresh
+
 login-dialog-title = LMN Flash — Log in
 login-prompt = Log in to look up firmware
 login-button = Log in
