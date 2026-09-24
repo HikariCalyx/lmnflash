@@ -517,7 +517,9 @@ pub fn reboot_to_system(
                 if serial.is_empty() { "device" } else { serial }
             )));
 
-            let device = fastboot::FastbootDevice::connect(serial)?;
+            let mut device = fastboot::FastbootDevice::connect(serial)?;
+            // Show what the bootloader answers, like during a flash.
+            device.set_packet_logger(Some(Box::new(|line| emit(FlashEvent::Log(line)))));
 
             emit(FlashEvent::Log("oem fb_mode_clear".to_string()));
             device.oem("fb_mode_clear")?;
@@ -579,7 +581,7 @@ pub fn reboot_to_system(
 /// The device can disappear from USB before it answers the packet, which is
 /// not a failure of the reboot itself, so such an error only goes to the log.
 fn reboot_builtin(
-    device: &fastboot::FastbootDevice,
+    device: &fastboot::FastbootDevice<'_>,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
 ) -> Result<(), String> {
     if let Err(error) = device.reboot() {
@@ -600,6 +602,10 @@ fn run_with_builtin(
     )));
 
     let mut device = fastboot::FastbootDevice::connect(&job.serial)?;
+    // Every reply of the bootloader (INFO/DATA/FAIL) goes to the log: the
+    // built-in crate would otherwise drop the text that explains what the
+    // device is doing (close to what `mfastboot` prints).
+    device.set_packet_logger(Some(Box::new(|line| emit(FlashEvent::Log(line)))));
     // The device knows how large a single download may be; without this the
     // crate's conservative 128 MiB default is used.
     device.refresh_max_download();
@@ -634,7 +640,7 @@ fn run_with_builtin(
 
 /// Runs one step of the package (a failure aborts the flash).
 fn run_builtin_step(
-    device: &fastboot::FastbootDevice,
+    device: &fastboot::FastbootDevice<'_>,
     step: &FlashOp,
     job: &FlashJob,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
@@ -675,13 +681,10 @@ fn run_builtin_step(
         FlashOp::Oem { var } => device.oem(var),
         FlashOp::Getvar { var } => {
             // Informational only: a bootloader that does not know the variable
-            // must not abort the flash.
+            // must not abort the flash. The values themselves are already in
+            // the log, because the packet logger reports every INFO line.
             match device.getvar_lines(var) {
-                Ok(lines) => {
-                    for line in lines {
-                        emit(FlashEvent::Log(line));
-                    }
-                }
+                Ok(_) => {}
                 Err(error) => emit(FlashEvent::Log(format!("getvar {var} skipped: {error}"))),
             }
 

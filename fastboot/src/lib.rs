@@ -41,11 +41,15 @@ pub fn flash_size_from_path(path: &std::path::Path) -> std::io::Result<(usize, b
     }
 }
 
-pub struct FastbootDevice {
+pub struct FastbootDevice<'a> {
     handle: rusb::DeviceHandle<rusb::Context>,
     serial: String,
     timeout: Duration,
     max_download: usize,
+    /// Sink for every reply the bootloader sends, including the `INFO`/`DATA`
+    /// packets the command helpers would otherwise discard (see
+    /// [`Self::set_packet_logger`]).
+    packet_logger: std::cell::RefCell<Option<Box<dyn Fn(String) + Send + 'a>>>,
 }
 
 /// Parses a size reported by `getvar`: `0x…` hex, bare hex (e.g. `1f000000`),
@@ -64,11 +68,46 @@ fn parse_size(value: &str) -> Option<u64> {
     u64::from_str_radix(value, 16).ok()
 }
 
+/// Renders one reply packet as a readable line, or `None` for the packets
+/// that carry no information at all (an empty `OKAY`).
+fn format_packet(header: &[u8], payload: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(payload)
+        .trim_end_matches('\0')
+        .to_string();
+
+    match header {
+        b"INFO" | b"FAIL" | b"OKAY" | b"TEXT" => {
+            if text.is_empty() {
+                None
+            } else {
+                Some(format!("{} {}", String::from_utf8_lossy(header), text))
+            }
+        }
+        // `DATA<8 hex max-download-size><8 hex size>`: the download the device
+        // is willing to accept.
+        b"DATA" => Some(format!("DATA {}", describe_data(&text))),
+        _ => None,
+    }
+}
+
+/// Turns the payload of a `DATA` packet into `4096 bytes (max 8192)`.
+fn describe_data(text: &str) -> String {
+    let text = text.trim();
+
+    if text.len() == 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        let max = u32::from_str_radix(&text[..8], 16).unwrap_or(0);
+        let size = u32::from_str_radix(&text[8..], 16).unwrap_or(0);
+        return format!("{size} bytes (max {max})");
+    }
+
+    text.to_string()
+}
+
 fn is_fastboot_iface(d: &rusb::InterfaceDescriptor) -> bool {
     d.class_code() == FB_CLASS && d.sub_class_code() == FB_SUBCLASS && d.protocol_code() == FB_PROTOCOL
 }
 
-impl FastbootDevice {
+impl<'a> FastbootDevice<'a> {
     pub fn list_devices() -> Result<Vec<String>, String> {
         let ctx = rusb::Context::new().map_err(|e| format!("USB: {}", e))?;
         let mut serials = Vec::new();
@@ -103,7 +142,13 @@ impl FastbootDevice {
                         .map_err(|e| format!("Serial: {}", e))?;
                     if sn != serial { continue; }
                     h.claim_interface(d.interface_number()).map_err(|e| format!("Claim: {}", e))?;
-                    return Ok(FastbootDevice { handle: h, serial: sn, timeout: Duration::from_secs(100), max_download: 128 * 1024 * 1024 });
+                    return Ok(FastbootDevice {
+                        handle: h,
+                        serial: sn,
+                        timeout: Duration::from_secs(100),
+                        max_download: 128 * 1024 * 1024,
+                        packet_logger: std::cell::RefCell::new(None),
+                    });
                 }
             }
         }
@@ -111,6 +156,25 @@ impl FastbootDevice {
     }
 
     pub fn serial(&self) -> &str { &self.serial }
+
+    /// Routes every reply the bootloader sends — `INFO`, `DATA`, `FAIL` and
+    /// non-empty `OKAY` packets — to `logger`.
+    ///
+    /// Most commands only report success or failure, so the text a device
+    /// sends along the way (why a command failed, which slot it selected, how
+    /// large a download it accepts, …) is dropped. With a logger installed the
+    /// packets are handed over as readable lines:
+    ///
+    /// ```text
+    /// INFO (bootloader) max-download-size: 0x1f000000
+    /// DATA 4096 bytes (max 8192)
+    /// FAIL Command not allowed
+    /// ```
+    ///
+    /// The callback must not call back into the device.
+    pub fn set_packet_logger(&mut self, logger: Option<Box<dyn Fn(String) + Send + 'a>>) {
+        *self.packet_logger.borrow_mut() = logger;
+    }
 
     pub fn oem_info(&self, command: &str) -> Result<Vec<String>, String> {
         self.write(format!("oem {}", command).as_bytes())?;
@@ -485,17 +549,13 @@ impl FastbootDevice {
     /// Loops over INFO messages until OKAY or FAIL arrives.
     fn simple_cmd_timeout(&self, cmd: &[u8], timeout: Duration) -> Result<Vec<u8>, String> {
         self.write(cmd)?;
-        let (_, inp) = self.endpoints()?;
-        let mut buf = vec![0u8; 64];
         loop {
-            let n = self.handle.read_bulk(inp, &mut buf, timeout).map_err(|e| format!("R: {}", e))?;
-            if n < 4 { return Err("Short response".into()); }
-            let hdr = &buf[..4];
-            match hdr {
-                b"OKAY" => return Ok(buf[4..n].to_vec()),
-                b"FAIL" => return Err(String::from_utf8_lossy(&buf[4..n]).to_string()),
+            let (h, p) = self.read_packet_with_timeout(timeout)?;
+            match h.as_slice() {
+                b"OKAY" => return Ok(p),
+                b"FAIL" => return Err(String::from_utf8_lossy(&p).to_string()),
                 b"INFO" => { /* keep reading for OKAY/FAIL */ }
-                _ => return Err(format!("Unexpected response: {}", String::from_utf8_lossy(hdr))),
+                _ => return Err(format!("Unexpected response: {}", String::from_utf8_lossy(&h))),
             }
         }
     }
@@ -507,14 +567,37 @@ impl FastbootDevice {
         Ok(())
     }
 
-    fn read_bulk(&self, buf: &mut [u8]) -> Result<usize, String> {
+    fn read_bulk(&self, buf: &mut [u8], timeout: Duration) -> Result<usize, String> {
         let (_, inp) = self.endpoints()?;
-        self.handle.read_bulk(inp, buf, self.timeout).map_err(|e| format!("R: {}", e))
+        self.handle.read_bulk(inp, buf, timeout).map_err(|e| format!("R: {}", e))
     }
 
     fn read_packet(&self) -> Result<(Vec<u8>, Vec<u8>), String> {
-        let mut buf = [0u8; 64]; let n = self.read_bulk(&mut buf)?;
-        if n < 4 { Err("Short".into()) } else { Ok((buf[..4].to_vec(), buf[4..n].to_vec())) }
+        self.read_packet_with_timeout(self.timeout)
+    }
+
+    /// Reads one reply packet and reports it to the packet logger.
+    fn read_packet_with_timeout(&self, timeout: Duration) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let mut buf = [0u8; 64];
+        let n = self.read_bulk(&mut buf, timeout)?;
+        if n < 4 {
+            return Err("Short".into());
+        }
+
+        let (header, payload) = (buf[..4].to_vec(), buf[4..n].to_vec());
+        self.report_packet(&header, &payload);
+        Ok((header, payload))
+    }
+
+    /// Hands one reply packet to the [packet logger](Self::set_packet_logger),
+    /// if one is installed.
+    fn report_packet(&self, header: &[u8], payload: &[u8]) {
+        let logged = self.packet_logger.borrow();
+        if let Some(logger) = logged.as_ref() {
+            if let Some(line) = format_packet(header, payload) {
+                logger(line);
+            }
+        }
     }
 
     fn read_okay(&self) -> Result<Vec<u8>, String> {
@@ -569,6 +652,45 @@ impl FastbootDevice {
     }
 }
 
-impl Drop for FastbootDevice {
+impl Drop for FastbootDevice<'_> {
     fn drop(&mut self) { let _ = self.handle.release_interface(0); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn info_and_fail_keep_their_text() {
+        assert_eq!(
+            format_packet(b"INFO", b"(bootloader) slot-count: 2\0"),
+            Some("INFO (bootloader) slot-count: 2".to_string())
+        );
+        assert_eq!(
+            format_packet(b"FAIL", b"Command not allowed"),
+            Some("FAIL Command not allowed".to_string())
+        );
+    }
+
+    #[test]
+    fn silent_packets_are_left_out() {
+        // An empty OKAY is what a successful command answers with.
+        assert_eq!(format_packet(b"OKAY", b""), None);
+        assert_eq!(format_packet(b"OKAY", b"\0\0"), None);
+    }
+
+    #[test]
+    fn data_packets_are_described() {
+        // `DATA<8 hex maximum download size><8 hex requested size>`.
+        assert_eq!(
+            format_packet(b"DATA", b"0000200000001000"),
+            Some("DATA 4096 bytes (max 8192)".to_string())
+        );
+
+        // Anything that is not that shape is shown as it came in.
+        assert_eq!(
+            format_packet(b"DATA", b"whatever"),
+            Some("DATA whatever".to_string())
+        );
+    }
 }
