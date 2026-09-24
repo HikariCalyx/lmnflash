@@ -287,6 +287,96 @@ pub fn run(job: FlashJob, emit: &(dyn Fn(FlashEvent) + Send + Sync)) {
     emit(FlashEvent::Finished(result));
 }
 
+/// Takes the device out of fastboot once the flash is done: the boot mode
+/// flag the firmware sets (`oem config bootmode fastboot`) is cleared first,
+/// then the phone is rebooted into the system.
+///
+/// Both commands run through the engine the package was flashed with, and the
+/// tool's output is forwarded to the log like during a flash.
+pub fn reboot_to_system(
+    engine: &Engine,
+    serial: &str,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<(), String> {
+    match engine {
+        Engine::Builtin => {
+            emit(FlashEvent::Log(format!(
+                "connecting to {} (built-in fastboot)",
+                if serial.is_empty() { "device" } else { serial }
+            )));
+
+            let device = fastboot::FastbootDevice::connect(serial)?;
+
+            emit(FlashEvent::Log("oem fb_mode_clear".to_string()));
+            device.oem("fb_mode_clear")?;
+
+            emit(FlashEvent::Log("reboot".to_string()));
+            reboot_builtin(&device, emit)
+        }
+        Engine::Mfastboot(tool) => {
+            let directory = std::env::temp_dir();
+
+            emit(FlashEvent::Log(format!(
+                "{} -s {} oem fb_mode_clear",
+                tool.label(),
+                serial
+            )));
+
+            let mut clear = Command::new(&tool.path);
+            if !serial.is_empty() {
+                clear.arg("-s").arg(serial);
+            }
+            clear.arg("oem").arg("fb_mode_clear");
+
+            let status = run_tool_command(clear, tool, &directory, emit)?;
+            if !status.success() {
+                return Err(format!("{} failed for oem fb_mode_clear", tool.label()));
+            }
+
+            emit(FlashEvent::Log(format!(
+                "{} -s {} reboot",
+                tool.label(),
+                serial
+            )));
+
+            let mut restart = Command::new(&tool.path);
+            if !serial.is_empty() {
+                restart.arg("-s").arg(serial);
+            }
+            restart.arg("reboot");
+
+            match run_tool_command(restart, tool, &directory, emit) {
+                Ok(status) if status.success() => Ok(()),
+                // The phone leaves fastboot while the command is running, so
+                // a non-zero exit does not mean the reboot did not happen.
+                Ok(status) => {
+                    emit(FlashEvent::Log(format!(
+                        "{} exited with {status}; the phone reboots anyway",
+                        tool.label()
+                    )));
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+    }
+}
+
+/// Sends the `reboot` command through the built-in fastboot crate.
+///
+/// The device can disappear from USB before it answers the packet, which is
+/// not a failure of the reboot itself, so such an error only goes to the log.
+fn reboot_builtin(
+    device: &fastboot::FastbootDevice,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<(), String> {
+    if let Err(error) = device.reboot() {
+        emit(FlashEvent::Log(format!("reboot: {error}")));
+    }
+
+    Ok(())
+}
+
 /// Runs the steps through the built-in `fastboot` crate.
 fn run_with_builtin(
     job: &FlashJob,
@@ -480,8 +570,40 @@ fn run_mfastboot_step(
         }
     }
 
+    let status = run_tool_command(command, tool, &job.package.directory, emit)?;
+
+    if !status.success() {
+        // A `getvar` is informational, so its failure is logged instead of
+        // aborting the flash.
+        if matches!(step, FlashOp::Getvar { .. }) {
+            emit(FlashEvent::Log(format!(
+                "getvar {} skipped: {} exited with {status}",
+                step.describe(),
+                tool.label()
+            )));
+            return Ok(());
+        }
+
+        return Err(format!(
+            "{} failed for step ({})",
+            tool.label(),
+            step.describe()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Runs a prepared `mfastboot` command, forwarding its output to the log and
+/// returning its exit status.
+fn run_tool_command(
+    mut command: Command,
+    tool: &Mfastboot,
+    directory: &Path,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<std::process::ExitStatus, String> {
     command
-        .current_dir(&job.package.directory)
+        .current_dir(directory)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -511,30 +633,9 @@ fn run_mfastboot_step(
         }
     });
 
-    let status = child
+    child
         .wait()
-        .map_err(|error| format!("could not wait for {}: {error}", tool.path.display()))?;
-
-    if !status.success() {
-        // A `getvar` is informational, so its failure is logged instead of
-        // aborting the flash.
-        if matches!(step, FlashOp::Getvar { .. }) {
-            emit(FlashEvent::Log(format!(
-                "getvar {} skipped: {} exited with {status}",
-                step.describe(),
-                tool.label()
-            )));
-            return Ok(());
-        }
-
-        return Err(format!(
-            "{} failed for step ({})",
-            tool.label(),
-            step.describe()
-        ));
-    }
-
-    Ok(())
+        .map_err(|error| format!("could not wait for {}: {error}", tool.path.display()))
 }
 
 /// Forwards the tool's output as log lines, splitting on both `\n` and the

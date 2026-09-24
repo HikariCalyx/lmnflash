@@ -666,6 +666,10 @@ struct FirmwareFlashState {
     log: Vec<String>,
     /// Result of the whole package, once it finished.
     result: Option<Result<(), String>>,
+    /// `true` while `oem fb_mode_clear` + `reboot` run on the phone.
+    rebooting: bool,
+    /// Outcome of that reboot, once it ran.
+    reboot_result: Option<Result<(), String>>,
 }
 
 impl Default for FirmwareFlashState {
@@ -701,6 +705,8 @@ impl Default for FirmwareFlashState {
             progress: None,
             log: Vec::new(),
             result: None,
+            rebooting: false,
+            reboot_result: None,
         }
     }
 }
@@ -968,6 +974,11 @@ enum Message {
     FirmwareFlashEraseGroupToggled(flashfile::EraseGroup),
     /// Firmware Flash: copy the flashing log to the clipboard.
     FirmwareFlashCopyLog,
+    /// Firmware Flash: leave fastboot once the flash is done (clears the boot
+    /// mode flag, then reboots the phone).
+    FirmwareFlashReboot,
+    /// Firmware Flash: that reboot finished (or failed).
+    FirmwareFlashRebooted(u64, Result<(), String>),
     /// Firmware Flash: leave the procedure checklist.
     FirmwareFlashEditDone,
     /// Firmware Flash: close the dialog.
@@ -1007,6 +1018,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.listing
         || firmware.loading
         || firmware.running
+        || firmware.rebooting
         || firmware.reading_device;
     if animating {
         iced::time::every(std::time::Duration::from_millis(64))
@@ -1390,7 +1402,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::FirmwareFlashBack => {
             let flash = &mut state.flash.firmware;
-            if flash.running || flash.loading {
+            if flash.running || flash.loading || flash.rebooting {
                 return Task::none();
             }
 
@@ -1399,6 +1411,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // unpack the firmware all over again.
             flash.confirming = false;
             flash.result = None;
+            flash.reboot_result = None;
             flash.progress = None;
             flash.step_index = 0;
             flash.step_label.clear();
@@ -1410,7 +1423,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // Never close the dialog while a job is in flight: the phone must
             // not be left half-flashed, and the unpacked package is still
             // being read.
-            if flash.loading || flash.running {
+            if flash.loading || flash.running || flash.rebooting {
                 return Task::none();
             }
 
@@ -1502,6 +1515,23 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::FirmwareFlashWorkerDone => Task::none(),
+        Message::FirmwareFlashReboot => start_firmware_flash_reboot(state),
+        Message::FirmwareFlashRebooted(job, result) => {
+            let flash = &mut state.flash.firmware;
+            // Outcome of a reboot this dialog no longer runs.
+            if job != flash.job {
+                return Task::none();
+            }
+
+            flash.rebooting = false;
+
+            if let Err(error) = &result {
+                push_flash_log(&mut flash.log, format!("reboot failed: {error}"));
+            }
+
+            flash.reboot_result = Some(result);
+            scroll_flash_log_to_end()
+        }
         Message::FirmwareFlashCopyLog => {
             let log = &state.flash.firmware.log;
 
@@ -2886,6 +2916,7 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
     flash.editing = false;
     flash.confirming = false;
     flash.result = None;
+    flash.reboot_result = None;
     flash.progress = None;
     flash.step_index = 0;
     flash.step_total = package.steps.len() + extra_erases.len();
@@ -2917,6 +2948,50 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
             }
         },
         |()| Message::FirmwareFlashWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::FirmwareFlashEvent(job_id, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// Clears the boot mode flag and reboots the phone, once the flash is done.
+///
+/// The commands go to the same device with the same engine the package was
+/// flashed with, and their output is streamed into the log like during a
+/// flash.
+fn start_firmware_flash_reboot(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    let Some(serial) = flash.selected.clone() else {
+        return Task::none();
+    };
+
+    if flash.running || flash.loading || flash.rebooting {
+        return Task::none();
+    }
+
+    flash.rebooting = true;
+    flash.reboot_result = None;
+
+    let engine = flash.engine.clone();
+    let job_id = flash.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                flash_engine::reboot_to_system(&engine, &serial, &emit)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        move |result| Message::FirmwareFlashRebooted(job_id, result),
     );
 
     let consumer = Task::run(receiver, move |event| {

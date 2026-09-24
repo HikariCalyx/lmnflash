@@ -479,14 +479,53 @@ fn running_section(state: &State) -> Element<'_, Message> {
             }
         }
 
+        // The phone is still in fastboot once the flash is done. Leaving it is
+        // a separate step, because the boot mode flag has to be cleared first:
+        // without that the phone would boot back into fastboot.
+        if flash.rebooting {
+            content = content.push(busy_row(state, l10n.tr("firmware-flash-rebooting")));
+        } else if let Some(outcome) = &flash.reboot_result {
+            match outcome {
+                Ok(()) => {
+                    content = content.push(
+                        text(l10n.tr("firmware-flash-reboot-sent"))
+                            .size(13.0)
+                            .style(bright_success),
+                    );
+                }
+                Err(error) => {
+                    content = content.push(
+                        text(format!(
+                            "{}: {error}",
+                            l10n.tr("firmware-flash-reboot-failed")
+                        ))
+                        .size(13.0)
+                        .width(Fill)
+                        .wrapping(Wrapping::WordOrGlyph)
+                        .style(iced::widget::text::danger),
+                    );
+                }
+            }
+        }
+
+        let mut reboot = button(text(l10n.tr("firmware-flash-reboot")));
+        if !flash.rebooting && flash.selected.is_some() {
+            reboot = reboot.on_press(Message::FirmwareFlashReboot);
+        }
+
         // Back to the setup form: the package stays loaded, so a retry does
         // not have to unpack the firmware again.
         content = content.push(
-            button(text(format!(
-                "< {}",
-                l10n.tr("flash-bootloader-return")
-            )))
-            .on_press(Message::FirmwareFlashBack),
+            row![
+                button(text(format!(
+                    "< {}",
+                    l10n.tr("flash-bootloader-return")
+                )))
+                .on_press(Message::FirmwareFlashBack),
+                reboot,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
         );
     }
 
