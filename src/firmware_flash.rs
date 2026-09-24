@@ -31,6 +31,19 @@ use crate::{enabled_procedures, FirmwareFlashDialog, Labeled, Message, State};
 /// newest line as lines arrive.
 pub(crate) const LOG_SCROLL_ID: &str = "firmware-flash-log";
 
+/// Height of every progress bar in the dialog. A bar is a status line, not a
+/// button: at the widget's 30 px default it drew more attention than the text
+/// it belongs to.
+const BAR_HEIGHT: f32 = 6.0;
+
+/// A progress bar at the height used everywhere in this dialog.
+fn bar<'a>(fraction: f32) -> Element<'a, Message> {
+    progress_bar(0.0..=1.0, fraction)
+        .height(BAR_HEIGHT)
+        .width(Fill)
+        .into()
+}
+
 /// Renders the Firmware Flash overlay over the app, or `None` when the dialog
 /// is closed. Clicks on empty space are swallowed (they neither dismiss the
 /// dialog nor reach the UI underneath); the modal is left only via Cancel.
@@ -139,7 +152,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         content = content.push(busy_row(state, l10n.tr("firmware-flash-loading")));
 
         if let Some((done, total)) = flash.extracted {
-            content = content.push(progress_bar(0.0..=1.0, fraction(done, total)));
+            content = content.push(bar(fraction(done, total)));
         }
     } else if let Some(error) = &flash.error {
         content = content.push(
@@ -457,12 +470,7 @@ fn running_section(state: &State) -> Element<'_, Message> {
             // beside it (the numbers need no translation).
             content = content.push(
                 row![
-                    progress_bar(
-                        0.0..=1.0,
-                        (flash.step_index + 1) as f32 / flash.step_total as f32,
-                    )
-                    .height(6.0)
-                    .width(Fill),
+                    bar((flash.step_index + 1) as f32 / flash.step_total as f32),
                     text(format!("{}/{}", flash.step_index + 1, flash.step_total)).size(12.0),
                 ]
                 .spacing(8)
@@ -471,8 +479,20 @@ fn running_section(state: &State) -> Element<'_, Message> {
         }
 
         // Bytes of the procedure that is currently running.
-        if let Some((done, total)) = flash.progress {
-            content = content.push(progress_bar(0.0..=1.0, fraction(done, total)));
+        //
+        // The built-in fastboot reports them, so its bar is always drawn: it
+        // stays empty while a step transfers nothing (`erase`, `oem`,
+        // `getvar`) instead of vanishing and letting the view jump. `mfastboot`
+        // prints its own progress lines into the log and reports no bytes, so
+        // it gets no bar.
+        let bytes = flash
+            .progress
+            .map(|(done, total)| fraction(done, total))
+            .unwrap_or(0.0);
+        let builtin = matches!(flash.engine, Engine::Builtin);
+
+        if builtin || flash.progress.is_some() {
+            content = content.push(bar(bytes));
         }
     } else if let Some(result) = &flash.result {
         match result {
