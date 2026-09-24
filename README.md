@@ -1,6 +1,7 @@
 # lmnflash
 
-Flashing and firmware-lookup utility for Motorola / Lenovo devices.
+Flashing and firmware-lookup utility for Lenovo / Motorola / NEC devices
+(also why this name).
 
 ## Firmware Flash
 
