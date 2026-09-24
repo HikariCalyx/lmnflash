@@ -4,7 +4,10 @@
 //!
 //! * **External `mfastboot`** — Motorola's `fastboot` fork, looked up next to
 //!   the application (see [`discover_mfastboot`]). Preferred, because its
-//!   behaviour matches the firmware packages exactly.
+//!   behaviour matches the firmware packages exactly. The macOS build is an
+//!   Intel binary, so on Apple silicon it runs through Rosetta 2 — and when
+//!   Rosetta 2 is not installed yet the user is told to (see
+//!   [`Mfastboot::needs_rosetta`]).
 //! * **Built-in fastboot** — the pure-Rust `fastboot` crate used by the other
 //!   features. Used when no `mfastboot` binary is shipped for the platform.
 //!
@@ -25,6 +28,11 @@ pub struct Mfastboot {
     /// for a binary placed directly next to the application.
     pub version: String,
     pub path: PathBuf,
+    /// An Intel binary found on an Apple silicon Mac that has no Rosetta 2
+    /// yet, so it cannot start until the user installs it (macOS 11 through
+    /// 27 still offer Rosetta 2; see [`Rosetta`]). The dialog explains that
+    /// instead of letting the flash fail at the first step.
+    pub needs_rosetta: bool,
 }
 
 impl Mfastboot {
@@ -108,8 +116,9 @@ const MFASTBOOT_FILE: &str = if cfg!(windows) {
 ///   `<platform>` names the architecture the binary was built for
 ///   (`windows_amd64`, `darwin_amd64`, …) — mirroring the `prebuilt_binary`
 ///   tree. A platform that is not the one we run on is skipped, so an
-///   x86_64-only `mfastboot` is never offered on ARM (and on macOS an
-///   x86_64 build is not silently started through Rosetta).
+///   x86_64-only `mfastboot` is never started on an ARM Windows or Linux
+///   machine. On Apple silicon it *is* offered, because Rosetta 2 runs it
+///   there (`needs_rosetta` marks the builds that still need it installed).
 ///
 /// Inside a macOS `.app` bundle, `Contents/Resources` is searched as well.
 /// The result is sorted newest version first.
@@ -129,10 +138,11 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
         roots.push(contents.join("Resources"));
     }
 
+    let rosetta = Rosetta::detect();
     let mut seen = std::collections::HashSet::new();
 
     for root in roots {
-        let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+        let mut candidates: Vec<Mfastboot> = Vec::new();
         let base = root.join("mfastboot");
 
         if let Ok(entries) = std::fs::read_dir(&base) {
@@ -146,23 +156,37 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
                 let version = entry.file_name().to_string_lossy().to_string();
                 let binary = path.join(MFASTBOOT_FILE);
                 if binary.is_file() {
-                    candidates.push((version, binary));
+                    candidates.push(Mfastboot {
+                        version,
+                        path: binary,
+                        // No `<platform>` folder: whoever laid it out knows
+                        // what architecture the binary is for.
+                        needs_rosetta: false,
+                    });
                     continue;
                 }
 
                 // `<base>/<platform>/<version>/mfastboot[.exe]`
-                if !platform_matches(&version) {
+                let Some(fit) = platform_fit(&version, std::env::consts::ARCH, rosetta) else {
                     continue;
-                }
+                };
+
+                // An Intel build on a Mac without Rosetta 2: it can still be
+                // offered, but the user has to be told to install it.
+                let needs_rosetta = fit == PlatformFit::Rosetta && rosetta.needs_install();
 
                 if let Ok(versions) = std::fs::read_dir(&path) {
                     for version_entry in versions.flatten() {
                         let binary = version_entry.path().join(MFASTBOOT_FILE);
                         if binary.is_file() {
-                            candidates.push((
-                                version_entry.file_name().to_string_lossy().to_string(),
-                                binary,
-                            ));
+                            candidates.push(Mfastboot {
+                                version: version_entry
+                                    .file_name()
+                                    .to_string_lossy()
+                                    .to_string(),
+                                path: binary,
+                                needs_rosetta,
+                            });
                         }
                     }
                 }
@@ -172,12 +196,16 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
         // `<root>/mfastboot[.exe]`
         let direct = root.join(MFASTBOOT_FILE);
         if direct.is_file() {
-            candidates.push(("local".to_owned(), direct));
+            candidates.push(Mfastboot {
+                version: "local".to_owned(),
+                path: direct,
+                needs_rosetta: false,
+            });
         }
 
-        for (version, path) in candidates {
-            if seen.insert(version.clone()) {
-                found.push(Mfastboot { version, path });
+        for tool in candidates {
+            if seen.insert(tool.version.clone()) {
+                found.push(tool);
             }
         }
     }
@@ -187,16 +215,28 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
     found
 }
 
-/// Whether a `<platform>` directory name (e.g. `windows_amd64`, `darwin_arm64`)
-/// can be used on the architecture this process runs as.
+/// How a `<platform>` directory fits the machine this process runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlatformFit {
+    /// Built for the architecture this process runs as.
+    Native,
+    /// Built for Intel and running on Apple silicon, through Rosetta 2.
+    Rosetta,
+}
+
+/// Which of the two ways a `<platform>` directory (e.g. `windows_amd64`,
+/// `darwin_arm64`) can be used here, or `None` when the binary cannot run on
+/// this machine at all.
 ///
-/// The aliases are checked most specific first, so `arm64` is not mistaken for
-/// `arm` and `x86_64` not for `x86`. A name that does not mention any
-/// architecture is accepted: whoever laid the directory out knows what was put
-/// in it.
-fn platform_matches(platform: &str) -> bool {
+/// `architecture` is what this process runs as
+/// (`std::env::consts::ARCH`), `rosetta` what this Mac can do with Intel
+/// binaries (see [`Rosetta`]). The aliases are checked most specific first, so
+/// `arm64` is not mistaken for `arm` and `x86_64` not for `x86`. A name that
+/// does not mention any architecture is accepted: whoever laid the directory
+/// out knows what was put in it.
+fn platform_fit(platform: &str, architecture: &str, rosetta: Rosetta) -> Option<PlatformFit> {
     /// `(alias, architecture it denotes)`, longest aliases first.
-    const ALIASES: &[(&str, &str)] = &[
+    const ARCH_ALIASES: &[(&str, &str)] = &[
         ("x86_64", "x86_64"),
         ("amd64", "x86_64"),
         ("x64", "x86_64"),
@@ -210,16 +250,133 @@ fn platform_matches(platform: &str) -> bool {
         ("riscv64", "riscv64"),
     ];
 
+    /// `(alias, operating system it denotes)`. `darwin` and `macos` are
+    /// checked before `win`, which `darwin` contains.
+    const OS_ALIASES: &[(&str, &str)] = &[
+        ("darwin", "macos"),
+        ("macos", "macos"),
+        ("osx", "macos"),
+        ("windows", "windows"),
+        ("win", "windows"),
+        ("linux", "linux"),
+        ("freebsd", "freebsd"),
+        ("android", "android"),
+    ];
+
     let platform = platform.to_ascii_lowercase();
 
-    for (alias, architecture) in ALIASES {
-        if platform.contains(alias) {
-            return *architecture == std::env::consts::ARCH;
+    // A directory that names another operating system holds binaries this
+    // machine cannot execute — Rosetta 2 does not make a Linux `mfastboot`
+    // run on macOS either.
+    let named_os = OS_ALIASES
+        .iter()
+        .find_map(|(alias, denotes)| platform.contains(alias).then_some(*denotes));
+
+    if named_os.is_some_and(|named_os| named_os != std::env::consts::OS) {
+        return None;
+    }
+
+    let named_arch = ARCH_ALIASES
+        .iter()
+        .find_map(|(alias, denotes)| platform.contains(alias).then_some(*denotes));
+
+    // A name that does not mention any architecture is accepted: whoever laid
+    // the directory out knows what was put in it.
+    let Some(named_arch) = named_arch else {
+        return Some(PlatformFit::Native);
+    };
+
+    if named_arch == architecture {
+        return Some(PlatformFit::Native);
+    }
+
+    // Apple silicon runs Intel binaries through Rosetta 2 — while the macOS
+    // in use still has it (see `Rosetta`).
+    if named_arch == "x86_64" && rosetta.runs_intel() {
+        return Some(PlatformFit::Rosetta);
+    }
+
+    None
+}
+
+/// What this Mac can do with Intel binaries — the macOS build of `mfastboot`
+/// is one, and Rosetta 2 is what makes it run on Apple silicon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rosetta {
+    /// Not an Apple silicon Mac: Intel binaries need no translation here, and
+    /// a binary for another architecture cannot be used at all.
+    NotNeeded,
+    /// Installed, so the Intel `mfastboot` runs.
+    Installed,
+    /// Missing, but macOS still offers it (Apple ships Rosetta 2 on Apple
+    /// silicon from macOS 11 through 27), so the user is told to install it.
+    Installable,
+    /// Missing and no longer available — macOS 28 dropped Rosetta 2 — so the
+    /// Intel `mfastboot` is not offered at all.
+    Unavailable,
+}
+
+impl Rosetta {
+    /// What is (or can be) installed on this machine.
+    fn detect() -> Self {
+        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            return Self::NotNeeded;
+        }
+
+        if rosetta_runtime_present() {
+            return Self::Installed;
+        }
+
+        match macos_major_version() {
+            // An unreadable version falls through to `Installable`: a hint
+            // the user may not need is harmless, a disabled engine is not.
+            Some(major) if major > ROSETTA_LAST_MACOS => Self::Unavailable,
+            _ => Self::Installable,
         }
     }
 
-    true
+    /// Whether an Intel binary can be offered here.
+    fn runs_intel(self) -> bool {
+        matches!(self, Self::Installed | Self::Installable)
+    }
+
+    /// Whether the user has to install Rosetta 2 before it runs.
+    fn needs_install(self) -> bool {
+        self == Self::Installable
+    }
 }
+
+/// The last macOS release Apple ships Rosetta 2 for: it is available on Apple
+/// silicon from macOS 11 (the first release for those Macs) through macOS 27.
+const ROSETTA_LAST_MACOS: u32 = 27;
+
+/// Whether the Rosetta 2 runtime is installed. Homebrew detects it the same
+/// way, by the path the runtime is installed to.
+fn rosetta_runtime_present() -> bool {
+    Path::new("/Library/Apple/usr/libexec/oah/libRosettaRuntime").exists()
+}
+
+/// The major version of the running macOS (`11` = Big Sur, `26` = Tahoe …),
+/// read from `sw_vers`.
+fn macos_major_version() -> Option<u32> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+
+    let output = Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+
+    parse_macos_major(&String::from_utf8(output.stdout).ok()?)
+}
+
+/// The leading component of a `sw_vers -productVersion` string (`"26.0"` ->
+/// `26`), or `None` when it is not a version.
+fn parse_macos_major(version: &str) -> Option<u32> {
+    version.trim().split('.').next()?.parse().ok()
+}
+
 
 /// Compares dotted version labels numerically, so `34.0.4` sorts after
 /// `29.0.6` (a plain string compare would not).
@@ -725,14 +882,17 @@ mod tests {
             Mfastboot {
                 version: "26.0.0".to_owned(),
                 path: PathBuf::from("a"),
+                needs_rosetta: false,
             },
             Mfastboot {
                 version: "34.0.4".to_owned(),
                 path: PathBuf::from("b"),
+                needs_rosetta: false,
             },
             Mfastboot {
                 version: "28.0.2".to_owned(),
                 path: PathBuf::from("c"),
+                needs_rosetta: false,
             },
         ];
 
@@ -744,29 +904,114 @@ mod tests {
 
     #[test]
     fn architecture_folders_are_filtered() {
-        let running = std::env::consts::ARCH;
+        let host = std::env::consts::OS;
+        // Nothing to translate: Intel binaries run natively, and any other
+        // architecture cannot be run at all.
+        let intel_host = Rosetta::NotNeeded;
 
-        // The folder for the architecture we run as is always usable.
-        assert!(platform_matches(running));
-        assert!(platform_matches(&format!("linux_{running}")));
+        // The folder for the OS and architecture we run as is always usable.
+        assert_eq!(
+            platform_fit(&format!("{host}_x86_64"), "x86_64", intel_host),
+            Some(PlatformFit::Native)
+        );
+        assert_eq!(
+            platform_fit(&format!("{host}_arm64"), "aarch64", intel_host),
+            Some(PlatformFit::Native)
+        );
 
-        // A folder that names no architecture at all is left alone.
-        assert!(platform_matches("windows"));
-        assert!(platform_matches("bundled"));
+        // A folder that names neither is left alone.
+        assert_eq!(
+            platform_fit("bundled", "x86_64", intel_host),
+            Some(PlatformFit::Native)
+        );
+        assert_eq!(
+            platform_fit("vendored", "aarch64", intel_host),
+            Some(PlatformFit::Native)
+        );
 
         // A folder for another architecture is not.
-        let other = if running == "x86_64" {
-            "darwin_arm64"
-        } else {
-            "darwin_amd64"
-        };
-        assert!(!platform_matches(other));
+        assert_eq!(
+            platform_fit(&format!("{host}_amd64"), "aarch64", intel_host),
+            None
+        );
+        assert_eq!(
+            platform_fit(&format!("{host}_arm64"), "x86_64", intel_host),
+            None
+        );
     }
 
     #[test]
-    fn mfastboot_labels_are_readable() {        let tool = Mfastboot {
+    fn other_operating_systems_are_filtered() {
+        let host = std::env::consts::OS;
+        let other = if host == "linux" { "windows" } else { "linux" };
+        let running = std::env::consts::ARCH;
+
+        // The architecture we run as, but for another OS: never usable, not
+        // even through Rosetta 2 (which would be offered a Linux binary).
+        assert_eq!(
+            platform_fit(&format!("{other}_{running}"), running, Rosetta::Installed),
+            None
+        );
+        assert_eq!(
+            platform_fit(&format!("{other}_amd64"), "aarch64", Rosetta::Installable),
+            None
+        );
+    }
+
+    #[test]
+    fn intel_mfastboot_uses_rosetta_on_apple_silicon() {
+        // The OS in the folder name is the one that has to match the host, so
+        // these hold on every machine the tests run on.
+        let intel = format!("{}_amd64", std::env::consts::OS);
+
+        // With Rosetta 2 installed the Intel build runs.
+        assert_eq!(
+            platform_fit(&intel, "aarch64", Rosetta::Installed),
+            Some(PlatformFit::Rosetta)
+        );
+
+        // Without it the build is still offered while macOS can install it,
+        // so the dialog can say how — and it is marked as needing that.
+        assert_eq!(
+            platform_fit(&intel, "aarch64", Rosetta::Installable),
+            Some(PlatformFit::Rosetta)
+        );
+        assert!(Rosetta::Installable.needs_install());
+        assert!(!Rosetta::Installed.needs_install());
+
+        // macOS 28 dropped Rosetta 2, so the Intel build is not offered.
+        assert_eq!(
+            platform_fit(&intel, "aarch64", Rosetta::Unavailable),
+            None
+        );
+
+        // Rosetta 2 does not make an Apple silicon binary run on an Intel Mac.
+        assert_eq!(
+            platform_fit(
+                &format!("{}_arm64", std::env::consts::OS),
+                "x86_64",
+                Rosetta::Installed
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn macos_versions_are_parsed() {
+        assert_eq!(parse_macos_major("26.0"), Some(26));
+        assert_eq!(parse_macos_major("11"), Some(11));
+        assert_eq!(parse_macos_major("10.15.7"), Some(10));
+        assert_eq!(parse_macos_major(" 27.1\n"), Some(27));
+        assert_eq!(parse_macos_major("not a version"), None);
+        assert_eq!(parse_macos_major(""), None);
+    }
+
+    #[test]
+    fn mfastboot_labels_are_readable() {
+        let tool = Mfastboot {
             version: "34.0.4".to_owned(),
             path: PathBuf::from("mfastboot"),
+            needs_rosetta: false,
         };
 
         assert_eq!(tool.label(), "mfastboot 34.0.4");
