@@ -96,6 +96,7 @@ firmware-flash-device-securestate = Upplåsningsstatus
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (ignoreras)
 firmware-flash-device-product = Projektkod
+firmware-flash-device-carrier = Operatör
 firmware-flash-securestate-locked = Inte upplåst
 firmware-flash-securestate-unlocked = Upplåst
 firmware-flash-securestate-relocked = Återlåst

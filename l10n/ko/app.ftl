@@ -96,6 +96,7 @@ firmware-flash-device-securestate = 잠금 해제 상태
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (무시됨)
 firmware-flash-device-product = 프로젝트 코드
+firmware-flash-device-carrier = 통신사
 firmware-flash-securestate-locked = 잠금 해제 안 됨
 firmware-flash-securestate-unlocked = 잠금 해제됨
 firmware-flash-securestate-relocked = 다시 잠김

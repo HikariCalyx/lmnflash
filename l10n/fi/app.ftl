@@ -96,6 +96,7 @@ firmware-flash-device-securestate = Avauksen tila
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (ohitettu)
 firmware-flash-device-product = Projektikoodi
+firmware-flash-device-carrier = Operaattori
 firmware-flash-securestate-locked = Ei avattu
 firmware-flash-securestate-unlocked = Avattu
 firmware-flash-securestate-relocked = Lukittu uudelleen

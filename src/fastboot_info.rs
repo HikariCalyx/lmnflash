@@ -647,9 +647,11 @@ pub struct DeviceVars {
     pub cid: Option<String>,
     /// Product codename (`product`), e.g. `arcfox`.
     pub product: Option<String>,
+    /// Region/operator the unit was built for (`ro.carrier`), e.g. `retus`.
+    pub carrier: Option<String>,
 }
 
-/// Reads `securestate`, `cid` and `product` from one device.
+/// Reads `securestate`, `cid`, `product` and `ro.carrier` from one device.
 ///
 /// Every variable is read on its own and best effort: a bootloader that does
 /// not know one of them still reports the others.
@@ -669,6 +671,9 @@ pub fn read_device_vars(serial: &str) -> Result<DeviceVars, String> {
         // package, which is shown in the same form.
         cid: read("cid").map(|cid| crate::flashfile::normalize_cid(&cid)),
         product: read("product"),
+        // Bootloaders answer the system property as `ro.carrier`; older ones
+        // use the bare name (the same pair Fastboot Fill reads).
+        carrier: read("ro.carrier").or_else(|| read("carrier")),
     })
 }
 

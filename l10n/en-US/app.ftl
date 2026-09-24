@@ -96,6 +96,7 @@ firmware-flash-device-securestate = Unlock Status
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (ignored)
 firmware-flash-device-product = Project Code
+firmware-flash-device-carrier = Carrier
 firmware-flash-securestate-locked = Not Unlocked
 firmware-flash-securestate-unlocked = Unlocked
 firmware-flash-securestate-relocked = Relocked

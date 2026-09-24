@@ -96,6 +96,7 @@ firmware-flash-device-securestate = Entsperrstatus
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (ignoriert)
 firmware-flash-device-product = Projektcode
+firmware-flash-device-carrier = Mobilfunkanbieter
 firmware-flash-securestate-locked = Nicht entsperrt
 firmware-flash-securestate-unlocked = Entsperrt
 firmware-flash-securestate-relocked = Wieder gesperrt

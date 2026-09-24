@@ -96,6 +96,7 @@ firmware-flash-device-securestate = Status de desbloqueio
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (ignorado)
 firmware-flash-device-product = Código do projeto
+firmware-flash-device-carrier = Operadora
 firmware-flash-securestate-locked = Não desbloqueado
 firmware-flash-securestate-unlocked = Desbloqueado
 firmware-flash-securestate-relocked = Bloqueado novamente

@@ -96,6 +96,7 @@ firmware-flash-device-securestate = 解鎖狀態
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid }（已忽略）
 firmware-flash-device-product = 專案代號
+firmware-flash-device-carrier = 電信業者
 firmware-flash-securestate-locked = 未解鎖
 firmware-flash-securestate-unlocked = 已解鎖
 firmware-flash-securestate-relocked = 已重新鎖定

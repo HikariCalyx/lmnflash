@@ -96,6 +96,7 @@ firmware-flash-device-securestate = Ontgrendelingsstatus
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (genegeerd)
 firmware-flash-device-product = Projectcode
+firmware-flash-device-carrier = Provider
 firmware-flash-securestate-locked = Niet ontgrendeld
 firmware-flash-securestate-unlocked = Ontgrendeld
 firmware-flash-securestate-relocked = Opnieuw vergrendeld

@@ -738,8 +738,8 @@ fn device_picker(state: &State) -> Element<'_, Message> {
     picker.into()
 }
 
-/// What the selected device reports about itself (`securestate`, `cid` and
-/// `product`), plus a warning when the package is for another
+/// What the selected device reports about itself (`securestate`, `cid`,
+/// `product` and `ro.carrier`), plus a warning when the package is for another
 /// carrier/region.
 ///
 /// `None` when no device is selected, so nothing is shown for it.
@@ -802,6 +802,10 @@ fn device_info_section(state: &State) -> Option<Element<'_, Message>> {
         info_row(
             l10n.tr("firmware-flash-device-product"),
             variables.product.clone(),
+        ),
+        info_row(
+            l10n.tr("firmware-flash-device-carrier"),
+            variables.carrier.clone(),
         ),
     ]
     .spacing(2)
