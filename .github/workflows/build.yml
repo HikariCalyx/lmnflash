@@ -199,15 +199,22 @@ jobs:
           cp release/lmnflash-win64.exe bundle-win64/lmnflash.exe
           (cd bundle-win64 && zip -r -q ../release/lmnflash-win64.zip .)
 
-      - name: Bundle mfastboot with the Linux build
+      # Both Linux builds carry the Intel `mfastboot` (there is no ARM build of
+      # it): it runs as it is on x86_64 and through box64 on arm64, where the
+      # app only offers it once box64 is installed — and says how to install it
+      # otherwise.
+      - name: Bundle mfastboot with the Linux builds
         run: |
           set -euo pipefail
-          mkdir -p bundle-linux-x86_64/mfastboot/linux_amd64/31.0.2
-          cp release/lmnflash-linux-x86_64 bundle-linux-x86_64/lmnflash
-          cp prebuilt_binary/linux_amd64/31.0.2/mfastboot \
-             bundle-linux-x86_64/mfastboot/linux_amd64/31.0.2/mfastboot
-          chmod +x bundle-linux-x86_64/lmnflash bundle-linux-x86_64/mfastboot/linux_amd64/31.0.2/mfastboot
-          tar -C bundle-linux-x86_64 -czf release/lmnflash-linux-x86_64.tar.gz .
+          for arch in x86_64 arm64; do
+            mkdir -p "bundle-linux-$arch/mfastboot/linux_amd64/31.0.2"
+            cp "release/lmnflash-linux-$arch" "bundle-linux-$arch/lmnflash"
+            cp prebuilt_binary/linux_amd64/31.0.2/mfastboot \
+               "bundle-linux-$arch/mfastboot/linux_amd64/31.0.2/mfastboot"
+            chmod +x "bundle-linux-$arch/lmnflash" \
+                     "bundle-linux-$arch/mfastboot/linux_amd64/31.0.2/mfastboot"
+            tar -C "bundle-linux-$arch" -czf "release/lmnflash-linux-$arch.tar.gz" .
+          done
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2

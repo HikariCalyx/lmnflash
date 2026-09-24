@@ -4,10 +4,10 @@
 //!
 //! * **External `mfastboot`** — Motorola's `fastboot` fork, looked up next to
 //!   the application (see [`discover_mfastboot`]). Preferred, because its
-//!   behaviour matches the firmware packages exactly. The macOS build is an
-//!   Intel binary, so on Apple silicon it runs through Rosetta 2 — and when
-//!   Rosetta 2 is not installed yet the user is told to (see
-//!   [`Mfastboot::needs_rosetta`]).
+//!   behaviour matches the firmware packages exactly. The builds we ship are
+//!   Intel binaries, so an ARM machine runs them through an emulator —
+//!   Rosetta 2 on macOS, box64 on Linux — and when that is not installed yet
+//!   the user is told to install it (see [`Mfastboot::emulator`]).
 //! * **Built-in fastboot** — the pure-Rust `fastboot` crate used by the other
 //!   features. Used when no `mfastboot` binary is shipped for the platform.
 //!
@@ -28,11 +28,10 @@ pub struct Mfastboot {
     /// for a binary placed directly next to the application.
     pub version: String,
     pub path: PathBuf,
-    /// An Intel binary found on an Apple silicon Mac that has no Rosetta 2
-    /// yet, so it cannot start until the user installs it (macOS 11 through
-    /// 27 still offer Rosetta 2; see [`Rosetta`]). The dialog explains that
-    /// instead of letting the flash fail at the first step.
-    pub needs_rosetta: bool,
+    /// What starts this build on this machine. The shipped builds are Intel,
+    /// so an ARM machine runs them through an emulator, which may still have
+    /// to be installed (see [`Emulator::hint_ids`]).
+    pub emulator: Emulator,
 }
 
 impl Mfastboot {
@@ -113,12 +112,11 @@ const MFASTBOOT_FILE: &str = if cfg!(windows) {
 ///
 /// * `<exe dir>/mfastboot/<version>/mfastboot[.exe]`, and
 /// * `<exe dir>/mfastboot/<platform>/<version>/mfastboot[.exe]`, where
-///   `<platform>` names the architecture the binary was built for
-///   (`windows_amd64`, `darwin_amd64`, …) — mirroring the `prebuilt_binary`
-///   tree. A platform that is not the one we run on is skipped, so an
-///   x86_64-only `mfastboot` is never started on an ARM Windows or Linux
-///   machine. On Apple silicon it *is* offered, because Rosetta 2 runs it
-///   there (`needs_rosetta` marks the builds that still need it installed).
+///   `<platform>` names the OS and architecture the binary was built for
+///   (`windows_amd64`, `darwin_amd64`, `linux_amd64`, …) — mirroring the
+///   `prebuilt_binary` tree. A platform this machine cannot use is skipped,
+///   so an Intel `mfastboot` is never started on ARM Windows: it is only
+///   offered where an emulator runs it (Rosetta 2, box64).
 ///
 /// Inside a macOS `.app` bundle, `Contents/Resources` is searched as well.
 /// The result is sorted newest version first.
@@ -138,7 +136,7 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
         roots.push(contents.join("Resources"));
     }
 
-    let rosetta = Rosetta::detect();
+    let emulator = intel_emulator();
     let mut seen = std::collections::HashSet::new();
 
     for root in roots {
@@ -160,20 +158,19 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
                         version,
                         path: binary,
                         // No `<platform>` folder: whoever laid it out knows
-                        // what architecture the binary is for.
-                        needs_rosetta: false,
+                        // what the binary is for, so it is taken at face
+                        // value.
+                        emulator: Emulator::Native,
                     });
                     continue;
                 }
 
                 // `<base>/<platform>/<version>/mfastboot[.exe]`
-                let Some(fit) = platform_fit(&version, std::env::consts::ARCH, rosetta) else {
+                let Some(build_emulator) =
+                    platform_fit(&version, std::env::consts::ARCH, emulator.as_ref())
+                else {
                     continue;
                 };
-
-                // An Intel build on a Mac without Rosetta 2: it can still be
-                // offered, but the user has to be told to install it.
-                let needs_rosetta = fit == PlatformFit::Rosetta && rosetta.needs_install();
 
                 if let Ok(versions) = std::fs::read_dir(&path) {
                     for version_entry in versions.flatten() {
@@ -185,7 +182,7 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
                                     .to_string_lossy()
                                     .to_string(),
                                 path: binary,
-                                needs_rosetta,
+                                emulator: build_emulator.clone(),
                             });
                         }
                     }
@@ -199,7 +196,7 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
             candidates.push(Mfastboot {
                 version: "local".to_owned(),
                 path: direct,
-                needs_rosetta: false,
+                emulator: Emulator::Native,
             });
         }
 
@@ -215,26 +212,22 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
     found
 }
 
-/// How a `<platform>` directory fits the machine this process runs on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlatformFit {
-    /// Built for the architecture this process runs as.
-    Native,
-    /// Built for Intel and running on Apple silicon, through Rosetta 2.
-    Rosetta,
-}
-
-/// Which of the two ways a `<platform>` directory (e.g. `windows_amd64`,
-/// `darwin_arm64`) can be used here, or `None` when the binary cannot run on
-/// this machine at all.
+/// How a `<platform>` directory (e.g. `windows_amd64`, `darwin_arm64`) fits
+/// this machine, or `None` when its binaries cannot run here at all.
 ///
-/// `architecture` is what this process runs as
-/// (`std::env::consts::ARCH`), `rosetta` what this Mac can do with Intel
-/// binaries (see [`Rosetta`]). The aliases are checked most specific first, so
-/// `arm64` is not mistaken for `arm` and `x86_64` not for `x86`. A name that
-/// does not mention any architecture is accepted: whoever laid the directory
-/// out knows what was put in it.
-fn platform_fit(platform: &str, architecture: &str, rosetta: Rosetta) -> Option<PlatformFit> {
+/// `architecture` is what this process runs as (`std::env::consts::ARCH`) and
+/// `emulator` what this machine runs Intel binaries with (see
+/// [`intel_emulator`]). The name has to mention this operating system, and the
+/// architecture either ours — `Emulator::Native` — or one the emulator can
+/// take over. The aliases are checked most specific first, so `arm64` is not
+/// mistaken for `arm` and `x86_64` not for `x86`; a name that mentions no
+/// architecture at all is accepted: whoever laid the directory out knows what
+/// was put in it.
+fn platform_fit(
+    platform: &str,
+    architecture: &str,
+    emulator: Option<&Emulator>,
+) -> Option<Emulator> {
     /// `(alias, architecture it denotes)`, longest aliases first.
     const ARCH_ALIASES: &[(&str, &str)] = &[
         ("x86_64", "x86_64"),
@@ -267,7 +260,7 @@ fn platform_fit(platform: &str, architecture: &str, rosetta: Rosetta) -> Option<
 
     // A directory that names another operating system holds binaries this
     // machine cannot execute — Rosetta 2 does not make a Linux `mfastboot`
-    // run on macOS either.
+    // run on macOS, and box64 does not make a Windows one run on Linux.
     let named_os = OS_ALIASES
         .iter()
         .find_map(|(alias, denotes)| platform.contains(alias).then_some(*denotes));
@@ -280,69 +273,107 @@ fn platform_fit(platform: &str, architecture: &str, rosetta: Rosetta) -> Option<
         .iter()
         .find_map(|(alias, denotes)| platform.contains(alias).then_some(*denotes));
 
-    // A name that does not mention any architecture is accepted: whoever laid
-    // the directory out knows what was put in it.
     let Some(named_arch) = named_arch else {
-        return Some(PlatformFit::Native);
+        return Some(Emulator::Native);
     };
 
     if named_arch == architecture {
-        return Some(PlatformFit::Native);
+        return Some(Emulator::Native);
     }
 
-    // Apple silicon runs Intel binaries through Rosetta 2 — while the macOS
-    // in use still has it (see `Rosetta`).
-    if named_arch == "x86_64" && rosetta.runs_intel() {
-        return Some(PlatformFit::Rosetta);
+    // An Intel binary on an ARM machine: only the emulator can run it (and
+    // without one it is not offered at all).
+    if named_arch == "x86_64" {
+        return emulator.cloned();
     }
 
     None
 }
 
-/// What this Mac can do with Intel binaries — the macOS build of `mfastboot`
-/// is one, and Rosetta 2 is what makes it run on Apple silicon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Rosetta {
-    /// Not an Apple silicon Mac: Intel binaries need no translation here, and
-    /// a binary for another architecture cannot be used at all.
-    NotNeeded,
-    /// Installed, so the Intel `mfastboot` runs.
-    Installed,
-    /// Missing, but macOS still offers it (Apple ships Rosetta 2 on Apple
-    /// silicon from macOS 11 through 27), so the user is told to install it.
-    Installable,
-    /// Missing and no longer available — macOS 28 dropped Rosetta 2 — so the
-    /// Intel `mfastboot` is not offered at all.
-    Unavailable,
+/// What starts an `mfastboot` build on this machine.
+///
+/// The shipped builds are Intel binaries, so an ARM machine runs them through
+/// an emulator: Rosetta 2 on macOS, box64 on Linux.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Emulator {
+    /// The build runs as it is.
+    Native,
+    /// Rosetta 2 on Apple silicon. macOS puts itself in front of the binary,
+    /// so only the installation matters: `installed` is false while Rosetta 2
+    /// is still missing, and the dialog says how to install it (macOS 11
+    /// through 27 offer it).
+    Rosetta { installed: bool },
+    /// box64 on ARM Linux, which has to start the binary itself
+    /// (`box64 mfastboot …`). `program` is the box64 found on this machine,
+    /// or `None` while it is not installed — then the dialog says how to get
+    /// it.
+    Box64 { program: Option<PathBuf> },
 }
 
-impl Rosetta {
-    /// What is (or can be) installed on this machine.
-    fn detect() -> Self {
-        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            return Self::NotNeeded;
+impl Emulator {
+    /// The two localized lines that tell the user to install the emulator, or
+    /// `None` when the build can start right now.
+    ///
+    /// A hint also means the tool cannot run: the dialog keeps Start disabled
+    /// instead of letting the first step fail with a bad CPU type.
+    pub fn hint_ids(&self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Native | Self::Rosetta { installed: true } => None,
+            Self::Rosetta { installed: false } => Some((
+                "firmware-flash-rosetta-needed",
+                "firmware-flash-rosetta-install",
+            )),
+            Self::Box64 { program: Some(_) } => None,
+            Self::Box64 { program: None } => {
+                Some(("firmware-flash-box64-needed", "firmware-flash-box64-install"))
+            }
         }
+    }
 
+    /// The command that runs `binary`, through the emulator when it needs one.
+    fn command(&self, binary: &Path) -> Command {
+        match self {
+            Self::Box64 {
+                program: Some(program),
+            } => {
+                let mut command = Command::new(program);
+                command.arg(binary);
+                command
+            }
+            // Rosetta 2 is applied by macOS itself, so the binary is started
+            // directly there (and a missing emulator is not started at all:
+            // the UI does not let a flash begin).
+            _ => Command::new(binary),
+        }
+    }
+}
+
+/// The emulator this machine runs Intel binaries with: Rosetta 2 on Apple
+/// silicon, box64 on ARM Linux.
+///
+/// `None` when there is nothing to emulate with — either because Intel
+/// binaries run as they are (an Intel machine) or because they cannot run here
+/// at all (ARM Windows, 32-bit ARM Linux, and macOS 28, which dropped
+/// Rosetta 2).
+fn intel_emulator() -> Option<Emulator> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         if rosetta_runtime_present() {
-            return Self::Installed;
+            return Some(Emulator::Rosetta { installed: true });
         }
 
+        // Apple ships Rosetta 2 for the Apple silicon releases 11 through 27.
+        // An unreadable version is treated as one that still has it: a hint
+        // the user may not need is harmless, a disabled engine is not.
         match macos_major_version() {
-            // An unreadable version falls through to `Installable`: a hint
-            // the user may not need is harmless, a disabled engine is not.
-            Some(major) if major > ROSETTA_LAST_MACOS => Self::Unavailable,
-            _ => Self::Installable,
+            Some(major) if major > ROSETTA_LAST_MACOS => None,
+            _ => Some(Emulator::Rosetta { installed: false }),
         }
-    }
-
-    /// Whether an Intel binary can be offered here.
-    fn runs_intel(self) -> bool {
-        matches!(self, Self::Installed | Self::Installable)
-    }
-
-    /// Whether the user has to install Rosetta 2 before it runs.
-    fn needs_install(self) -> bool {
-        self == Self::Installable
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        Some(Emulator::Box64 {
+            program: find_box64(),
+        })
+    } else {
+        None
     }
 }
 
@@ -375,6 +406,30 @@ fn macos_major_version() -> Option<u32> {
 /// `26`), or `None` when it is not a version.
 fn parse_macos_major(version: &str) -> Option<u32> {
     version.trim().split('.').next()?.parse().ok()
+}
+
+/// Looks for `box64`, which runs the Intel `mfastboot` on ARM Linux.
+///
+/// The `PATH` is searched first, then the directories box64 is usually
+/// installed into — a window started from a desktop session does not always
+/// inherit a login shell's `PATH`.
+fn find_box64() -> Option<PathBuf> {
+    const NAME: &str = "box64";
+    const DIRECTORIES: &[&str] = &["/usr/local/bin", "/usr/bin", "/usr/local/sbin"];
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(NAME);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    DIRECTORIES
+        .iter()
+        .map(|directory| Path::new(directory).join(NAME))
+        .find(|candidate| candidate.is_file())
 }
 
 
@@ -479,13 +534,13 @@ pub fn reboot_to_system(
                 serial
             )));
 
-            let mut clear = Command::new(&tool.path);
+            let mut clear = tool.emulator.command(&tool.path);
             if !serial.is_empty() {
                 clear.arg("-s").arg(serial);
             }
             clear.arg("oem").arg("fb_mode_clear");
 
-            let status = run_tool_command(clear, tool, &directory, emit)?;
+            let status = run_tool_command(clear, &directory, emit)?;
             if !status.success() {
                 return Err(format!("{} failed for oem fb_mode_clear", tool.label()));
             }
@@ -496,13 +551,13 @@ pub fn reboot_to_system(
                 serial
             )));
 
-            let mut restart = Command::new(&tool.path);
+            let mut restart = tool.emulator.command(&tool.path);
             if !serial.is_empty() {
                 restart.arg("-s").arg(serial);
             }
             restart.arg("reboot");
 
-            match run_tool_command(restart, tool, &directory, emit) {
+            match run_tool_command(restart, &directory, emit) {
                 Ok(status) if status.success() => Ok(()),
                 // The phone leaves fastboot while the command is running, so
                 // a non-zero exit does not mean the reboot did not happen.
@@ -688,7 +743,7 @@ fn run_mfastboot_step(
     step: &FlashOp,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
 ) -> Result<(), String> {
-    let mut command = Command::new(&tool.path);
+    let mut command = tool.emulator.command(&tool.path);
     if !job.serial.is_empty() {
         command.arg("-s").arg(&job.serial);
     }
@@ -727,7 +782,7 @@ fn run_mfastboot_step(
         }
     }
 
-    let status = run_tool_command(command, tool, &job.package.directory, emit)?;
+    let status = run_tool_command(command, &job.package.directory, emit)?;
 
     if !status.success() {
         // A `getvar` is informational, so its failure is logged instead of
@@ -755,10 +810,13 @@ fn run_mfastboot_step(
 /// returning its exit status.
 fn run_tool_command(
     mut command: Command,
-    tool: &Mfastboot,
     directory: &Path,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
 ) -> Result<std::process::ExitStatus, String> {
+    // The emulator, when there is one: failures have to name the program that
+    // was actually started (`box64`, not the binary it was given).
+    let program = command.get_program().to_string_lossy().to_string();
+
     command
         .current_dir(directory)
         .stdout(Stdio::piped())
@@ -773,7 +831,7 @@ fn run_tool_command(
 
     let mut child = command
         .spawn()
-        .map_err(|error| format!("could not run {}: {error}", tool.path.display()))?;
+        .map_err(|error| format!("could not run {program}: {error}"))?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -792,7 +850,7 @@ fn run_tool_command(
 
     child
         .wait()
-        .map_err(|error| format!("could not wait for {}: {error}", tool.path.display()))
+        .map_err(|error| format!("could not wait for {program}: {error}"))
 }
 
 /// Forwards the tool's output as log lines, splitting on both `\n` and the
@@ -882,17 +940,17 @@ mod tests {
             Mfastboot {
                 version: "26.0.0".to_owned(),
                 path: PathBuf::from("a"),
-                needs_rosetta: false,
+                emulator: Emulator::Native,
             },
             Mfastboot {
                 version: "34.0.4".to_owned(),
                 path: PathBuf::from("b"),
-                needs_rosetta: false,
+                emulator: Emulator::Native,
             },
             Mfastboot {
                 version: "28.0.2".to_owned(),
                 path: PathBuf::from("c"),
-                needs_rosetta: false,
+                emulator: Emulator::Native,
             },
         ];
 
@@ -905,28 +963,28 @@ mod tests {
     #[test]
     fn architecture_folders_are_filtered() {
         let host = std::env::consts::OS;
-        // Nothing to translate: Intel binaries run natively, and any other
+        // Nothing to translate: Intel binaries run as they are, and any other
         // architecture cannot be run at all.
-        let intel_host = Rosetta::NotNeeded;
+        let intel_host = None;
 
         // The folder for the OS and architecture we run as is always usable.
         assert_eq!(
             platform_fit(&format!("{host}_x86_64"), "x86_64", intel_host),
-            Some(PlatformFit::Native)
+            Some(Emulator::Native)
         );
         assert_eq!(
             platform_fit(&format!("{host}_arm64"), "aarch64", intel_host),
-            Some(PlatformFit::Native)
+            Some(Emulator::Native)
         );
 
         // A folder that names neither is left alone.
         assert_eq!(
             platform_fit("bundled", "x86_64", intel_host),
-            Some(PlatformFit::Native)
+            Some(Emulator::Native)
         );
         assert_eq!(
             platform_fit("vendored", "aarch64", intel_host),
-            Some(PlatformFit::Native)
+            Some(Emulator::Native)
         );
 
         // A folder for another architecture is not.
@@ -946,54 +1004,98 @@ mod tests {
         let other = if host == "linux" { "windows" } else { "linux" };
         let running = std::env::consts::ARCH;
 
-        // The architecture we run as, but for another OS: never usable, not
-        // even through Rosetta 2 (which would be offered a Linux binary).
+        // The architecture we run as, but for another OS: never usable — the
+        // emulator would be handed a binary for a foreign operating system.
+        let rosetta = Emulator::Rosetta { installed: true };
         assert_eq!(
-            platform_fit(&format!("{other}_{running}"), running, Rosetta::Installed),
+            platform_fit(&format!("{other}_{running}"), running, Some(&rosetta)),
             None
         );
         assert_eq!(
-            platform_fit(&format!("{other}_amd64"), "aarch64", Rosetta::Installable),
+            platform_fit(&format!("{other}_amd64"), "aarch64", Some(&rosetta)),
             None
         );
     }
 
     #[test]
-    fn intel_mfastboot_uses_rosetta_on_apple_silicon() {
+    fn intel_mfastboot_is_offered_through_an_emulator() {
         // The OS in the folder name is the one that has to match the host, so
         // these hold on every machine the tests run on.
         let intel = format!("{}_amd64", std::env::consts::OS);
+        let arm = "aarch64";
 
-        // With Rosetta 2 installed the Intel build runs.
+        // An ARM machine with the emulator installed runs the Intel build.
+        let rosetta = Emulator::Rosetta { installed: true };
         assert_eq!(
-            platform_fit(&intel, "aarch64", Rosetta::Installed),
-            Some(PlatformFit::Rosetta)
+            platform_fit(&intel, arm, Some(&rosetta)),
+            Some(rosetta.clone())
+        );
+        assert_eq!(rosetta.hint_ids(), None);
+
+        let box64 = Emulator::Box64 {
+            program: Some(PathBuf::from("/usr/local/bin/box64")),
+        };
+        assert_eq!(platform_fit(&intel, arm, Some(&box64)), Some(box64.clone()));
+        assert_eq!(box64.hint_ids(), None);
+
+        // Without it the build is still offered while it can be installed, so
+        // the dialog can say how — and it is marked as needing that.
+        let missing_rosetta = Emulator::Rosetta { installed: false };
+        assert_eq!(
+            platform_fit(&intel, arm, Some(&missing_rosetta)),
+            Some(missing_rosetta.clone())
+        );
+        assert_eq!(
+            missing_rosetta.hint_ids(),
+            Some((
+                "firmware-flash-rosetta-needed",
+                "firmware-flash-rosetta-install"
+            ))
         );
 
-        // Without it the build is still offered while macOS can install it,
-        // so the dialog can say how — and it is marked as needing that.
+        let missing_box64 = Emulator::Box64 { program: None };
         assert_eq!(
-            platform_fit(&intel, "aarch64", Rosetta::Installable),
-            Some(PlatformFit::Rosetta)
+            platform_fit(&intel, arm, Some(&missing_box64)),
+            Some(missing_box64.clone())
         );
-        assert!(Rosetta::Installable.needs_install());
-        assert!(!Rosetta::Installed.needs_install());
-
-        // macOS 28 dropped Rosetta 2, so the Intel build is not offered.
         assert_eq!(
-            platform_fit(&intel, "aarch64", Rosetta::Unavailable),
+            missing_box64.hint_ids(),
+            Some(("firmware-flash-box64-needed", "firmware-flash-box64-install"))
+        );
+
+        // macOS 28 dropped Rosetta 2 (and 32-bit ARM Linux has no box64), so
+        // the Intel build is not offered there at all.
+        assert_eq!(platform_fit(&intel, arm, None), None);
+
+        // An emulator does not make an Apple silicon binary run on an Intel
+        // machine either.
+        assert_eq!(
+            platform_fit(&format!("{}_arm64", std::env::consts::OS), "x86_64", Some(&rosetta)),
             None
         );
+    }
 
-        // Rosetta 2 does not make an Apple silicon binary run on an Intel Mac.
+    #[test]
+    fn box64_starts_mfastboot() {
+        let binary = PathBuf::from("/opt/lmnflash/mfastboot/linux_amd64/31.0.2/mfastboot");
+
+        let box64 = Emulator::Box64 {
+            program: Some(PathBuf::from("/usr/local/bin/box64")),
+        };
+        let command = box64.command(&binary);
+        assert_eq!(command.get_program(), "/usr/local/bin/box64");
         assert_eq!(
-            platform_fit(
-                &format!("{}_arm64", std::env::consts::OS),
-                "x86_64",
-                Rosetta::Installed
-            ),
-            None
+            command.get_args().collect::<Vec<_>>(),
+            [binary.as_os_str()]
         );
+
+        // Rosetta 2 is applied by macOS itself, so the binary is started
+        // directly — and so is a native build.
+        for emulator in [Emulator::Native, Emulator::Rosetta { installed: true }] {
+            let command = emulator.command(&binary);
+            assert_eq!(command.get_program(), binary.as_os_str());
+            assert_eq!(command.get_args().count(), 0);
+        }
     }
 
     #[test]
@@ -1011,7 +1113,7 @@ mod tests {
         let tool = Mfastboot {
             version: "34.0.4".to_owned(),
             path: PathBuf::from("mfastboot"),
-            needs_rosetta: false,
+            emulator: Emulator::Native,
         };
 
         assert_eq!(tool.label(), "mfastboot 34.0.4");

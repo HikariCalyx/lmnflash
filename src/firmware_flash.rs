@@ -227,13 +227,14 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         .align_y(Alignment::Center),
     );
 
-    // The macOS `mfastboot` is an Intel binary: on Apple silicon it only runs
-    // once Rosetta 2 is installed. Say how to get it instead of letting the
+    // The shipped `mfastboot` is an Intel binary: an ARM machine only runs it
+    // through an emulator (Rosetta 2 on macOS, box64 on Linux), which may
+    // still have to be installed. Say how to get it instead of letting the
     // first step fail, and keep Start disabled until it (or the built-in
     // engine) is chosen.
-    let needs_rosetta = matches!(&flash.engine, Engine::Mfastboot(tool) if tool.needs_rosetta);
-    if needs_rosetta {
-        for key in ["firmware-flash-rosetta-needed", "firmware-flash-rosetta-install"] {
+    let emulator_hint = emulator_hint(&flash.engine);
+    if let Some((needed, install)) = emulator_hint {
+        for key in [needed, install] {
             content = content.push(
                 text(l10n.tr(key))
                     .size(12.0)
@@ -285,12 +286,12 @@ fn setup_section(state: &State) -> Element<'_, Message> {
     }
 
     // Flashing needs a parsed package, a selected device, at least one
-    // checked procedure, and a tool that can actually start (the Intel
-    // `mfastboot` on a Mac without Rosetta 2 cannot).
+    // checked procedure, and a tool that can actually start (an Intel build
+    // whose emulator is missing cannot).
     let ready = flash.plan.is_some()
         && flash.selected.is_some()
         && enabled_procedures(flash) > 0
-        && !needs_rosetta;
+        && emulator_hint.is_none();
     let start = button(text(l10n.tr("firmware-flash-start"))).width(Fill);
     content = content.push(if ready && !busy {
         start.on_press(Message::FirmwareFlashStart)
@@ -606,6 +607,15 @@ fn engine_options(state: &State) -> Vec<Labeled<Engine>> {
     }
 
     options
+}
+
+/// The localized lines telling the user to install the emulator the selected
+/// engine needs (Rosetta 2, box64), or `None` when it can start right now.
+fn emulator_hint(engine: &Engine) -> Option<(&'static str, &'static str)> {
+    match engine {
+        Engine::Mfastboot(tool) => tool.emulator.hint_ids(),
+        Engine::Builtin => None,
+    }
 }
 
 /// An "Erase Userdata" / "Erase NV cache" button. These add standalone
