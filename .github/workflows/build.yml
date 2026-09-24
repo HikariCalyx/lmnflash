@@ -114,10 +114,6 @@ jobs:
     runs-on: macos-26
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
-      # build.sh reads these to point the x86_64 slice at the Rosetta
-      # Homebrew prefix so rusb finds the matching-arch libusb.
-      X86_64_PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
-      X86_64_LIBRARY_PATH: /usr/local/lib
 
     steps:
       - uses: actions/checkout@v4
@@ -138,22 +134,13 @@ jobs:
           key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: macos-cargo-
 
-      # Install arm64 libusb (native Homebrew prefix: /opt/homebrew)
-      - name: Install arm64 dependencies
-        run: brew install libusb pkg-config
-
-      # Install x86_64 libusb via a Rosetta 2 Homebrew prefix (/usr/local).
-      # rusb links libusb via pkg-config; each slice must link against a
-      # matching-arch library.
-      - name: Install x86_64 dependencies (Rosetta)
-        run: |
-          softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
-          if [[ ! -f /usr/local/bin/brew ]]; then
-            arch -x86_64 /bin/bash -c \
-              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-              < /dev/null
-          fi
-          arch -x86_64 /usr/local/bin/brew install libusb pkg-config
+      # No native SDKs to install: the `fastboot` crate pulls in `rusb` with its
+      # `vendored` feature, so libusb is compiled from source for each slice by
+      # the `cc` crate (clang --target=<triple>) and every other native
+      # dependency is a system framework (AppKit/WebKit/IOKit).
+      # In particular there is no x86_64 Homebrew prefix to set up: Homebrew
+      # refuses to install on Intel macOS (including under Rosetta 2), and it
+      # was never needed here anyway.
 
       - name: Install Python dependencies
         run: pip3 install --break-system-packages semver toml mako dmgbuild

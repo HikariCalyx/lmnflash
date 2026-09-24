@@ -29,13 +29,12 @@ sips -z 1024 1024 src/icon.png --out LMNFlash.iconset/icon_512x512@2x.png
 iconutil -c icns LMNFlash.iconset --output LMNFlash.app/Contents/Resources/LMNFlash.icns
 rm -rf LMNFlash.iconset
 
-# Build macOS universal binary.
+# Build macOS universal binary. No cross-arch library prefix is needed: the
+# `fastboot` crate enables rusb's `vendored` feature, so libusb is compiled from
+# source for the target arch by the `cc` crate, and every other native
+# dependency is a system framework.
 cargo build --manifest-path Cargo.toml --bin lmnflash --target=aarch64-apple-darwin --release
-# X86_64_PKG_CONFIG_PATH / X86_64_LIBRARY_PATH are optional; set in CI to
-# point at the Rosetta 2 Homebrew prefix so rusb finds the x86_64 libusb.
-env PKG_CONFIG_PATH="${X86_64_PKG_CONFIG_PATH:-}" \
-    LIBRARY_PATH="${X86_64_LIBRARY_PATH:-}" \
-    cargo build --manifest-path Cargo.toml --bin lmnflash --target=x86_64-apple-darwin --release
+cargo build --manifest-path Cargo.toml --bin lmnflash --target=x86_64-apple-darwin --release
 lipo -create target/{aarch64-apple-darwin,x86_64-apple-darwin}/release/lmnflash -output LMNFlash.app/Contents/MacOS/lmnflash
 
 # Ship Motorola's mfastboot with the bundle: the firmware-flash feature prefers it
