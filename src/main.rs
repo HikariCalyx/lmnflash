@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bootloader;
+mod carrier;
 mod config;
 mod decrypt;
 mod factory_reset;
@@ -650,12 +651,29 @@ struct FirmwareFlashState {
     selected: Option<String>,
     /// `true` while the selected device's variables are read.
     reading_device: bool,
+    /// `true` while the "Read Info" commands run on the selected phone.
+    reading_info: bool,
+    /// `true` while what they reported is on screen.
+    info_view: bool,
+    /// Their output, each command line followed by what it answered.
+    info_lines: Vec<String>,
+    /// Failure of that read (the phone may have been unplugged).
+    info_error: Option<String>,
+    /// `true` while the IMEIs in that output are masked.
+    hide_sensitive: bool,
     /// `securestate`, `cid` and `product` of the selected device.
     device_vars: Option<fastboot_info::DeviceVars>,
     /// Failure of that read (the phone may have been unplugged).
     device_vars_error: Option<String>,
     /// `true` while the warning before flashing is shown.
     confirming: bool,
+    /// `true` when the package's project code differs from the selected
+    /// phone's, i.e. when flashing it is expected to brick the phone. The
+    /// warning then has to be read before it can be confirmed.
+    project_mismatch: bool,
+    /// Seconds left before "Yes" becomes clickable after that warning; `0`
+    /// whenever there is nothing to wait for.
+    confirm_countdown: u8,
     /// `true` while the steps run.
     running: bool,
     step_index: usize,
@@ -699,9 +717,16 @@ impl Default for FirmwareFlashState {
             list_error: None,
             selected: None,
             reading_device: false,
+            reading_info: false,
+            info_view: false,
+            info_lines: Vec::new(),
+            info_error: None,
+            hide_sensitive: false,
             device_vars: None,
             device_vars_error: None,
             confirming: false,
+            project_mismatch: false,
+            confirm_countdown: 0,
             running: false,
             step_index: 0,
             step_total: 0,
@@ -951,6 +976,18 @@ enum Message {
     FirmwareFlashEngineSelected(flash_engine::Engine),
     /// Firmware Flash: the "verify checksums" box was toggled.
     FirmwareFlashVerifyToggled(bool),
+    /// Firmware Flash: read what the selected phone reports about itself
+    /// (`getvar all`, `oem hw`, `oem build-signature`, `oem read_sv`,
+    /// `oem config`).
+    FirmwareFlashReadInfo,
+    /// Firmware Flash: those commands finished.
+    FirmwareFlashInfoRead(Result<Vec<String>, String>),
+    /// Firmware Flash: mask (or unmask) the IMEIs in that output.
+    FirmwareFlashInfoSensitiveToggled(bool),
+    /// Firmware Flash: copy that output.
+    FirmwareFlashInfoCopy,
+    /// Firmware Flash: leave the output.
+    FirmwareFlashInfoClosed,
     /// Firmware Flash: re-scan the USB bus for connected phones.
     FirmwareFlashRescan,
     /// Firmware Flash: the connected devices were listed.
@@ -963,6 +1000,9 @@ enum Message {
     FirmwareFlashDeviceVarsRead(String, Result<fastboot_info::DeviceVars, String>),
     /// Firmware Flash: "Start Flashing" was pressed (asks for confirmation).
     FirmwareFlashStart,
+    /// Firmware Flash: one second of the countdown elapsed that unlocks "Yes"
+    /// after the warning that this package belongs to another phone.
+    FirmwareFlashCountdownTick,
     /// Firmware Flash: the warning was confirmed; run the package.
     FirmwareFlashConfirmed,
     /// Firmware Flash: back from the warning to the setup form.
@@ -1031,13 +1071,23 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.loading
         || firmware.running
         || firmware.rebooting
+        || firmware.reading_info
         || firmware.reading_device;
-    if animating {
-        iced::time::every(std::time::Duration::from_millis(64))
-            .map(|_| Message::AnimTick)
+    let ticks = if animating {
+        iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
         iced::Subscription::none()
-    }
+    };
+    // The countdown that unlocks "Yes" after the brick warning runs on whole
+    // seconds, so it does not need the spinner's fast tick.
+    let countdown = if firmware.confirm_countdown > 0 {
+        iced::time::every(std::time::Duration::from_secs(1))
+            .map(|_| Message::FirmwareFlashCountdownTick)
+    } else {
+        iced::Subscription::none()
+    };
+
+    iced::Subscription::batch([ticks, countdown])
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -1317,9 +1367,38 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             flash.editing = false;
             flash.confirming = true;
+            // Flashing a package that belongs to another phone is expected to
+            // brick it, so that case gets its own warning and a countdown
+            // before it can be confirmed.
+            flash.project_mismatch = project_mismatch(flash);
+            flash.confirm_countdown = if flash.project_mismatch {
+                MISMATCH_COUNTDOWN_SECONDS
+            } else {
+                0
+            };
             Task::none()
         }
-        Message::FirmwareFlashConfirmed => start_firmware_flash(state),
+        Message::FirmwareFlashCountdownTick => {
+            let flash = &mut state.flash.firmware;
+
+            // Only the warning counts down, and only while it is on screen.
+            if flash.confirming && flash.confirm_countdown > 0 {
+                flash.confirm_countdown -= 1;
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashConfirmed => {
+            let flash = &state.flash.firmware;
+
+            // The button is disabled while the warning counts down; ignoring
+            // the message as well means no click can skip the wait.
+            if flash.confirm_countdown > 0 {
+                return Task::none();
+            }
+
+            start_firmware_flash(state)
+        }
         Message::FirmwareFlashEditProcedures => {
             let flash = &mut state.flash.firmware;
             if flash.loading || flash.running || flash.plan.is_none() {
@@ -1328,6 +1407,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             flash.editing = true;
             flash.confirming = false;
+            flash.confirm_countdown = 0;
             Task::none()
         }
         Message::FirmwareFlashProcedureToggled(index, enabled) => {
@@ -1422,6 +1502,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // package and the selected device, so a retry does not have to
             // unpack the firmware all over again.
             flash.confirming = false;
+            flash.project_mismatch = false;
+            flash.confirm_countdown = 0;
             flash.result = None;
             flash.reboot_result = None;
             flash.export_result = None;
@@ -1540,6 +1622,40 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Err(error) => flash.export_result = Some(Err(error)),
             }
 
+            Task::none()
+        }
+        Message::FirmwareFlashReadInfo => start_firmware_flash_read_info(state),
+        Message::FirmwareFlashInfoRead(result) => {
+            let flash = &mut state.flash.firmware;
+            flash.reading_info = false;
+
+            match result {
+                Ok(lines) => flash.info_lines = lines,
+                Err(error) => flash.info_error = Some(error),
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashInfoSensitiveToggled(hidden) => {
+            state.flash.firmware.hide_sensitive = hidden;
+            Task::none()
+        }
+        Message::FirmwareFlashInfoCopy => {
+            let flash = &state.flash.firmware;
+            let text = info_text(flash);
+
+            if text.is_empty() {
+                return Task::none();
+            }
+
+            iced::clipboard::write::<Message>(text)
+        }
+        Message::FirmwareFlashInfoClosed => {
+            let flash = &mut state.flash.firmware;
+            flash.info_view = false;
+            flash.info_lines.clear();
+            flash.info_error = None;
+            flash.hide_sensitive = false;
             Task::none()
         }
         Message::FirmwareFlashReboot => {
@@ -2945,6 +3061,8 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
     flash.running = true;
     flash.editing = false;
     flash.confirming = false;
+    // The warning is gone, so its countdown stops ticking too.
+    flash.confirm_countdown = 0;
     flash.result = None;
     flash.reboot_result = None;
     flash.progress = None;
@@ -3061,6 +3179,54 @@ fn start_firmware_flash_export(state: &mut State) -> Task<Message> {
     )
 }
 
+/// Reads everything the "Read Info" view shows from the selected phone, on a
+/// worker thread (the bootloader takes a moment to answer five commands).
+///
+/// The view opens before the read finishes, so the spinner is what the user
+/// sees while it runs.
+fn start_firmware_flash_read_info(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    let Some(serial) = flash.selected.clone() else {
+        return Task::none();
+    };
+
+    if flash.loading
+        || flash.running
+        || flash.rebooting
+        || flash.reading_device
+        || flash.reading_info
+    {
+        return Task::none();
+    }
+
+    flash.reading_info = true;
+    flash.info_view = true;
+    flash.info_lines.clear();
+    flash.info_error = None;
+    flash.hide_sensitive = false;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::read_info_lines(&serial))
+                .await
+                .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        Message::FirmwareFlashInfoRead,
+    )
+}
+
+/// The "Read Info" output as it is shown — masked when the user asked for
+/// that, so copying never hands out more than the screen does.
+fn info_text(flash: &FirmwareFlashState) -> String {
+    let lines = if flash.hide_sensitive {
+        fastboot_info::hide_sensitive(&flash.info_lines)
+    } else {
+        flash.info_lines.clone()
+    };
+
+    lines.join("\n")
+}
+
 /// Sends the phone into `mode` (out of fastboot, into the bootloader, the
 /// recovery, userspace fastboot, or recovery's sideload mode).
 ///
@@ -3151,6 +3317,28 @@ fn enabled_procedures(flash: &FirmwareFlashState) -> usize {
             .count(),
         None => 0,
     }
+}
+
+/// How long the warning that the package belongs to another phone has to be
+/// read before "Yes" can be clicked.
+const MISMATCH_COUNTDOWN_SECONDS: u8 = 10;
+
+/// Whether the loaded package is made for another phone than the selected one.
+///
+/// Both sides have to name a project code: a package without a `vbmeta` image,
+/// or a bootloader that reports no `product`, leaves the question open, and an
+/// open question is not a warning.
+fn project_mismatch(flash: &FirmwareFlashState) -> bool {
+    flashfile::project_code_mismatch(
+        flash
+            .plan
+            .as_ref()
+            .and_then(|package| package.project_code.as_deref()),
+        flash
+            .device_vars
+            .as_ref()
+            .and_then(|variables| variables.product.as_deref()),
+    )
 }
 
 /// Checks (or unchecks) the package's own `erase` steps that belong to one

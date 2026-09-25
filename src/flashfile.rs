@@ -209,6 +209,12 @@ pub struct FlashPackage {
     /// The CID (carrier/region code) of the package: the `<cid_value>` of the
     /// flashfile, or the one embedded in its `vbmeta` image.
     pub cid: Option<String>,
+    /// The project code of the package, read from the `vbmeta` image it
+    /// carries: the codename in front of the CID, without the `_<cid>` that
+    /// follows it (`arcfox` of `arcfox_50`). `None` when the package has no
+    /// `vbmeta` image — that is not an error, there is simply nothing to
+    /// report.
+    pub project_code: Option<String>,
     /// Partitions whose steps were dropped because a package must not write
     /// them (see `IGNORED_PARTITIONS`), spelled the way the flashfile does.
     pub ignored_partitions: Vec<String>,
@@ -470,11 +476,14 @@ pub fn load(
         .unwrap_or_else(|| directory.clone());
 
     // The CID is declared by the flashfile, or embedded in the `vbmeta` image
-    // when it does not declare one.
+    // when it does not declare one; the project code only ever comes from that
+    // image, and a package without one simply has neither.
+    let identifier = vbmeta_identifier(&directory, &steps);
+    let project_code = identifier.as_deref().and_then(project_codename);
     let cid = header
         .cid
         .clone()
-        .or_else(|| cid_from_vbmeta(&directory, &steps));
+        .or_else(|| identifier.as_deref().and_then(cid_from_project_code));
 
     Ok(FlashPackage {
         directory,
@@ -482,19 +491,38 @@ pub fn load(
         model: header.model,
         software_version: header.software_version,
         cid,
+        project_code,
         ignored_partitions,
         steps,
     })
 }
 
-/// Reads the CID out of the package's `vbmeta` image, used when the
-/// `flashfile.xml` declares no `<cid_value>`.
+/// The project code a package reports: the codename in front of the CID
+/// (`arcfox` of `arcfox_50`).
+fn project_codename(identifier: &str) -> Option<String> {
+    let (codename, _) = identifier.rsplit_once('_')?;
+
+    (!codename.is_empty()).then(|| codename.to_owned())
+}
+
+/// The CID a project code encodes: the decimal number after the last `_`
+/// (`arcfox_50` → `0x0032`).
+fn cid_from_project_code(identifier: &str) -> Option<String> {
+    let (_, value) = identifier.rsplit_once('_')?;
+
+    value.parse::<u32>().ok().map(format_cid)
+}
+
+/// Reads the identifier out of the package's `vbmeta` image.
 ///
 /// The image carries the code Motorola puts in `vbmeta` as plain text,
 /// followed by the device codename and the CID in decimal — a real image has
-/// `HAB_META\0arcfox_50`, i.e. CID `0x0032` (`reference/M_cid.md` documents
-/// the same string without the NUL: `HAB_METAeqs_50`).
-fn cid_from_vbmeta(directory: &Path, steps: &[FlashOp]) -> Option<String> {
+/// `HAB_META\0arcfox_50` (`reference/M_cid.md` documents the same string
+/// without the NUL: `HAB_METAeqs_50`).
+///
+/// A package without a `vbmeta` image (or with one that carries no marker) has
+/// no identifier: that is not a failure, the dialog just has nothing to show.
+fn vbmeta_identifier(directory: &Path, steps: &[FlashOp]) -> Option<String> {
     /// How much of the image is searched. `vbmeta` is a few hundred KiB; the
     /// cap only keeps a mis-declared `filename` from pulling in a huge file.
     const MAX_SCAN: u64 = 8 << 20;
@@ -517,8 +545,8 @@ fn cid_from_vbmeta(directory: &Path, steps: &[FlashOp]) -> Option<String> {
     {
         let position = search_from + offset;
 
-        if let Some(cid) = cid_after_marker(&bytes[position + MAGIC.len()..]) {
-            return Some(cid);
+        if let Some(identifier) = identifier_after_marker(&bytes[position + MAGIC.len()..]) {
+            return Some(identifier);
         }
 
         search_from = position + MAGIC.len();
@@ -527,9 +555,10 @@ fn cid_from_vbmeta(directory: &Path, steps: &[FlashOp]) -> Option<String> {
     None
 }
 
-/// Reads the CID that follows a `HAB_META` marker: `<codename>_<cid>`, with
-/// the decimal code after the last `_` (`arcfox_50` → `50`).
-fn cid_after_marker(rest: &[u8]) -> Option<String> {
+/// Reads the identifier that follows a `HAB_META` marker: `<codename>_<cid>`,
+/// with the decimal code after the last `_` (`arcfox_50`). Anything else after
+/// a marker — an image can contain the byte sequence by chance — is rejected.
+fn identifier_after_marker(rest: &[u8]) -> Option<String> {
     // A NUL byte separates the marker from the codename in a real image; the
     // codename is then ended by the NUL that follows it.
     let identifier: String = rest
@@ -540,9 +569,13 @@ fn cid_after_marker(rest: &[u8]) -> Option<String> {
         .map(|byte| char::from(*byte))
         .collect();
 
-    let (_, value) = identifier.rsplit_once('_')?;
+    let (codename, value) = identifier.rsplit_once('_')?;
 
-    value.parse::<u32>().ok().map(format_cid)
+    if codename.is_empty() || value.parse::<u32>().is_err() {
+        return None;
+    }
+
+    Some(identifier)
 }
 
 /// The `vbmeta` image of the package: the file its `flash` step names, or a
@@ -575,6 +608,23 @@ fn cid_allows_any_region(cid: &str) -> bool {
 /// device with a super CID takes firmware of any region.
 pub(crate) fn cid_mismatch(package: &str, device: &str) -> bool {
     !package.eq_ignore_ascii_case(device) && !cid_allows_any_region(device)
+}
+
+/// Whether a package and a device disagree about the project code, i.e. whether
+/// they are made for different phones.
+///
+/// A missing code on either side is not a mismatch: there is simply nothing to
+/// compare (a package without a `vbmeta` image, or a bootloader that does not
+/// report `product`), and guessing would be worse than saying nothing.
+pub(crate) fn project_code_mismatch(package: Option<&str>, device: Option<&str>) -> bool {
+    let (Some(package), Some(device)) = (package, device) else {
+        return false;
+    };
+
+    let package = package.trim();
+    let device = device.trim();
+
+    !package.is_empty() && !device.is_empty() && !package.eq_ignore_ascii_case(device)
 }
 
 /// Formats a CID the way the flashfiles write it, e.g. `0x0032`.
@@ -950,6 +1000,25 @@ mod tests {
     }
 
     #[test]
+    fn project_code_mismatch_needs_both_sides() {
+        // Two phones of the same project agree, whatever the casing.
+        assert!(!project_code_mismatch(Some("arcfox"), Some("arcfox")));
+        assert!(!project_code_mismatch(Some("arcfox"), Some("ARCFOX")));
+        assert!(!project_code_mismatch(Some(" arcfox "), Some("arcfox")));
+
+        // Another project means another phone.
+        assert!(project_code_mismatch(Some("arcfox"), Some("eqs")));
+
+        // Nothing to compare is not a mismatch: a package without a `vbmeta`
+        // image, or a bootloader that reports no `product`, is not a warning.
+        assert!(!project_code_mismatch(None, Some("arcfox")));
+        assert!(!project_code_mismatch(Some("arcfox"), None));
+        assert!(!project_code_mismatch(None, None));
+        assert!(!project_code_mismatch(Some(""), Some("arcfox")));
+        assert!(!project_code_mismatch(Some("arcfox"), Some("   ")));
+    }
+
+    #[test]
     fn ignored_partitions_are_dropped_from_the_steps() {
         let xml = r#"<flashing><steps>
             <step operation="flash" partition="boot" filename="boot.img"/>
@@ -1073,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_the_cid_inside_vbmeta() {
+    fn reads_the_project_code_inside_vbmeta() {
         let directory = std::env::temp_dir().join("lmnflash-cid-test");
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
@@ -1085,7 +1154,7 @@ mod tests {
         }];
 
         // Without a `vbmeta` there is nothing to read.
-        assert_eq!(cid_from_vbmeta(&directory, &steps), None);
+        assert_eq!(vbmeta_identifier(&directory, &steps), None);
 
         // A real image stores the marker, a NUL and `<codename>_<cid in
         // decimal>` — `reference/vbmeta.img` contains `HAB_META\0arcfox_50`.
@@ -1094,16 +1163,31 @@ mod tests {
         image.extend_from_slice(&[0xFFu8; 64]);
         std::fs::write(directory.join("vbmeta.img"), &image).unwrap();
 
-        assert_eq!(cid_from_vbmeta(&directory, &steps).as_deref(), Some("0x0032"));
-
-        // The spelling documented in `M_cid.md` (no separator) works as well,
-        // and a marker without a code is skipped rather than guessed at.
         assert_eq!(
-            cid_after_marker(b"HAB_METAeqs_50\0").as_deref(),
-            Some("0x0032")
+            vbmeta_identifier(&directory, &steps).as_deref(),
+            Some("arcfox_50")
         );
-        assert_eq!(cid_after_marker(b"HAB_META\0nomarker\0"), None);
-        assert_eq!(cid_after_marker(b"HAB_META\0arcfox\0"), None);
+        // The project code is the codename in front of the CID …
+        assert_eq!(
+            project_codename("arcfox_50").as_deref(),
+            Some("arcfox")
+        );
+        assert_eq!(project_codename("arcfox"), None);
+        // … and the CID is the decimal number in it.
+        assert_eq!(cid_from_project_code("arcfox_50").as_deref(), Some("0x0032"));
+        assert_eq!(cid_from_project_code("arcfox").as_deref(), None);
+        assert_eq!(cid_from_project_code("arcfox_DEADX").as_deref(), None);
+
+        // The spelling documented in `M_cid.md` (no separator between the
+        // marker and the codename) works as well, and a marker without a code
+        // is skipped rather than guessed at.
+        assert_eq!(
+            identifier_after_marker(b"eqs_50\0").as_deref(),
+            Some("eqs_50")
+        );
+        assert_eq!(identifier_after_marker(b"\0nomarker\0"), None);
+        assert_eq!(identifier_after_marker(b"\0arcfox\0"), None);
+        assert_eq!(identifier_after_marker(b"\0_50\0"), None);
 
         let _ = std::fs::remove_dir_all(&directory);
     }

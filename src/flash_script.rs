@@ -258,6 +258,7 @@ mod tests {
             model: Some("XT2451-2".to_owned()),
             software_version: Some("U1SJS34.72-35-3".to_owned()),
             cid: Some("0x0032".to_owned()),
+            project_code: Some("arcfox_50".to_owned()),
             ignored_partitions: Vec::new(),
             steps: vec![
                 FlashOp::Flash {

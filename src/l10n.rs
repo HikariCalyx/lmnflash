@@ -317,5 +317,32 @@ mod tests {
         assert_eq!(Language::from_code("fr-FR"), Some(Language::Fr));
         assert_eq!(Language::from_code("pl"), None);
     }
+
+    /// The brick warning and its countdown must interpolate in every locale.
+    ///
+    /// A translation that names an argument differently (or not at all) would
+    /// otherwise only show up as a warning with a hole in it.
+    #[test]
+    fn the_project_mismatch_warning_renders_in_every_locale() {
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            let warning = bundle.tr_with_args(
+                "firmware-flash-project-mismatch",
+                &[
+                    ("package", "arcfox".to_owned()),
+                    ("device", "eqs".to_owned()),
+                ],
+            );
+            assert!(warning.contains("arcfox"), "{language:?}: {warning}");
+            assert!(warning.contains("eqs"), "{language:?}: {warning}");
+
+            let countdown = bundle.tr_with_args(
+                "firmware-flash-brick-countdown",
+                &[("seconds", "10".to_owned())],
+            );
+            assert!(countdown.contains("10"), "{language:?}: {countdown}");
+        }
+    }
 }
 

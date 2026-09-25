@@ -20,7 +20,7 @@ use iced::widget::text::Shaping;
 use iced::{Alignment, Element, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
-use crate::fastboot_info::SecureState;
+use crate::fastboot_info::{self, SecureState};
 use crate::flash_engine::{Engine, RebootMode};
 use crate::flashfile::{EraseGroup, FlashPart};
 use crate::guided::spinner;
@@ -35,6 +35,39 @@ pub(crate) const LOG_SCROLL_ID: &str = "firmware-flash-log";
 /// button: at the widget's 30 px default it drew more attention than the text
 /// it belongs to.
 const BAR_HEIGHT: f32 = 6.0;
+
+/// Size of the tool output the dialog shows (the flashing log and `Read Info`).
+///
+/// Monospace reads smaller than the proportional font at the same size, so it
+/// is a step up from the labels around it.
+const OUTPUT_SIZE: f32 = 13.0;
+
+/// The font the tool output is written in.
+///
+/// iced's [`iced::Font::MONOSPACE`] is a *generic* family and iced bundles no
+/// font of its own, so the system picks it — and on a machine whose monospace
+/// font is a CJK one that is a trap: those fonts map ASCII `0x5C` to their own
+/// character, so a Korean font shows the won sign (`₩`) where the output had a
+/// backslash. Naming the platform's classic monospace font keeps the output
+/// ASCII-shaped.
+fn output_font() -> iced::Font {
+    let family = {
+        #[cfg(target_os = "windows")]
+        {
+            "Consolas"
+        }
+        #[cfg(target_os = "macos")]
+        {
+            "Menlo"
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            "DejaVu Sans Mono"
+        }
+    };
+
+    iced::Font::with_name(family)
+}
 
 /// A progress bar at the height used everywhere in this dialog.
 fn bar<'a>(fraction: f32) -> Element<'a, Message> {
@@ -91,6 +124,8 @@ fn card(state: &State) -> Element<'_, Message> {
         content = content.push(procedures_section(state));
     } else if flash.confirming {
         content = content.push(confirmation_section(state));
+    } else if flash.info_view {
+        content = content.push(info_section(state));
     } else {
         content = content.push(setup_section(state));
     }
@@ -181,6 +216,12 @@ fn setup_section(state: &State) -> Element<'_, Message> {
             // The carrier/region the package is for (from the flashfile, or
             // read out of its `vbmeta` image).
             info_row(l10n.tr("firmware-flash-cid"), package.cid.clone()),
+            // The codename and CID the package's `vbmeta` carries
+            // (`arcfox_50`); a package without one shows nothing here.
+            info_row(
+                l10n.tr("firmware-flash-project-code"),
+                package.project_code.clone(),
+            ),
             // The procedures that will run, with the button that opens the
             // checklist used to pick them.
             row![
@@ -576,25 +617,92 @@ fn procedures_section(state: &State) -> Element<'_, Message> {
 }
 
 /// The warning shown after "Start Flashing", before anything is written.
+///
+/// When the package is made for another phone than the selected one, that is
+/// spelled out and "Yes" stays disabled until the countdown ran out: flashing
+/// another project's firmware is expected to brick the phone, so it must not be
+/// a reflex click.
 fn confirmation_section(state: &State) -> Element<'_, Message> {
     let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
 
-    column![
+    let mut content = column![].spacing(10).width(Fill);
+
+    if flash.project_mismatch {
+        content = content.push(
+            text(project_mismatch_warning(state))
+                .size(13.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(iced::widget::text::danger),
+        );
+    }
+
+    content = content.push(
         text(l10n.tr("firmware-flash-confirm"))
             .size(13.0)
             .width(Fill)
             .wrapping(Wrapping::WordOrGlyph)
             .style(warning_orange),
+    );
+
+    // The countdown is what makes the warning hard to skip, so it is shown as
+    // long as "Yes" is not clickable.
+    if flash.confirm_countdown > 0 {
+        content = content.push(
+            text(l10n.tr_with_args(
+                "firmware-flash-brick-countdown",
+                &[("seconds", flash.confirm_countdown.to_string())],
+            ))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger),
+        );
+    }
+
+    let yes = button(text(l10n.tr("guided-yes")));
+    let yes = if flash.confirm_countdown > 0 {
+        yes
+    } else {
+        yes.on_press(Message::FirmwareFlashConfirmed)
+    };
+
+    content.push(
         row![
-            button(text(l10n.tr("guided-yes"))).on_press(Message::FirmwareFlashConfirmed),
+            yes,
             button(text(l10n.tr("guided-no"))).on_press(Message::FirmwareFlashBack),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-    ]
-    .spacing(10)
-    .width(Fill)
+    )
     .into()
+}
+
+/// The two project codes of a mismatched package and phone, saying what they
+/// are and what flashing them together does.
+///
+/// A code that is somehow missing by the time this is drawn is named as such
+/// rather than dropped: the sentence has to stay readable either way.
+fn project_mismatch_warning(state: &State) -> String {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    let package = flash
+        .plan
+        .as_ref()
+        .and_then(|package| package.project_code.clone())
+        .unwrap_or_else(|| "—".to_owned());
+    let device = flash
+        .device_vars
+        .as_ref()
+        .and_then(|variables| variables.product.clone())
+        .unwrap_or_else(|| "—".to_owned());
+
+    l10n.tr_with_args(
+        "firmware-flash-project-mismatch",
+        &[("package", package), ("device", device)],
+    )
 }
 
 /// The running flash: current step, byte progress, and the tool's log.
@@ -707,8 +815,8 @@ fn running_section(state: &State) -> Element<'_, Message> {
         let lines = iced::widget::Column::with_children(
             flash.log.iter().map(|line| {
                 text(line.clone())
-                    .size(11.0)
-                    .font(iced::Font::MONOSPACE)
+                    .size(OUTPUT_SIZE)
+                    .font(output_font())
                     .into()
             }),
         )
@@ -933,9 +1041,14 @@ fn device_info_section(state: &State) -> Option<Element<'_, Message>> {
             l10n.tr("firmware-flash-device-product"),
             variables.product.clone(),
         ),
+        // The bootloader answers with the software channel code, so the name
+        // behind it is written after it: `retcn (Retail China)`.
         info_row(
             l10n.tr("firmware-flash-device-carrier"),
-            variables.carrier.clone(),
+            variables
+                .carrier
+                .as_deref()
+                .map(|carrier| crate::carrier::labeled(carrier, l10n)),
         ),
     ]
     .spacing(2)
@@ -1015,8 +1128,23 @@ fn device_row(state: &State, busy: bool) -> Element<'_, Message> {
 
     let refresh = button(text(l10n.tr("factory-reset-refresh")));
 
+    // Reading the phone's own report needs a device, and has to wait until
+    // whatever else is talking to it (the variable read, a flash) is done.
+    let read_info = button(text(l10n.tr("firmware-flash-read-info")));
+    let read_info = if flash.selected.is_some()
+        && !busy
+        && !flash.reading_device
+        && !flash.rebooting
+        && !flash.reading_info
+    {
+        read_info.on_press(Message::FirmwareFlashReadInfo)
+    } else {
+        read_info
+    };
+
     row![
         container(status).width(Fill),
+        read_info,
         if busy {
             refresh
         } else {
@@ -1028,13 +1156,111 @@ fn device_row(state: &State, busy: bool) -> Element<'_, Message> {
     .into()
 }
 
+/// What the "Read Info" commands reported, with the buttons that hide the
+/// IMEIs, copy the text, and go back to the setup form.
+fn info_section(state: &State) -> Element<'_, Message> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    let mut content = column![text(l10n.tr("firmware-flash-read-info")).size(16.0)]
+        .spacing(10)
+        .width(Fill);
+
+    if flash.reading_info {
+        content = content.push(busy_row(state, l10n.tr("retcn-fill-fastboot-fetching")));
+    } else if let Some(error) = &flash.info_error {
+        content = content.push(
+            text(error.clone())
+                .size(13.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(iced::widget::text::danger),
+        );
+    }
+
+    if !flash.info_lines.is_empty() {
+        // Tool output, so it is monospaced like the flashing log; the text
+        // cannot be selected, hence the Copy button below.
+        let showing = if flash.hide_sensitive {
+            fastboot_info::hide_sensitive(&flash.info_lines)
+        } else {
+            flash.info_lines.clone()
+        };
+
+        let lines = iced::widget::Column::with_children(
+            showing.into_iter().map(|line| {
+                text(line)
+                    .size(OUTPUT_SIZE)
+                    .font(output_font())
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
+                    .into()
+            }),
+        )
+        .spacing(2)
+        .align_x(Alignment::Start);
+
+        content = content.push(
+            container(scrollable(lines).width(Fill).height(280))
+                .padding(6)
+                .width(Fill)
+                .style(container::rounded_box),
+        );
+    }
+
+    // Masking is a toggle, so the button says what pressing it does next.
+    let (label_id, hidden) = if flash.hide_sensitive {
+        ("firmware-flash-show-sensitive", false)
+    } else {
+        ("firmware-flash-hide-sensitive", true)
+    };
+
+    let sensitive = button(text(l10n.tr(label_id))).width(Fill);
+    let sensitive = if flash.info_lines.is_empty() {
+        sensitive
+    } else {
+        sensitive.on_press(Message::FirmwareFlashInfoSensitiveToggled(hidden))
+    };
+
+    let copy = button(text(l10n.tr("flash-bootloader-copy"))).width(Fill);
+    let copy = if flash.info_lines.is_empty() {
+        copy
+    } else {
+        copy.on_press(Message::FirmwareFlashInfoCopy)
+    };
+
+    content
+        .push(
+            row![
+                sensitive,
+                copy,
+                button(text(format!(
+                    "< {}",
+                    l10n.tr("flash-bootloader-return")
+                )))
+                .width(Fill)
+                .on_press(Message::FirmwareFlashInfoClosed),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .into()
+}
+
 /// One `label: value` line of the package summary.
+///
+/// The value wraps: the carrier row carries a channel code plus the name behind
+/// it, which is the longest thing in the box, and a translation can make it
+/// longer still.
 fn info_row(label: String, value: Option<String>) -> Element<'static, Message> {
     let value = value.unwrap_or_else(|| "—".to_owned());
 
     row![
         text(label).size(12.0).width(140),
-        text(value).size(12.0).width(Fill),
+        text(value)
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
     ]
     .spacing(8)
     .into()

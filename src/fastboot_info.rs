@@ -655,6 +655,262 @@ pub struct DeviceVars {
     pub is_userspace: Option<String>,
 }
 
+/// The commands the "Read Info" view runs on the selected phone, in order,
+/// written the way they are shown.
+const INFO_COMMANDS: &[&str] = &[
+    "getvar all",
+    "oem hw",
+    "oem build-signature",
+    "oem read_sv",
+    "oem config",
+];
+
+/// Runs [`INFO_COMMANDS`] on one device and returns everything they report,
+/// each command line followed by its output.
+///
+/// A command the bootloader does not know is reported in place of its output
+/// rather than failing the read: the other commands still have something to
+/// say about the phone.
+pub fn read_info_lines(serial: &str) -> Result<Vec<String>, String> {
+    let device = fastboot::FastbootDevice::connect(serial)?;
+    let mut lines = Vec::new();
+
+    for command in INFO_COMMANDS {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+
+        lines.push(format!("> {command}"));
+
+        match run_info_command(&device, command) {
+            // A value longer than one USB packet arrives as `key[0]`, `key[1]`,
+            // …, which is unreadable until the parts are put back together.
+            Ok(output) => lines.extend(join_indexed_lines(&output)),
+            Err(error) => lines.push(format!("failed: {error}")),
+        }
+    }
+
+    Ok(lines)
+}
+
+/// Runs one of [`INFO_COMMANDS`].
+fn run_info_command(
+    device: &fastboot::FastbootDevice<'_>,
+    command: &str,
+) -> Result<Vec<String>, String> {
+    match command {
+        // `getvar all` answers with one INFO line per variable.
+        "getvar all" => device.getvar_all(),
+        // `oem <stuff>` answers with the lines the bootloader has to say.
+        oem => device.oem_info(oem.trim_start_matches("oem ")),
+    }
+}
+
+/// One part of a value the bootloader had to split: `(bootloader) key[2]: …`.
+struct IndexedLine {
+    /// `true` when the line carried the `(bootloader)` label, which the merged
+    /// line keeps.
+    prefixed: bool,
+    /// The variable the part belongs to (`ro.build.fingerprint`).
+    base: String,
+    index: usize,
+    value: String,
+}
+
+/// Puts the `key[0]`, `key[1]`, … lines of a reply back together.
+///
+/// The parts are joined in index order and the merged line takes the place of
+/// the lowest index — a later part can arrive first, in which case the merged
+/// line simply appears further down. Every other line is left as it was.
+fn join_indexed_lines(lines: &[String]) -> Vec<String> {
+    let parsed: Vec<Option<IndexedLine>> = lines
+        .iter()
+        .map(|line| parse_indexed_line(line))
+        .collect();
+
+    // Every part of every variable, and where its first one was written.
+    let mut parts: HashMap<&str, Vec<(usize, String)>> = HashMap::new();
+    let mut lowest: HashMap<&str, (usize, usize)> = HashMap::new();
+
+    for (position, part) in parsed.iter().enumerate() {
+        let Some(part) = part else {
+            continue;
+        };
+
+        parts
+            .entry(part.base.as_str())
+            .or_default()
+            .push((part.index, part.value.clone()));
+
+        lowest
+            .entry(part.base.as_str())
+            .and_modify(|(index, place)| {
+                if part.index < *index {
+                    (*index, *place) = (part.index, position);
+                }
+            })
+            .or_insert((part.index, position));
+    }
+
+    let mut joined = Vec::with_capacity(lines.len());
+
+    for (position, part) in parsed.iter().enumerate() {
+        let Some(part) = part else {
+            joined.push(lines[position].clone());
+            continue;
+        };
+
+        // Only the place of the lowest index carries the whole value; every
+        // other part of it is in there already.
+        if lowest[part.base.as_str()].1 != position {
+            continue;
+        }
+
+        let mut values = parts[part.base.as_str()].clone();
+        values.sort_by_key(|(index, _)| *index);
+
+        let value: String = values.into_iter().map(|(_, value)| value).collect();
+        let prefix = if part.prefixed { "(bootloader) " } else { "" };
+
+        joined.push(format!("{prefix}{}: {value}", part.base).trim_end().to_string());
+    }
+
+    joined
+}
+
+/// Parses `(bootloader) key[2]: value`; `None` for a line that is not one of
+/// the parts a split value is sent in.
+fn parse_indexed_line(line: &str) -> Option<IndexedLine> {
+    let body = line.trim_start();
+    let (prefixed, body) = match body.strip_prefix("(bootloader)") {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, body),
+    };
+
+    let (key, value) = body.split_once(':')?;
+    let (base, index) = split_indexed_key(key.trim())?;
+
+    Some(IndexedLine {
+        prefixed,
+        base,
+        index,
+        value: value.trim().to_string(),
+    })
+}
+
+/// How many characters of an IMEI stay visible: everything but its last
+/// [`HIDDEN_IMEI_DIGITS`], which is where the serial number sits.
+const HIDDEN_IMEI_DIGITS: usize = 7;
+
+/// How many characters of a SIM identifier (`iccid`, `esimid`) stay visible.
+const VISIBLE_SIM_ID_DIGITS: usize = 5;
+
+/// How much of a sensitive value stays readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Visible {
+    /// Everything but the last `digits` characters (`12345678xxxxxxx`).
+    AllButLast(usize),
+    /// Only the first `digits` characters (`89014xxxx…`).
+    First(usize),
+}
+
+/// The variables whose value is sensitive, and how much of it stays visible.
+const SENSITIVE_LABELS: &[(&str, Visible)] = &[
+    ("imei", Visible::AllButLast(HIDDEN_IMEI_DIGITS)),
+    ("iccid", Visible::First(VISIBLE_SIM_ID_DIGITS)),
+    ("esimid", Visible::First(VISIBLE_SIM_ID_DIGITS)),
+];
+
+/// The name of the variable a label reports, when it is one of
+/// [`SENSITIVE_LABELS`].
+///
+/// A bootloader lists its features as `<name>/_system`, `<name>/_range`, … and
+/// those are not variables of their own — `esim/_range: true` is a flag, not
+/// a SIM identifier — so a label path is never sensitive. What does count is
+/// the variable itself, with the slot or index some bootloaders glue to it
+/// (`imei`, `imei2`, `imei_a`, `ro.imei`).
+fn sensitive(label: &str) -> Option<Visible> {
+    // The bootloader puts its own label in front of the variable name.
+    let label = label.trim();
+    let label = label.strip_prefix("(bootloader)").map_or(label, str::trim);
+    let label = label.to_ascii_lowercase();
+
+    if label.contains('/') {
+        return None;
+    }
+
+    SENSITIVE_LABELS.iter().find_map(|(name, visible)| {
+        // The last segment, so a dotted name (`ro.imei`) still counts.
+        let variable = label.rsplit('.').next().unwrap_or(&label);
+        let rest = variable.strip_prefix(name)?;
+
+        let matches = rest.is_empty()
+            || rest.starts_with(|character: char| {
+                character.is_ascii_digit() || character == '_'
+            });
+
+        matches.then_some(*visible)
+    })
+}
+
+/// Masks the sensitive values the lines report.
+///
+/// The SIM identifiers (IMEI, ICCID, ESMID) keep the part that tells them
+/// apart and lose the rest: `(bootloader) imei: 123456789012345` becomes
+/// `(bootloader) imei: 12345678xxxxxxx`, an ICCID keeps its first five
+/// characters.
+///
+/// Only values behind one of [`SENSITIVE_LABELS`] are touched — a label is a
+/// variable name, not a part of one — and only when the value is a plain
+/// number: an empty value, a word (`unknown`, `true`) and one short enough to
+/// be fully readable already are left as they are.
+pub fn hide_sensitive(lines: &[String]) -> Vec<String> {
+    lines.iter().map(|line| hide_value(line)).collect()
+}
+
+/// [`hide_sensitive`] for one line.
+fn hide_value(line: &str) -> String {
+    let Some((label, value)) = line.split_once(':') else {
+        return line.to_owned();
+    };
+
+    let Some(visible) = sensitive(label) else {
+        return line.to_owned();
+    };
+
+    // Keep the spacing the bootloader used between the label and the value.
+    let leading = value.len() - value.trim_start().len();
+    let indentation = &value[..leading];
+    let value = value.trim();
+
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return line.to_owned();
+    }
+
+    let characters: Vec<char> = value.chars().collect();
+
+    let (keep, hide) = match visible {
+        Visible::AllButLast(digits) => {
+            if characters.len() <= digits {
+                return line.to_owned();
+            }
+
+            (characters.len() - digits, digits)
+        }
+        Visible::First(digits) => {
+            if characters.len() <= digits {
+                return line.to_owned();
+            }
+
+            (digits, characters.len() - digits)
+        }
+    };
+
+    let kept: String = characters[..keep].iter().collect();
+
+    format!("{label}:{indentation}{kept}{}", "x".repeat(hide))
+}
+
 /// Reads `securestate`, `cid`, `product` and `ro.carrier` from one device.
 ///
 /// Every variable is read on its own and best effort: a bootloader that does
@@ -746,6 +1002,122 @@ pub fn factory_reset(serial: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joins_the_parts_of_a_split_value() {
+        let lines = vec![
+            "(bootloader) ro.build.fingerprint[1]: cfox_g/arcfox_g:14".to_owned(),
+            "(bootloader) serialno: ZY22ABC".to_owned(),
+            "(bootloader) ro.build.fingerprint[0]: motorola/ar".to_owned(),
+        ];
+
+        // The merged line takes the place of the lowest index, so the parts of
+        // `[1]` (which arrived first) are folded into it.
+        assert_eq!(
+            join_indexed_lines(&lines),
+            vec![
+                "(bootloader) serialno: ZY22ABC".to_owned(),
+                "(bootloader) ro.build.fingerprint: motorola/arcfox_g/arcfox_g:14".to_owned(),
+            ]
+        );
+
+        // Lines without an index are untouched, and a lone part is still
+        // merged (with its index dropped).
+        assert_eq!(
+            join_indexed_lines(&[
+                "(bootloader) baseband[0]: M8635_DE50".to_owned(),
+                "no label at all".to_owned(),
+                "(bootloader) imei: 123456789012345".to_owned(),
+            ]),
+            vec![
+                "(bootloader) baseband: M8635_DE50".to_owned(),
+                "no label at all".to_owned(),
+                "(bootloader) imei: 123456789012345".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn hides_the_last_seven_imei_digits() {
+        let lines = vec![
+            "(bootloader) imei: 123456789012345".to_owned(),
+            "(bootloader) imei2:".to_owned(),
+            "(bootloader) serialno: ZY22ABC".to_owned(),
+            "a line without a label".to_owned(),
+        ];
+
+        assert_eq!(
+            hide_sensitive(&lines),
+            vec![
+                "(bootloader) imei: 12345678xxxxxxx".to_owned(),
+                // An empty value has nothing to hide, and neither has a line
+                // that does not name a sensitive value.
+                "(bootloader) imei2:".to_owned(),
+                "(bootloader) serialno: ZY22ABC".to_owned(),
+                "a line without a label".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_five_digits_of_the_sim_identifiers() {
+        let lines = vec![
+            "(bootloader) iccid: 89014103211118510720".to_owned(),
+            "(bootloader) esimid: 89000000000000000012".to_owned(),
+            // Short enough to be shown as it is.
+            "(bootloader) iccid: 89014".to_owned(),
+            "(bootloader) ro.carrier: retus".to_owned(),
+        ];
+
+        assert_eq!(
+            hide_sensitive(&lines),
+            vec![
+                "(bootloader) iccid: 89014xxxxxxxxxxxxxxx".to_owned(),
+                "(bootloader) esimid: 89000xxxxxxxxxxxxxxx".to_owned(),
+                "(bootloader) iccid: 89014".to_owned(),
+                "(bootloader) ro.carrier: retus".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn leaves_the_feature_flags_and_words_alone() {
+        // The bootloader lists its features as `<name>/_system`, `<name>/_range`
+        // … — those are flags, not identifiers — and a value that is not a
+        // number cannot be an identifier either.
+        let lines = vec![
+            "(bootloader) esim/_range: true".to_owned(),
+            "(bootloader) esim/_system: ro.vendor.hw.esim".to_owned(),
+            "(bootloader) esimid/_auto: default=true".to_owned(),
+            "(bootloader) esim: true".to_owned(),
+            "(bootloader) ecompass/_system: ro.vendor.hw.ecompass".to_owned(),
+            "(bootloader) imei: unknown".to_owned(),
+            "(bootloader) imeis: 123456789012345".to_owned(),
+        ];
+
+        assert_eq!(hide_sensitive(&lines), lines);
+
+        // The variable itself, with a slot or an index glued to it, is masked.
+        assert_eq!(sensitive("imei2"), Some(Visible::AllButLast(7)));
+        assert_eq!(sensitive("imei_a"), Some(Visible::AllButLast(7)));
+        assert_eq!(sensitive("ro.imei"), Some(Visible::AllButLast(7)));
+        assert_eq!(sensitive("esimid"), Some(Visible::First(5)));
+        assert_eq!(sensitive("esim/_range"), None);
+        assert_eq!(sensitive("esimid/_auto"), None);
+    }
+
+    #[test]
+    fn keeps_the_spacing_of_a_short_imei() {
+        assert_eq!(
+            hide_value("(bootloader) imei:  12345678"),
+            "(bootloader) imei:  1xxxxxxx"
+        );
+        // Shorter than the mask: nothing to hide.
+        assert_eq!(
+            hide_value("(bootloader) imei:  1234567"),
+            "(bootloader) imei:  1234567"
+        );
+    }
 
     #[test]
     fn classifies_oem_unlock_disabled_failure() {
