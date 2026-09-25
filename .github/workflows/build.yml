@@ -187,17 +187,25 @@ jobs:
           cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg
 
       # The firmware-flash feature looks for mfastboot next to the binary; the
-      # platform folder keeps it from being used on architectures it was not
-      # built for (so the app falls back to its built-in fastboot there).
-      - name: Bundle mfastboot with the Windows build
+      # platform folder names what the payload is, and the app only offers a
+      # folder its machine can run.
+      #
+      # Every Windows artifact carries the same 32-bit `mfastboot` (there is no
+      # 64-bit or ARM build of it): Windows runs it on all three of them — as it
+      # is on win32, through WOW64 on win64 and through its own x86 emulation on
+      # ARM64 — so it is named after what it really is instead of after the app
+      # it travels with.
+      - name: Bundle mfastboot with the Windows builds
         run: |
           set -euo pipefail
-          for version in 34.0.4 28.0.2 26.0.0; do
-            mkdir -p "bundle-win64/mfastboot/windows_amd64/$version"
-            cp prebuilt_binary/windows/$version/* "bundle-win64/mfastboot/windows_amd64/$version/"
+          for name in win64 win32 win-arm64; do
+            for version in 34.0.4 28.0.2 26.0.0; do
+              mkdir -p "bundle-$name/mfastboot/windows_x86/$version"
+              cp prebuilt_binary/windows/$version/* "bundle-$name/mfastboot/windows_x86/$version/"
+            done
+            cp "release/lmnflash-$name.exe" "bundle-$name/lmnflash.exe"
+            (cd "bundle-$name" && zip -r -q "../release/lmnflash-$name.zip" .)
           done
-          cp release/lmnflash-win64.exe bundle-win64/lmnflash.exe
-          (cd bundle-win64 && zip -r -q ../release/lmnflash-win64.zip .)
 
       # Both Linux builds carry the Intel `mfastboot` (there is no ARM build of
       # it): it runs as it is on x86_64 and through box64 on arm64, where the

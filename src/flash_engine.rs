@@ -113,10 +113,12 @@ const MFASTBOOT_FILE: &str = if cfg!(windows) {
 /// * `<exe dir>/mfastboot/<version>/mfastboot[.exe]`, and
 /// * `<exe dir>/mfastboot/<platform>/<version>/mfastboot[.exe]`, where
 ///   `<platform>` names the OS and architecture the binary was built for
-///   (`windows_amd64`, `darwin_amd64`, `linux_amd64`, …) — mirroring the
-///   `prebuilt_binary` tree. A platform this machine cannot use is skipped,
-///   so an Intel `mfastboot` is never started on ARM Windows: it is only
-///   offered where an emulator runs it (Rosetta 2, box64).
+///   (`windows_x86`, `darwin_amd64`, `linux_amd64`, …) — mirroring the
+///   `prebuilt_binary` tree. A platform this machine cannot use is skipped, so
+///   an Intel `mfastboot` is only offered where it runs: on an Intel machine,
+///   on Windows (which takes the 32-bit build on every edition, ARM64 through
+///   its own x86 emulation) or on an ARM Mac or ARM Linux machine with
+///   Rosetta 2 or box64 — see [`platform_fit`] and [`intel_emulator`].
 ///
 /// Inside a macOS `.app` bundle, `Contents/Resources` is searched as well.
 /// The result is sorted newest version first.
@@ -218,11 +220,12 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
 /// `architecture` is what this process runs as (`std::env::consts::ARCH`) and
 /// `emulator` what this machine runs Intel binaries with (see
 /// [`intel_emulator`]). The name has to mention this operating system, and the
-/// architecture either ours — `Emulator::Native` — or one the emulator can
-/// take over. The aliases are checked most specific first, so `arm64` is not
-/// mistaken for `arm` and `x86_64` not for `x86`; a name that mentions no
-/// architecture at all is accepted: whoever laid the directory out knows what
-/// was put in it.
+/// architecture either ours — `Emulator::Native` — or one the system runs by
+/// itself (Windows, which takes the 32-bit build on every edition) or one the
+/// emulator can take over. The aliases are checked most specific first, so
+/// `arm64` is not mistaken for `arm` and `x86_64` not for `x86`; a name that
+/// mentions no architecture at all is accepted: whoever laid the directory out
+/// knows what was put in it.
 fn platform_fit(
     platform: &str,
     architecture: &str,
@@ -281,10 +284,29 @@ fn platform_fit(
         return Some(Emulator::Native);
     }
 
-    // An Intel binary on an ARM machine: only the emulator can run it (and
-    // without one it is not offered at all).
+    // An Intel binary on an ARM machine: the emulator runs it where there is
+    // one, and without one it is not offered at all — unless the system runs it
+    // itself, which is what Windows does (it emulates x86 and x86-64 binaries
+    // on ARM64, and there is nothing to install for that).
     if named_arch == "x86_64" {
-        return emulator.cloned();
+        if emulator.is_some() {
+            return emulator.cloned();
+        }
+
+        // Windows itself runs it on ARM64 (through the x86 emulation it brings)
+        // and on 64-bit x86 (through WOW64) — but a 32-bit system cannot start
+        // a 64-bit binary at all, so that one stays out.
+        let windows_runs = cfg!(target_os = "windows") && architecture != "x86";
+
+        return windows_runs.then_some(Emulator::Native);
+    }
+
+    // Windows also takes the 32-bit build on every edition: as it is on a
+    // 32-bit system, through WOW64 on a 64-bit one and through the same
+    // emulation on ARM64. (The shipped `mfastboot` is that 32-bit build, which
+    // is why every Windows artifact carries it under `windows_x86`.)
+    if cfg!(target_os = "windows") && named_arch == "x86" {
+        return Some(Emulator::Native);
     }
 
     None
@@ -293,10 +315,12 @@ fn platform_fit(
 /// What starts an `mfastboot` build on this machine.
 ///
 /// The shipped builds are Intel binaries, so an ARM machine runs them through
-/// an emulator: Rosetta 2 on macOS, box64 on Linux.
+/// an emulator: Rosetta 2 on macOS, box64 on Linux. Windows needs no variant of
+/// its own: it emulates the Intel builds itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Emulator {
-    /// The build runs as it is.
+    /// The build runs as it is — on Windows also where the system emulates it
+    /// itself, since there is nothing to install for that.
     Native,
     /// Rosetta 2 on Apple silicon. macOS puts itself in front of the binary,
     /// so only the installation matters: `installed` is false while Rosetta 2
@@ -348,13 +372,13 @@ impl Emulator {
     }
 }
 
-/// The emulator this machine runs Intel binaries with: Rosetta 2 on Apple
+/// The extra emulator this machine runs Intel binaries with: Rosetta 2 on Apple
 /// silicon, box64 on ARM Linux.
 ///
-/// `None` when there is nothing to emulate with — either because Intel
-/// binaries run as they are (an Intel machine) or because they cannot run here
-/// at all (ARM Windows, 32-bit ARM Linux, and macOS 28, which dropped
-/// Rosetta 2).
+/// `None` when there is nothing to install — either because Intel binaries run
+/// as they are (an Intel machine), or because Windows emulates them itself (see
+/// [`platform_fit`]) — or because they cannot run here at all (32-bit ARM Linux,
+/// and macOS 28, which dropped Rosetta 2).
 fn intel_emulator() -> Option<Emulator> {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         if rosetta_runtime_present() {
@@ -1103,10 +1127,11 @@ mod tests {
             Some(Emulator::Native)
         );
 
-        // A folder for another architecture is not.
+        // A folder for another architecture is not — unless the system runs it
+        // itself, which Windows does with the Intel build.
         assert_eq!(
             platform_fit(&format!("{host}_amd64"), "aarch64", intel_host),
-            None
+            cfg!(target_os = "windows").then_some(Emulator::Native)
         );
         assert_eq!(
             platform_fit(&format!("{host}_arm64"), "x86_64", intel_host),
@@ -1180,8 +1205,11 @@ mod tests {
         );
 
         // macOS 28 dropped Rosetta 2 (and 32-bit ARM Linux has no box64), so
-        // the Intel build is not offered there at all.
-        assert_eq!(platform_fit(&intel, arm, None), None);
+        // the Intel build is not offered there without one — Windows is the
+        // one system that needs no emulator (see the test below).
+        if !cfg!(target_os = "windows") {
+            assert_eq!(platform_fit(&intel, arm, None), None);
+        }
 
         // An emulator does not make an Apple silicon binary run on an Intel
         // machine either.
@@ -1189,6 +1217,48 @@ mod tests {
             platform_fit(&format!("{}_arm64", std::env::consts::OS), "x86_64", Some(&rosetta)),
             None
         );
+    }
+
+    /// Windows runs the Intel builds by itself, so every Windows artifact can
+    /// carry the 32-bit `mfastboot` without anything to install.
+    ///
+    /// The folder has to name this operating system, so the assertions only
+    /// apply where the tests run on Windows.
+    #[test]
+    fn windows_runs_intel_mfastboot_itself() {
+        if !cfg!(target_os = "windows") {
+            return;
+        }
+
+        // The 32-bit build on every edition — the one the artifacts carry.
+        assert_eq!(
+            platform_fit("windows_x86", "x86", None),
+            Some(Emulator::Native)
+        );
+        assert_eq!(
+            platform_fit("windows_x86", "x86_64", None),
+            Some(Emulator::Native)
+        );
+        assert_eq!(
+            platform_fit("windows_x86", "aarch64", None),
+            Some(Emulator::Native)
+        );
+
+        // A 64-bit build runs on the 64-bit editions only: a 32-bit system
+        // cannot start one at all.
+        assert_eq!(
+            platform_fit("windows_amd64", "x86_64", None),
+            Some(Emulator::Native)
+        );
+        assert_eq!(
+            platform_fit("windows_amd64", "aarch64", None),
+            Some(Emulator::Native)
+        );
+        assert_eq!(platform_fit("windows_amd64", "x86", None), None);
+
+        // An ARM64 binary is not something an Intel Windows can start either.
+        assert_eq!(platform_fit("windows_arm64", "x86_64", None), None);
+        assert_eq!(platform_fit("windows_arm64", "x86", None), None);
     }
 
     #[test]
