@@ -6,7 +6,8 @@ mode-2 = Flash av smarttelefon
 mode-3 = Dekryptering av fastvare
 
 flash-bootloader-title = Opplåsing av bootloader
-flash-bootloader-button = Lås opp bootloader
+flash-bootloader-smartphone-button = Smarttelefon
+flash-bootloader-tablet-button = Nettbrett
 
 flash-bootloader-choose = Hvordan vil du låse opp bootloaderen?
 flash-bootloader-guided = Veiledet
@@ -280,3 +281,19 @@ decrypt-done = Dekryptering fullført: { $ok } vellykket, { $fail } mislykket
 decrypt-no-files = Ingen *.x- eller *.t-filer funnet i den valgte mappen
 decrypt-password-required = Skriv inn et passord, eller fjern avmerkingen for "Bruk egendefinert passord"
 decrypt-failed-files = Mislykkede filer
+
+flash-driver-title = Installer driver
+driver-smartphone-button = Smarttelefon
+driver-tablet-button = Nettbrett
+driver-install-button = Installer
+driver-desc = Motorolas Mobile Drivers installeres på denne datamaskinen. Nedlastingen starter med en gang, og deretter startes installasjonsprogrammet.
+driver-linux-desc = Udev-reglene for Android installeres i /etc/udev/rules.d, og udev startes på nytt, slik at adb og fastboot kan få tilgang til telefoner som vanlig bruker. Dette krever administratorrettigheter.
+driver-downloading = Laster ned driveren…
+driver-installing = Starter installasjonsprogrammet…
+driver-installing-linux = Installerer udev-reglene…
+driver-done = Installasjonsprogrammet er startet. Følg instruksjonene for å fullføre installasjonen.
+driver-done-linux = Udev-reglene er installert.
+driver-password = Passord
+driver-failed = Kunne ikke installere driveren: { $error }
+driver-error-password = Passordet ble ikke godtatt. Prøv igjen.
+driver-error-no-sudo = Fant ikke sudo, så udev-reglene kan ikke installeres.

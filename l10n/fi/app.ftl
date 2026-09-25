@@ -6,7 +6,8 @@ mode-2 = Älypuhelimen flashaus
 mode-3 = Firmwaren salauksen purku
 
 flash-bootloader-title = Bootloaderin lukituksen avaus
-flash-bootloader-button = Avaa bootloaderin lukitus
+flash-bootloader-smartphone-button = Älypuhelin
+flash-bootloader-tablet-button = Tabletti
 
 flash-bootloader-choose = Miten haluat avata bootloaderin lukituksen?
 flash-bootloader-guided = Opastettu
@@ -280,3 +281,19 @@ decrypt-done = Salauksen purku valmis: { $ok } onnistui, { $fail } epäonnistui
 decrypt-no-files = Valitussa kansiossa ei ole *.x- tai *.t-tiedostoja
 decrypt-password-required = Anna salasana tai poista valinta kohdasta "Käytä mukautettua salasanaa"
 decrypt-failed-files = Epäonnistuneet tiedostot
+
+flash-driver-title = Asenna ajuri
+driver-smartphone-button = Älypuhelin
+driver-tablet-button = Tabletti
+driver-install-button = Asenna
+driver-desc = Motorolan Mobile Drivers -ajurit asennetaan tälle tietokoneelle. Lataus alkaa heti, ja sen jälkeen asennusohjelma käynnistetään.
+driver-linux-desc = Androidin udev-säännöt asennetaan hakemistoon /etc/udev/rules.d ja udev käynnistetään uudelleen, jotta adb ja fastboot voivat käyttää puhelimia tavallisena käyttäjänä. Tämä vaatii pääkäyttäjän oikeudet.
+driver-downloading = Ladataan ajuria…
+driver-installing = Käynnistetään asennusohjelmaa…
+driver-installing-linux = Asennetaan udev-sääntöjä…
+driver-done = Asennusohjelma on käynnistetty. Viimeistele asennus sen ohjeiden mukaan.
+driver-done-linux = Udev-säännöt on asennettu.
+driver-password = Salasana
+driver-failed = Ajuria ei voitu asentaa: { $error }
+driver-error-password = Salasanaa ei hyväksytty. Yritä uudelleen.
+driver-error-no-sudo = Sudoa ei löytynyt, joten udev-sääntöjä ei voi asentaa.

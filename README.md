@@ -78,3 +78,36 @@ could not run at all — 32-bit ARM Linux, and macOS 28, which dropped Rosetta 2
 it is not offered and the built-in fastboot is used.
 
 
+
+## Install Driver
+
+The **Install Driver** tile installs the USB driver a phone in fastboot mode
+needs. It only appears where there is something to install: not on macOS (which
+ships the drivers it needs) and not on Windows on ARM (Motorola publishes no
+installer for it).
+
+* **Windows** — two buttons, because phones and tablets are served differently:
+  * **Smartphone** downloads Motorola's Mobile Drivers and starts the MSI. The
+    installer is picked by the architecture of the *system*, not of the
+    application: `PROCESSOR_ARCHITEW6432` (which WOW64 reports to a 32-bit
+    process on a 64-bit system) wins over `PROCESSOR_ARCHITECTURE`, so the
+    32-bit build of this app still downloads the 64-bit driver. The download is
+    split into five ranged connections into one pre-allocated file, and a server
+    that does not honour byte ranges is downloaded in one piece instead.
+  * **Tablet** opens Lenovo's [Software Fix](https://support.lenovo.com/us/en/downloads/ds101291)
+    page, which is the flashing tool for tablets and brings its own drivers.
+* **Linux** — one button. The upstream
+  [android-udev-rules](https://github.com/M0Rf30/android-udev-rules) installer
+  (`install.sh`) is unpacked from the binary and run as root: it copies
+  `51-android.rules` into `/etc/udev/rules.d`, makes sure the `adbusers` group
+  exists, adds the invoking user to it and restarts udev. The rules need root,
+  so the dialog asks for the password and hands it to `sudo -S` through its
+  standard input.
+
+  That project is a submodule at `vendor/android-udev-rules`, and the files
+  `install.sh` reads are compiled into the binary, so installing needs neither
+  the checkout nor a download — but a clone does have to fetch it:
+
+  ```
+  git submodule update --init --recursive
+  ```

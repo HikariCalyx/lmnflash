@@ -41,6 +41,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `src/driver_install.rs` embeds the udev rules installer from the
+          # `vendor/android-udev-rules` submodule at compile time.
+          submodules: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -117,6 +121,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `src/driver_install.rs` embeds the udev rules installer from the
+          # `vendor/android-udev-rules` submodule at compile time.
+          submodules: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

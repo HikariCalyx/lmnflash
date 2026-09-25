@@ -6,7 +6,8 @@ mode-2 = 스마트폰 플래시
 mode-3 = 펌웨어 복호화
 
 flash-bootloader-title = 부트로더 잠금 해제
-flash-bootloader-button = 잠금 해제
+flash-bootloader-smartphone-button = 스마트폰
+flash-bootloader-tablet-button = 태블릿
 
 flash-bootloader-choose = 부트로더 잠금을 어떻게 해제할까요?
 flash-bootloader-guided = 안내 모드
@@ -280,3 +281,19 @@ decrypt-done = 복호화 완료: { $ok }개 성공, { $fail }개 실패
 decrypt-no-files = 선택한 폴더에 *.x 또는 *.t 파일이 없습니다
 decrypt-password-required = 복호화 암호를 입력하거나 "사용자 지정 암호 사용"을 해제하세요
 decrypt-failed-files = 복호화 실패 파일
+
+flash-driver-title = 드라이버 설치
+driver-smartphone-button = 스마트폰
+driver-tablet-button = 태블릿
+driver-install-button = 설치
+driver-desc = Motorola Mobile Drivers를 이 컴퓨터에 설치합니다. 다운로드가 곧바로 시작되고, 그다음 설치 프로그램이 실행됩니다.
+driver-linux-desc = Android용 udev 규칙을 /etc/udev/rules.d에 설치하고 udev를 다시 시작하여 일반 사용자도 adb와 fastboot로 휴대폰에 접근할 수 있게 합니다. 관리자 권한이 필요합니다.
+driver-downloading = 드라이버 다운로드 중…
+driver-installing = 설치 프로그램 실행 중…
+driver-installing-linux = udev 규칙 설치 중…
+driver-done = 설치 프로그램이 실행되었습니다. 안내에 따라 설치를 마치세요.
+driver-done-linux = udev 규칙이 설치되었습니다.
+driver-password = 암호
+driver-failed = 드라이버를 설치할 수 없습니다: { $error }
+driver-error-password = 암호가 승인되지 않았습니다. 다시 시도하세요.
+driver-error-no-sudo = sudo를 찾을 수 없어 udev 규칙을 설치할 수 없습니다.

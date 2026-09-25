@@ -6,7 +6,8 @@ mode-2 = Прошивка смартфона
 mode-3 = Розшифрування прошивки
 
 flash-bootloader-title = Розблокування завантажувача
-flash-bootloader-button = Розблокувати завантажувач
+flash-bootloader-smartphone-button = Смартфон
+flash-bootloader-tablet-button = Планшет
 
 flash-bootloader-choose = Як ви хочете розблокувати завантажувач?
 flash-bootloader-guided = Покроково
@@ -280,3 +281,19 @@ decrypt-done = Розшифрування завершено: { $ok } успіш
 decrypt-no-files = У вибраній папці немає файлів *.x або *.t
 decrypt-password-required = Введіть пароль або зніміть позначку «Використати власний пароль»
 decrypt-failed-files = Файли з помилками
+
+flash-driver-title = Встановлення драйвера
+driver-smartphone-button = Смартфон
+driver-tablet-button = Планшет
+driver-install-button = Встановити
+driver-desc = Mobile Drivers від Motorola буде встановлено на цей комп'ютер. Завантаження почнеться одразу, а потім запуститься програма встановлення.
+driver-linux-desc = Правила udev для Android встановлюються до /etc/udev/rules.d, а udev перезапускається, щоб adb і fastboot могли звертатися до телефонів від імені звичайного користувача. Для цього потрібні права адміністратора.
+driver-downloading = Завантаження драйвера…
+driver-installing = Запуск програми встановлення…
+driver-installing-linux = Встановлення правил udev…
+driver-done = Програму встановлення запущено. Дотримуйтеся її вказівок, щоб завершити встановлення.
+driver-done-linux = Правила udev встановлено.
+driver-password = Пароль
+driver-failed = Не вдалося встановити драйвер: { $error }
+driver-error-password = Пароль не прийнято. Спробуйте ще раз.
+driver-error-no-sudo = sudo не знайдено, тому правила udev встановити неможливо.

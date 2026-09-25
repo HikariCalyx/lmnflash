@@ -1,0 +1,3 @@
+[submodule "vendor/android-udev-rules"]
+	path = vendor/android-udev-rules
+	url = https://github.com/M0Rf30/android-udev-rules

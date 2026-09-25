@@ -6,7 +6,8 @@ mode-2 = 智能手机刷写
 mode-3 = 固件解密
 
 flash-bootloader-title = Bootloader 解锁
-flash-bootloader-button = 解锁
+flash-bootloader-smartphone-button = 智能手机
+flash-bootloader-tablet-button = 平板电脑
 
 flash-bootloader-choose = 您希望如何解锁 Bootloader？
 flash-bootloader-guided = 引导模式
@@ -280,3 +281,19 @@ decrypt-done = 解密完成：{ $ok } 个成功，{ $fail } 个失败
 decrypt-no-files = 所选文件夹中未找到 *.x 或 *.t 文件
 decrypt-password-required = 请输入解密密码，或取消勾选“使用自定义密码”
 decrypt-failed-files = 解密失败的文件
+
+flash-driver-title = 安装驱动
+driver-smartphone-button = 智能手机
+driver-tablet-button = 平板电脑
+driver-install-button = 安装
+driver-desc = 将在此电脑上安装 Motorola Mobile Drivers。下载会立即开始，随后自动启动安装程序。
+driver-linux-desc = 将 Android 的 udev 规则安装到 /etc/udev/rules.d 并重启 udev，使普通用户即可通过 adb 与 fastboot 访问手机。此操作需要管理员权限。
+driver-downloading = 正在下载驱动…
+driver-installing = 正在启动安装程序…
+driver-installing-linux = 正在安装 udev 规则…
+driver-done = 安装程序已启动。请按提示完成安装。
+driver-done-linux = udev 规则已安装。
+driver-password = 密码
+driver-failed = 无法安装驱动：{ $error }
+driver-error-password = 密码不正确，请重试。
+driver-error-no-sudo = 未找到 sudo，无法安装 udev 规则。

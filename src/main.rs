@@ -6,6 +6,8 @@ mod bootloader;
 mod carrier;
 mod config;
 mod decrypt;
+mod driver;
+mod driver_install;
 mod factory_reset;
 mod fastboot_info;
 mod firmware;
@@ -183,13 +185,15 @@ enum SmartphoneFeature {
     BootloaderUnlock,
     FactoryReset,
     FirmwareFlash,
+    InstallDriver,
 }
 
 impl SmartphoneFeature {
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 4] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
+        Self::InstallDriver,
     ];
 
     fn title_id(self) -> &'static str {
@@ -197,6 +201,20 @@ impl SmartphoneFeature {
             Self::BootloaderUnlock => "flash-bootloader-title",
             Self::FactoryReset => "flash-factory-reset-title",
             Self::FirmwareFlash => "flash-firmware-title",
+            Self::InstallDriver => "flash-driver-title",
+        }
+    }
+
+    /// Whether this system has a use for the feature.
+    ///
+    /// "Install Driver" is left out where there is nothing to install:
+    /// macOS ships the drivers it needs, and Motorola has no installer for
+    /// Windows on ARM. The tile is not rendered at all there — an unavailable
+    /// feature is not advertised with a dead button.
+    fn available(self) -> bool {
+        match self {
+            Self::InstallDriver => driver_install::target().is_some(),
+            _ => true,
         }
     }
 
@@ -210,7 +228,12 @@ impl SmartphoneFeature {
         let pressed = || Some(Message::SmartphoneFeaturePressed(self));
 
         match self {
-            Self::BootloaderUnlock => vec![("flash-bootloader-button", pressed())],
+            // The bootloader unlock procedure differs between phones and
+            // tablets; the tablet procedure is not implemented yet.
+            Self::BootloaderUnlock => vec![
+                ("flash-bootloader-smartphone-button", pressed()),
+                ("flash-bootloader-tablet-button", None),
+            ],
             Self::FactoryReset => vec![("flash-factory-reset-button", pressed())],
             // Firmware flashing is offered per device type; tablet firmware
             // flashing is not implemented yet.
@@ -218,6 +241,20 @@ impl SmartphoneFeature {
                 ("flash-firmware-smartphone-button", pressed()),
                 ("flash-firmware-tablet-button", None),
             ],
+            // Windows installs a driver per device type: phones take
+            // Motorola's Mobile Drivers, tablets are flashed with Lenovo's
+            // "Software Fix", which is a download page of its own. Linux has a
+            // single installation for both: the udev rules.
+            Self::InstallDriver => match driver_install::target() {
+                Some(driver_install::Target::Windows(_)) => vec![
+                    ("driver-smartphone-button", Some(Message::DriverInstallRequested)),
+                    ("driver-tablet-button", Some(Message::DriverTabletSite)),
+                ],
+                _ => vec![(
+                    "driver-install-button",
+                    Some(Message::DriverInstallRequested),
+                )],
+            },
         }
     }
 }
@@ -440,6 +477,47 @@ struct SmartphoneFlashState {
     bootloader: BootloaderState,
     factory_reset: FactoryResetState,
     firmware: FirmwareFlashState,
+    driver: DriverState,
+}
+
+/// Which "Install Driver" dialog is currently on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum DriverDialog {
+    #[default]
+    Closed,
+    Open,
+}
+
+/// Step of a running driver installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum DriverStage {
+    /// The Windows installer is being downloaded.
+    #[default]
+    Downloading,
+    /// The installer (Windows) or the udev rules (Linux) are running.
+    Installing,
+    /// The installation is over.
+    Done,
+}
+
+/// State of the "Install Driver" feature (Mode 2).
+///
+/// On Windows the download and the installer are one job that starts as soon
+/// as the dialog opens; on Linux the dialog waits for the password the
+/// installation needs and starts from its Install button.
+#[derive(Default)]
+struct DriverState {
+    dialog: DriverDialog,
+    /// The password handed to `sudo` (Linux only; never shown, never stored).
+    password: String,
+    /// Id of the running installation, so events of an abandoned job are
+    /// dropped instead of touching a dialog that moved on.
+    job: u64,
+    busy: bool,
+    stage: DriverStage,
+    downloaded: u64,
+    total: u64,
+    error: Option<driver_install::DriverError>,
 }
 
 /// Which Bootloader Unlock dialog is currently on screen.
@@ -1045,6 +1123,25 @@ enum Message {
     /// A background firmware-flash job ended (only completes the task; the
     /// results arrive through the event messages above).
     FirmwareFlashWorkerDone,
+    /// Install Driver: the tile's button — opens the dialog and, on Windows,
+    /// starts the installation (Linux waits for the password first).
+    DriverInstallRequested,
+    /// Install Driver: open Lenovo's "Software Fix" page for tablet firmware.
+    DriverTabletSite,
+    /// Install Driver: the sudo password was edited.
+    DriverPasswordChanged(String),
+    /// Install Driver: install with the password that was entered.
+    DriverPasswordSubmitted,
+    /// Install Driver: close the dialog.
+    DriverCancel,
+    /// Install Driver: progress of the running installation.
+    DriverEvent(u64, driver_install::DriverEvent),
+    /// A background driver installation ended (only completes the task; the
+    /// result arrives through the event message above).
+    DriverWorkerDone,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    DriverBackdropPressed,
     /// The best-effort telemetry POST finished (only logged; telemetry must
     /// never affect the app).
     TelemetrySent(Result<(), String>),
@@ -1060,6 +1157,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let guided = &state.flash.bootloader.guided;
     let reset = &state.flash.factory_reset;
     let firmware = &state.flash.firmware;
+    let driver = &state.flash.driver;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
@@ -1072,7 +1170,8 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.running
         || firmware.rebooting
         || firmware.reading_info
-        || firmware.reading_device;
+        || firmware.reading_device
+        || driver.busy;
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
@@ -1120,6 +1219,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
+            SmartphoneFeature::InstallDriver => start_driver_dialog(state),
         },
         Message::FactoryResetDevicesFetched(result) => {
             let reset = &mut state.flash.factory_reset;
@@ -1611,6 +1711,75 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::FirmwareFlashWorkerDone => Task::none(),
+        Message::DriverInstallRequested => start_driver_dialog(state),
+        Message::DriverTabletSite => open_browser(driver_install::TABLET_SITE),
+        Message::DriverPasswordChanged(password) => {
+            state.flash.driver.password = password;
+            Task::none()
+        }
+        Message::DriverPasswordSubmitted => {
+            let driver = &state.flash.driver;
+
+            // Nothing to install with yet, or an installation is already
+            // running.
+            if driver.busy || driver.password.is_empty() {
+                return Task::none();
+            }
+
+            start_driver_job(state)
+        }
+        Message::DriverCancel => {
+            let driver = &mut state.flash.driver;
+
+            // The dialog never closes while it works: the password would be
+            // gone while `sudo` still runs.
+            if driver.busy {
+                return Task::none();
+            }
+
+            driver.dialog = DriverDialog::Closed;
+            driver.password.clear();
+            driver.error = None;
+            driver.stage = DriverStage::default();
+            driver.downloaded = 0;
+            driver.total = 0;
+            Task::none()
+        }
+        Message::DriverEvent(job, event) => {
+            let driver = &mut state.flash.driver;
+
+            // Progress of an installation this dialog no longer runs.
+            if job != driver.job {
+                return Task::none();
+            }
+
+            match event {
+                driver_install::DriverEvent::Progress { downloaded, total } => {
+                    // The segments report in the order they happen to finish;
+                    // the bar must not walk backwards.
+                    driver.downloaded = driver.downloaded.max(downloaded);
+
+                    if total > 0 {
+                        driver.total = total;
+                    }
+                }
+                driver_install::DriverEvent::Installing => {
+                    driver.stage = DriverStage::Installing;
+                }
+                driver_install::DriverEvent::Finished(result) => {
+                    driver.busy = false;
+
+                    match result {
+                        Ok(()) => driver.stage = DriverStage::Done,
+                        Err(error) => driver.error = Some(error),
+                    }
+                }
+            }
+
+            Task::none()
+        }
+        Message::DriverWorkerDone => Task::none(),
+        Message::DriverBackdropPressed => Task::none(),
         Message::FirmwareFlashExport => start_firmware_flash_export(state),
         Message::FirmwareFlashExported(result) => {
             let flash = &mut state.flash.firmware;
@@ -3274,6 +3443,75 @@ fn start_firmware_flash_reboot(
     Task::batch([producer, consumer])
 }
 
+/// Opens the "Install Driver" dialog and, on Windows, starts the download
+/// right away: the tile's buttons mean "install this now". Linux waits for
+/// the password the installation needs, so nothing starts before it is
+/// entered.
+fn start_driver_dialog(state: &mut State) -> Task<Message> {
+    state.flash.driver = DriverState {
+        dialog: DriverDialog::Open,
+        ..DriverState::default()
+    };
+
+    if matches!(
+        driver_install::target(),
+        Some(driver_install::Target::Windows(_))
+    ) {
+        return start_driver_job(state);
+    }
+
+    Task::none()
+}
+
+/// Runs the installation on a worker thread, streaming its progress into the
+/// dialog.
+fn start_driver_job(state: &mut State) -> Task<Message> {
+    let driver = &mut state.flash.driver;
+
+    driver.busy = true;
+    driver.job = driver.job.wrapping_add(1);
+    driver.stage = if driver_install::uses_password() {
+        DriverStage::Installing
+    } else {
+        DriverStage::Downloading
+    };
+    driver.downloaded = 0;
+    driver.total = 0;
+    driver.error = None;
+
+    let job_id = driver.job;
+    let target = driver_install::target();
+    let password = driver.password.clone();
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker =
+                tokio::task::spawn_blocking(move || driver_install::run(target, &password, &emit));
+
+            // A panicked worker would otherwise leave the dialog waiting for
+            // an event that never comes (the sender it held is gone with it).
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(driver_install::DriverEvent::Finished(
+                    Err(driver_install::DriverError::Failed(format!(
+                        "background task failed: {error}"
+                    ))),
+                ));
+            }
+        },
+        |()| Message::DriverWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| Message::DriverEvent(job_id, event));
+
+    Task::batch([producer, consumer])
+}
+
 /// Deletes the unpacked firmware package (several gigabytes) on a worker
 /// thread; a failure is irrelevant, the directory is cleared on the next run.
 fn cleanup_firmware_flash_package() -> Task<Message> {
@@ -3814,6 +4052,12 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, overlay].into();
     }
 
+    // Install Driver dialog (download progress / sudo password) drawn over
+    // the whole window while it is open.
+    if let Some(overlay) = driver::overlay(state) {
+        return stack![base, overlay].into();
+    }
+
     // Device picker modal: shown when more than one fastboot device is
     // connected. Clicks on the dimmed backdrop cancel the selection.
     if let DevicePicker::Open(devices) = &state.lookup.retcn.device_picker {
@@ -3864,6 +4108,9 @@ fn view(state: &State) -> Element<'_, Message> {
 fn smartphone_flash_view(state: &State) -> Element<'_, Message> {
     let tiles: Vec<Element<'_, Message>> = SmartphoneFeature::ALL
         .iter()
+        // A feature this system has no use for is left out completely (see
+        // `SmartphoneFeature::available`).
+        .filter(|feature| feature.available())
         .map(|&feature| smartphone_feature_tile(state, feature))
         .collect();
 

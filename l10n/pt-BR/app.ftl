@@ -6,7 +6,8 @@ mode-2 = Flash do smartphone
 mode-3 = Descriptografia de firmware
 
 flash-bootloader-title = Desbloqueio do bootloader
-flash-bootloader-button = Desbloquear o bootloader
+flash-bootloader-smartphone-button = Smartphone
+flash-bootloader-tablet-button = Tablet
 
 flash-bootloader-choose = Como você quer desbloquear o bootloader?
 flash-bootloader-guided = Guiado
@@ -280,3 +281,19 @@ decrypt-done = Descriptografia concluída: { $ok } com sucesso, { $fail } com fa
 decrypt-no-files = Nenhum arquivo *.x ou *.t encontrado na pasta selecionada
 decrypt-password-required = Digite uma senha ou desmarque "Usar senha personalizada"
 decrypt-failed-files = Arquivos com falha
+
+flash-driver-title = Instalar driver
+driver-smartphone-button = Smartphone
+driver-tablet-button = Tablet
+driver-install-button = Instalar
+driver-desc = Os Mobile Drivers da Motorola são instalados neste computador. O download começa imediatamente e, em seguida, o programa de instalação é iniciado.
+driver-linux-desc = As regras udev do Android são instaladas em /etc/udev/rules.d e o udev é reiniciado, para que adb e fastboot possam acessar os telefones como usuário comum. Isso exige permissões de administrador.
+driver-downloading = Baixando o driver…
+driver-installing = Iniciando o programa de instalação…
+driver-installing-linux = Instalando as regras udev…
+driver-done = O programa de instalação foi iniciado. Siga as instruções dele para concluir a instalação.
+driver-done-linux = As regras udev foram instaladas.
+driver-password = Senha
+driver-failed = Não foi possível instalar o driver: { $error }
+driver-error-password = A senha não foi aceita. Tente novamente.
+driver-error-no-sudo = O sudo não foi encontrado, então as regras udev não podem ser instaladas.

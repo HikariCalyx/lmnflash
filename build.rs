@@ -1,4 +1,15 @@
 fn main() {
+    // `src/driver_install.rs` compiles the udev-rules installer out of the
+    // submodule; without it the only error would be a missing file deep in the
+    // build, so say what to do about it instead.
+    let submodule = std::path::Path::new("vendor/android-udev-rules/install.sh");
+    if !submodule.exists() {
+        panic!(
+            "{} is missing: run `git submodule update --init --recursive`",
+            submodule.display()
+        );
+    }
+
     // Expose the Rust build target triple to the crate (`env!("TARGET")` is
     // only defined in build scripts, not while compiling the crate itself).
     // The telemetry fingerprint uses it to identify the running platform.

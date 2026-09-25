@@ -344,5 +344,47 @@ mod tests {
             assert!(countdown.contains("10"), "{language:?}: {countdown}");
         }
     }
+
+    /// Every "Install Driver" string the dialog can show must exist and
+    /// interpolate in every locale: the failure message carries the raw error,
+    /// and a translation that names `$error` differently would leave a hole in
+    /// it (or, worse, reach `tr` with a missing id and kill a release build).
+    #[test]
+    fn the_driver_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-driver-title",
+            "driver-smartphone-button",
+            "driver-tablet-button",
+            "driver-install-button",
+            "driver-desc",
+            "driver-linux-desc",
+            "driver-downloading",
+            "driver-installing",
+            "driver-installing-linux",
+            "driver-done",
+            "driver-done-linux",
+            "driver-password",
+            "driver-error-password",
+            "driver-error-no-sudo",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                assert!(!bundle.tr(id).trim().is_empty(), "{language:?}: {id}");
+            }
+
+            let failure = bundle.tr_with_args(
+                "driver-failed",
+                &[("error", "connection reset".to_owned())],
+            );
+            assert!(
+                failure.contains("connection reset"),
+                "{language:?}: {failure}"
+            );
+            assert!(!failure.contains('\u{2068}'), "{language:?}: {failure}");
+        }
+    }
 }
 

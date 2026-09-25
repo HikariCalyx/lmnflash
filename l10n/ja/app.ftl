@@ -6,7 +6,8 @@ mode-2 = スマホ書き換え
 mode-3 = ファームウェア復号
 
 flash-bootloader-title = ブートローダーのロック解除
-flash-bootloader-button = ロックを解除
+flash-bootloader-smartphone-button = スマホ
+flash-bootloader-tablet-button = タブレット
 
 flash-bootloader-choose = ブートローダーのロックを解除する方法を選択してください
 flash-bootloader-guided = ガイド
@@ -280,3 +281,19 @@ decrypt-done = 復号が完了しました：成功 { $ok } 件、失敗 { $fail
 decrypt-no-files = 選択したフォルダーに *.x または *.t ファイルが見つかりません
 decrypt-password-required = 復号パスワードを入力するか、「カスタム パスワードを使用」のチェックを外してください
 decrypt-failed-files = 復号に失敗したファイル
+
+flash-driver-title = ドライバーのインストール
+driver-smartphone-button = スマホ
+driver-tablet-button = タブレット
+driver-install-button = インストール
+driver-desc = Motorola の Mobile Drivers をこのコンピューターにインストールします。ダウンロードはすぐに始まり、その後セットアッププログラムが起動します。
+driver-linux-desc = Android 用の udev ルールを /etc/udev/rules.d にインストールして udev を再起動し、一般ユーザーでも adb と fastboot で端末にアクセスできるようにします。管理者権限が必要です。
+driver-downloading = ドライバーをダウンロード中…
+driver-installing = セットアッププログラムを起動中…
+driver-installing-linux = udev ルールをインストール中…
+driver-done = セットアッププログラムを起動しました。画面の指示に従ってインストールを完了してください。
+driver-done-linux = udev ルールをインストールしました。
+driver-password = パスワード
+driver-failed = ドライバーをインストールできませんでした：{ $error }
+driver-error-password = パスワードが受け入れられませんでした。もう一度お試しください。
+driver-error-no-sudo = sudo が見つからないため、udev ルールをインストールできません。
