@@ -649,6 +649,10 @@ pub struct DeviceVars {
     pub product: Option<String>,
     /// Region/operator the unit was built for (`ro.carrier`), e.g. `retus`.
     pub carrier: Option<String>,
+    /// `is-userspace`: `yes` in userspace fastboot (`fastbootd`), `no` in the
+    /// bootloader. `None` when the bootloader does not answer the variable at
+    /// all — never an empty string.
+    pub is_userspace: Option<String>,
 }
 
 /// Reads `securestate`, `cid`, `product` and `ro.carrier` from one device.
@@ -674,6 +678,9 @@ pub fn read_device_vars(serial: &str) -> Result<DeviceVars, String> {
         // Bootloaders answer the system property as `ro.carrier`; older ones
         // use the bare name (the same pair Fastboot Fill reads).
         carrier: read("ro.carrier").or_else(|| read("carrier")),
+        // `yes` in fastbootd, `no` in the bootloader; not every bootloader
+        // knows the variable.
+        is_userspace: read("is-userspace"),
     })
 }
 

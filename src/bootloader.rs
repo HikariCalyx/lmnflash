@@ -311,12 +311,18 @@ fn manual_card(state: &State) -> Element<'_, Message> {
             .push(text(info.clone()).size(13.0).style(bright_success));
     }
 
-    container(scrollable(content).width(Fill).height(Fill))
-        .width(640)
-        .height(560)
-        .padding(16)
-        .style(darker_card)
-        .into()
+    // The padding sits inside the scrollable, so the card's border is the
+    // viewport: the scrollbar rides on the right border instead of floating
+    // in the middle of the padding.
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(640)
+    .height(560)
+    .style(darker_card)
+    .into()
 }
 
 /// The fastboot device picker (shown when several devices are connected).

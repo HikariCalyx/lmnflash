@@ -179,12 +179,18 @@ fn card(state: &State) -> Element<'_, Message> {
         });
     }
 
-    container(scrollable(content).width(Fill).height(Fill))
-        .width(520)
-        .height(480)
-        .padding(16)
-        .style(darker_card)
-        .into()
+    // The padding sits inside the scrollable, so the card's border is the
+    // viewport: the scrollbar rides on the right border instead of floating
+    // in the middle of the padding.
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(520)
+    .height(480)
+    .style(darker_card)
+    .into()
 }
 
 /// The clickable list of connected supported devices.

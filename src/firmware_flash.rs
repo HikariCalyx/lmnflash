@@ -21,7 +21,7 @@ use iced::{Alignment, Element, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
 use crate::fastboot_info::SecureState;
-use crate::flash_engine::Engine;
+use crate::flash_engine::{Engine, RebootMode};
 use crate::flashfile::{EraseGroup, FlashPart};
 use crate::guided::spinner;
 use crate::text;
@@ -106,12 +106,18 @@ fn card(state: &State) -> Element<'_, Message> {
         cancel.on_press(Message::FirmwareFlashCancel)
     });
 
-    container(scrollable(content).width(Fill).height(Fill))
-        .width(560)
-        .height(520)
-        .padding(16)
-        .style(darker_card)
-        .into()
+    // The padding sits inside the scrollable, so the card's border is the
+    // viewport: the scrollbar rides on the right border instead of floating
+    // in the middle of the padding.
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(560)
+    .height(520)
+    .style(darker_card)
+    .into()
 }
 
 /// Package selection, tool selection, and device selection.
@@ -267,31 +273,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
             .text_shaping(Shaping::Advanced)
             .on_toggle(Message::FirmwareFlashVerifyToggled),
         )
-        .push(device_header(state, busy));
-
-    if flash.listing {
-        content = content.push(busy_row(state, l10n.tr("factory-reset-reading-devices")));
-    } else if let Some(error) = &flash.list_error {
-        content = content.push(
-            text(error.clone())
-                .size(13.0)
-                .style(iced::widget::text::danger),
-        );
-    } else if flash.devices.is_empty() {
-        let error_id = if flash.total == 0 {
-            "retcn-fill-fastboot-no-device"
-        } else {
-            "retcn-fill-fastboot-unsupported-device"
-        };
-
-        content = content.push(
-            text(l10n.tr(error_id))
-                .size(13.0)
-                .style(iced::widget::text::danger),
-        );
-    } else {
-        content = content.push(device_picker(state));
-    }
+        .push(device_row(state, busy));
 
     // What the selected phone reports about itself.
     if let Some(info) = device_info_section(state) {
@@ -306,13 +288,183 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         && enabled_procedures(flash) > 0
         && emulator_hint.is_none();
     let start = button(text(l10n.tr("firmware-flash-start"))).width(Fill);
-    content = content.push(if ready && !busy {
+    let start = if ready && !busy {
         start.on_press(Message::FirmwareFlashStart)
     } else {
         start
-    });
+    };
+
+    // Exporting needs no phone: the script is written from the package and the
+    // checked procedures, so it can be prepared before the device is plugged
+    // in (or for someone else to run).
+    let export = button(text(l10n.tr("firmware-flash-export")));
+    let export = if !busy && flash.plan.is_some() && enabled_procedures(flash) > 0 {
+        export.on_press(Message::FirmwareFlashExport)
+    } else {
+        export
+    };
+
+    // Rebooting needs a phone but no firmware package: it is the way back out
+    // of fastboot (or into another fastboot mode) on its own. The modes are a
+    // dropdown rather than a page of their own, and picking one runs it — the
+    // control keeps its `Reboot` placeholder, so it reads as a menu and every
+    // pick (even the same one twice) sends a fresh command.
+    let mut modes = vec![
+        reboot_option(l10n, "firmware-flash-reboot-system", RebootMode::System),
+        reboot_option(
+            l10n,
+            "firmware-flash-reboot-bootloader",
+            RebootMode::Bootloader,
+        ),
+        reboot_option(
+            l10n,
+            "firmware-flash-reboot-recovery",
+            RebootMode::Recovery,
+        ),
+    ];
+
+    // `reboot fastboot` only means something while the phone is in the
+    // bootloader, so that choice is offered only when it said so itself.
+    if in_bootloader(state) {
+        modes.push(reboot_option(
+            l10n,
+            "firmware-flash-reboot-fastbootd",
+            RebootMode::Fastbootd,
+        ));
+    }
+
+    modes.push(reboot_option(
+        l10n,
+        "firmware-flash-reboot-sideload",
+        RebootMode::Sideload,
+    ));
+
+    let reboot: iced::widget::PickList<
+        '_,
+        Labeled<RebootMode>,
+        Vec<Labeled<RebootMode>>,
+        Labeled<RebootMode>,
+        Message,
+    > = pick_list(modes, None, |mode| {
+        Message::FirmwareFlashRebootSelected(mode.value)
+    })
+    .placeholder(l10n.tr("firmware-flash-reboot"))
+    .text_shaping(Shaping::Advanced)
+    .style(reboot_menu_style)
+    .width(Fill);
+
+    // The three controls share the row, so they share its width too.
+    let export = export.width(Fill);
+
+    content = content.push(
+        row![start, reboot, export]
+            .spacing(8)
+            .align_y(Alignment::Center),
+    );
+
+    // Whether the phone answered a reboot, or why it did not.
+    if let Some(status) = reboot_status(state) {
+        content = content.push(status);
+    }
+
+    // Where the last export went, or why it could not be written.
+    match &flash.export_result {
+        Some(Ok(path)) => {
+            content = content.push(
+                text(l10n.tr_with_args(
+                    "firmware-flash-export-done",
+                    &[("path", path.display().to_string())],
+                ))
+                .size(12.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(bright_success),
+            );
+        }
+        Some(Err(error)) => {
+            content = content.push(
+                text(l10n.tr_with_args(
+                    "firmware-flash-export-failed",
+                    &[("error", error.clone())],
+                ))
+                .size(12.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(iced::widget::text::danger),
+            );
+        }
+        None => {}
+    }
 
     content.into()
+}
+
+/// One choice of the Reboot dropdown.
+fn reboot_option(
+    l10n: &crate::l10n::Bundle,
+    label_id: &str,
+    value: RebootMode,
+) -> Labeled<RebootMode> {
+    Labeled {
+        label: l10n.tr(label_id),
+        value,
+    }
+}
+
+/// Whether the selected phone is in the bootloader rather than in userspace
+/// fastboot (`fastbootd`).
+///
+/// The phone has to say `no` itself: an unanswered or empty `is-userspace` is
+/// not a `no`, and only a bootloader can be sent to fastbootd.
+fn in_bootloader(state: &State) -> bool {
+    state
+        .flash
+        .firmware
+        .device_vars
+        .as_ref()
+        .and_then(|variables| variables.is_userspace.as_deref())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("no"))
+}
+
+/// The Reboot dropdown only ever shows its placeholder (`Reboot`), so it has
+/// to read as an active control rather than an empty field: its text takes the
+/// colour the buttons next to it label themselves with.
+fn reboot_menu_style(theme: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
+    let mut style = pick_list::default(theme, status);
+    style.placeholder_color = theme.extended_palette().primary.strong.text;
+
+    style
+}
+
+/// Whether a reboot is running, and how the last one went.
+fn reboot_status(state: &State) -> Option<Element<'_, Message>> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    if flash.rebooting {
+        return Some(busy_row(state, l10n.tr("firmware-flash-rebooting")));
+    }
+
+    match &flash.reboot_result {
+        None => None,
+        Some(Ok(())) => Some(
+            text(l10n.tr("firmware-flash-reboot-sent"))
+                .size(13.0)
+                .style(bright_success)
+                .into(),
+        ),
+        Some(Err(error)) => Some(
+            text(format!(
+                "{}: {error}",
+                l10n.tr("firmware-flash-reboot-failed")
+            ))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into(),
+        ),
+    }
 }
 
 /// The checklist that picks which procedures of the package are executed.
@@ -523,30 +675,8 @@ fn running_section(state: &State) -> Element<'_, Message> {
         // The phone is still in fastboot once the flash is done. Leaving it is
         // a separate step, because the boot mode flag has to be cleared first:
         // without that the phone would boot back into fastboot.
-        if flash.rebooting {
-            content = content.push(busy_row(state, l10n.tr("firmware-flash-rebooting")));
-        } else if let Some(outcome) = &flash.reboot_result {
-            match outcome {
-                Ok(()) => {
-                    content = content.push(
-                        text(l10n.tr("firmware-flash-reboot-sent"))
-                            .size(13.0)
-                            .style(bright_success),
-                    );
-                }
-                Err(error) => {
-                    content = content.push(
-                        text(format!(
-                            "{}: {error}",
-                            l10n.tr("firmware-flash-reboot-failed")
-                        ))
-                        .size(13.0)
-                        .width(Fill)
-                        .wrapping(Wrapping::WordOrGlyph)
-                        .style(iced::widget::text::danger),
-                    );
-                }
-            }
+        if let Some(status) = reboot_status(state) {
+            content = content.push(status);
         }
 
         let mut reboot = button(text(l10n.tr("firmware-flash-reboot")));
@@ -847,13 +977,46 @@ fn device_info_section(state: &State) -> Option<Element<'_, Message>> {
     Some(content.into())
 }
 
-/// The "Select a device" label with the Refresh button that re-scans the USB
-/// bus for connected phones.
-fn device_header(state: &State, busy: bool) -> Element<'_, Message> {
-    let refresh = button(text(state.l10n.tr("factory-reset-refresh")));
+/// The device dropdown with the Refresh button that re-scans the USB bus for
+/// connected phones.
+///
+/// The dropdown sits where the "Select a device" label used to be, so the row
+/// is one line: while the scan runs, or when there is nothing to offer, the
+/// same place carries the reason instead.
+fn device_row(state: &State, busy: bool) -> Element<'_, Message> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    let status: Element<'_, Message> = if flash.listing {
+        busy_row(state, l10n.tr("factory-reset-reading-devices"))
+    } else if let Some(error) = &flash.list_error {
+        text(error.clone())
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into()
+    } else if flash.devices.is_empty() {
+        let error_id = if flash.total == 0 {
+            "retcn-fill-fastboot-no-device"
+        } else {
+            "retcn-fill-fastboot-unsupported-device"
+        };
+
+        text(l10n.tr(error_id))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into()
+    } else {
+        device_picker(state)
+    };
+
+    let refresh = button(text(l10n.tr("factory-reset-refresh")));
 
     row![
-        text(state.l10n.tr("factory-reset-select-device")).size(13.0),
+        container(status).width(Fill),
         if busy {
             refresh
         } else {

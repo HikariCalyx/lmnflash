@@ -543,6 +543,27 @@ impl<'a> FastbootDevice<'a> {
     pub fn reboot_bootloader(&self) -> Result<(), String> { self.simple_cmd(b"reboot-bootloader")?; Ok(()) }
     pub fn continue_boot(&self) -> Result<(), String> { self.simple_cmd(b"continue")?; Ok(()) }
 
+    /// Reboots into another mode, e.g. `reboot-recovery` or `reboot-fastboot`
+    /// (userspace fastboot, `fastbootd`).
+    pub fn reboot_into(&self, target: &str) -> Result<(), String> {
+        self.simple_cmd(format!("reboot-{target}").as_bytes())?;
+        Ok(())
+    }
+
+    /// Sends a reboot command and returns **without waiting for the reply**.
+    ///
+    /// `target` is `None` for the system, or `bootloader`, `recovery` or
+    /// `fastboot` (userspace fastboot). A reboot is a "send and forget"
+    /// command: the phone leaves fastboot while it answers — or without
+    /// answering at all — so waiting for the reply only blocks the caller
+    /// until its timeout expires.
+    pub fn send_reboot(&self, target: Option<&str>) -> Result<(), String> {
+        match target {
+            Some(target) => self.write(format!("reboot-{target}").as_bytes()),
+            None => self.write(b"reboot"),
+        }
+    }
+
     fn simple_cmd(&self, cmd: &[u8]) -> Result<Vec<u8>, String> { self.write(cmd)?; self.read_okay() }
 
     /// Like simple_cmd but with an explicit timeout for the response read.

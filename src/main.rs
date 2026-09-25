@@ -10,6 +10,7 @@ mod fastboot_info;
 mod firmware;
 mod firmware_flash;
 mod flash_engine;
+mod flash_script;
 mod flashfile;
 mod guided;
 mod l10n;
@@ -670,6 +671,9 @@ struct FirmwareFlashState {
     rebooting: bool,
     /// Outcome of that reboot, once it ran.
     reboot_result: Option<Result<(), String>>,
+    /// Where the last "Export to script" wrote the plan to, or why it could
+    /// not be written.
+    export_result: Option<Result<std::path::PathBuf, String>>,
 }
 
 impl Default for FirmwareFlashState {
@@ -707,6 +711,7 @@ impl Default for FirmwareFlashState {
             result: None,
             rebooting: false,
             reboot_result: None,
+            export_result: None,
         }
     }
 }
@@ -972,11 +977,18 @@ enum Message {
     FirmwareFlashSelectPart(flashfile::FlashPart),
     /// Firmware Flash: add or remove an erase group (user data / NV cache).
     FirmwareFlashEraseGroupToggled(flashfile::EraseGroup),
+    /// Firmware Flash: write the selected procedures into a script
+    /// (`*.cmd` on Windows, `*.sh` elsewhere).
+    FirmwareFlashExport,
+    /// Firmware Flash: that script was written (or the save dialog was
+    /// cancelled, or the write failed).
+    FirmwareFlashExported(Result<Option<std::path::PathBuf>, String>),
     /// Firmware Flash: copy the flashing log to the clipboard.
     FirmwareFlashCopyLog,
-    /// Firmware Flash: leave fastboot once the flash is done (clears the boot
-    /// mode flag, then reboots the phone).
+    /// Firmware Flash: leave fastboot for Android once the flash is done.
     FirmwareFlashReboot,
+    /// Firmware Flash: a mode was picked from the Reboot dropdown.
+    FirmwareFlashRebootSelected(flash_engine::RebootMode),
     /// Firmware Flash: that reboot finished (or failed).
     FirmwareFlashRebooted(u64, Result<(), String>),
     /// Firmware Flash: leave the procedure checklist.
@@ -1412,6 +1424,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             flash.confirming = false;
             flash.result = None;
             flash.reboot_result = None;
+            flash.export_result = None;
             flash.progress = None;
             flash.step_index = 0;
             flash.step_label.clear();
@@ -1456,6 +1469,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     // uncheck the ones they do not want to run.
                     flash.enabled = vec![true; package.steps.len()];
                     flash.plan = Some(*package);
+                    flash.export_result = None;
                 }
                 flash_engine::PackageEvent::Failed(error) => {
                     flash.loading = false;
@@ -1515,7 +1529,23 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::FirmwareFlashWorkerDone => Task::none(),
-        Message::FirmwareFlashReboot => start_firmware_flash_reboot(state),
+        Message::FirmwareFlashExport => start_firmware_flash_export(state),
+        Message::FirmwareFlashExported(result) => {
+            let flash = &mut state.flash.firmware;
+
+            match result {
+                // Nothing to say about a cancelled save dialog.
+                Ok(None) => {}
+                Ok(Some(path)) => flash.export_result = Some(Ok(path)),
+                Err(error) => flash.export_result = Some(Err(error)),
+            }
+
+            Task::none()
+        }
+        Message::FirmwareFlashReboot => {
+            start_firmware_flash_reboot(state, flash_engine::RebootMode::System)
+        }
+        Message::FirmwareFlashRebootSelected(mode) => start_firmware_flash_reboot(state, mode),
         Message::FirmwareFlashRebooted(job, result) => {
             let flash = &mut state.flash.firmware;
             // Outcome of a reboot this dialog no longer runs.
@@ -2957,12 +2987,89 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
     Task::batch([producer, consumer])
 }
 
-/// Clears the boot mode flag and reboots the phone, once the flash is done.
+/// Writes the checked procedures (and the added erases) into a script the
+/// user picks the name of: `*.cmd` on Windows, `*.sh` elsewhere.
 ///
-/// The commands go to the same device with the same engine the package was
-/// flashed with, and their output is streamed into the log like during a
-/// flash.
-fn start_firmware_flash_reboot(state: &mut State) -> Task<Message> {
+/// The script is written from the same selection `start_firmware_flash` would
+/// run, so both describe the same flash. A device is not required — the serial
+/// is only written into the script when one is selected.
+fn start_firmware_flash_export(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+
+    if flash.loading || flash.running || flash.rebooting {
+        return Task::none();
+    }
+
+    let Some(package) = flash.plan.clone() else {
+        return Task::none();
+    };
+
+    // The checked procedures, in package order — the same list the flash runs.
+    let steps: Vec<flashfile::FlashOp> = package
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| flash.enabled.get(*index).copied().unwrap_or(true))
+        .map(|(_, step)| step.clone())
+        .collect();
+
+    if steps.is_empty() {
+        return Task::none();
+    }
+
+    let extra_erases = extra_erase_partitions(flash);
+    let engine = flash.engine.clone();
+    let serial = flash.selected.clone().unwrap_or_default();
+    let shell = flash_script::Shell::for_host();
+    let suggested = shell.file_name(package.model.as_deref());
+    let extension = shell.extension();
+
+    flash.export_result = None;
+
+    // The save dialog blocks, so it runs on a worker thread; the script is
+    // written there too, before the dialog's answer is handed back.
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let job = flash_script::ScriptJob {
+                    package: &package,
+                    steps: &steps,
+                    extra_erases: &extra_erases,
+                    engine: &engine,
+                    serial: &serial,
+                    shell,
+                };
+                let script = flash_script::render(&job);
+
+                let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(&suggested)
+                    .add_filter("Script", &[extension])
+                    .save_file()
+                else {
+                    return Ok(None);
+                };
+
+                std::fs::write(&path, script)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+
+                Ok(Some(path))
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        Message::FirmwareFlashExported,
+    )
+}
+
+/// Sends the phone into `mode` (out of fastboot, into the bootloader, the
+/// recovery, userspace fastboot, or recovery's sideload mode).
+///
+/// The commands go to the selected device with the engine the dialog is set
+/// to, and their output is streamed into the log like during a flash.
+fn start_firmware_flash_reboot(
+    state: &mut State,
+    mode: flash_engine::RebootMode,
+) -> Task<Message> {
     let flash = &mut state.flash.firmware;
     let Some(serial) = flash.selected.clone() else {
         return Task::none();
@@ -2986,7 +3093,7 @@ fn start_firmware_flash_reboot(state: &mut State) -> Task<Message> {
     let producer = Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
-                flash_engine::reboot_to_system(&engine, &serial, &emit)
+                flash_engine::reboot(&engine, &serial, mode, &emit)
             })
             .await
             .unwrap_or_else(|error| Err(format!("background task failed: {error}")))

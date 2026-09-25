@@ -499,96 +499,209 @@ pub fn run(job: FlashJob, emit: &(dyn Fn(FlashEvent) + Send + Sync)) {
     emit(FlashEvent::Finished(result));
 }
 
-/// Takes the device out of fastboot once the flash is done: the boot mode
-/// flag the firmware sets (`oem config bootmode fastboot`) is cleared first,
-/// then the phone is rebooted into the system.
+/// What the phone should boot into when a reboot is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebootMode {
+    /// Leave fastboot for Android. The boot mode flag the firmware sets
+    /// (`oem config bootmode fastboot`) is cleared first, otherwise the phone
+    /// boots straight back into fastboot.
+    System,
+    /// `reboot-bootloader`: back into the bootloader (fastboot).
+    Bootloader,
+    /// `reboot recovery`: the recovery menu.
+    Recovery,
+    /// `reboot fastboot`: userspace fastboot (`fastbootd`).
+    Fastbootd,
+    /// Write the sideload payload to `misc` and reboot: the phone comes up in
+    /// recovery's "apply update from ADB" mode.
+    Sideload,
+}
+
+/// Reboots the phone, into `mode`, through the engine the dialog is set to.
 ///
-/// Both commands run through the engine the package was flashed with, and the
-/// tool's output is forwarded to the log like during a flash.
-pub fn reboot_to_system(
+/// A GUI flash has no command line of its own, so the built-in engine is used
+/// for this — unless an external `mfastboot` is selected, which then runs the
+/// same commands.
+pub fn reboot(
     engine: &Engine,
     serial: &str,
+    mode: RebootMode,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
 ) -> Result<(), String> {
     match engine {
-        Engine::Builtin => {
-            emit(FlashEvent::Log(format!(
-                "connecting to {} (built-in fastboot)",
-                if serial.is_empty() { "device" } else { serial }
-            )));
+        Engine::Builtin => reboot_builtin(serial, mode, emit),
+        Engine::Mfastboot(tool) => reboot_with_mfastboot(tool, serial, mode, emit),
+    }
+}
 
-            let mut device = fastboot::FastbootDevice::connect(serial)?;
-            // Show what the bootloader answers, like during a flash.
-            device.set_packet_logger(Some(Box::new(|line| emit(FlashEvent::Log(line)))));
+/// Runs one reboot through the built-in `fastboot` crate.
+fn reboot_builtin(
+    serial: &str,
+    mode: RebootMode,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<(), String> {
+    emit(FlashEvent::Log(format!(
+        "connecting to {} (built-in fastboot)",
+        if serial.is_empty() { "device" } else { serial }
+    )));
 
+    let mut device = fastboot::FastbootDevice::connect(serial)?;
+    // Show what the bootloader answers, like during a flash.
+    device.set_packet_logger(Some(Box::new(|line| emit(FlashEvent::Log(line)))));
+
+    match mode {
+        RebootMode::System => {
             emit(FlashEvent::Log("oem fb_mode_clear".to_string()));
             device.oem("fb_mode_clear")?;
 
             emit(FlashEvent::Log("reboot".to_string()));
-            reboot_builtin(&device, emit)
+            device.send_reboot(None)
         }
-        Engine::Mfastboot(tool) => {
-            let directory = std::env::temp_dir();
+        RebootMode::Bootloader => {
+            emit(FlashEvent::Log("reboot-bootloader".to_string()));
+            device.send_reboot(Some("bootloader"))
+        }
+        RebootMode::Recovery => {
+            emit(FlashEvent::Log("reboot-recovery".to_string()));
+            device.send_reboot(Some("recovery"))
+        }
+        RebootMode::Fastbootd => {
+            emit(FlashEvent::Log("reboot-fastboot".to_string()));
+            device.send_reboot(Some("fastboot"))
+        }
+        RebootMode::Sideload => {
+            let payload = misc_sideload_bcb();
 
             emit(FlashEvent::Log(format!(
-                "{} -s {} oem fb_mode_clear",
-                tool.label(),
-                serial
+                "flash misc ({} bytes, ADB sideload)",
+                payload.len()
             )));
+            device.flash("misc", &payload, None)?;
 
-            let mut clear = tool.emulator.command(&tool.path);
-            if !serial.is_empty() {
-                clear.arg("-s").arg(serial);
-            }
-            clear.arg("oem").arg("fb_mode_clear");
-
-            let status = run_tool_command(clear, &directory, emit)?;
-            if !status.success() {
-                return Err(format!("{} failed for oem fb_mode_clear", tool.label()));
-            }
-
-            emit(FlashEvent::Log(format!(
-                "{} -s {} reboot",
-                tool.label(),
-                serial
-            )));
-
-            let mut restart = tool.emulator.command(&tool.path);
-            if !serial.is_empty() {
-                restart.arg("-s").arg(serial);
-            }
-            restart.arg("reboot");
-
-            match run_tool_command(restart, &directory, emit) {
-                Ok(status) if status.success() => Ok(()),
-                // The phone leaves fastboot while the command is running, so
-                // a non-zero exit does not mean the reboot did not happen.
-                Ok(status) => {
-                    emit(FlashEvent::Log(format!(
-                        "{} exited with {status}; the phone reboots anyway",
-                        tool.label()
-                    )));
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            }
+            emit(FlashEvent::Log("reboot".to_string()));
+            device.send_reboot(None)
         }
     }
+    // A reboot is a send-and-forget command: nothing is read back, so the only
+    // failure left is the write itself (the phone may already be gone).
+    .or_else(|error| {
+        emit(FlashEvent::Log(format!("reboot: {error}")));
+        Ok(())
+    })
 }
 
-/// Sends the `reboot` command through the built-in fastboot crate.
-///
-/// The device can disappear from USB before it answers the packet, which is
-/// not a failure of the reboot itself, so such an error only goes to the log.
-fn reboot_builtin(
-    device: &fastboot::FastbootDevice<'_>,
+/// Runs one reboot through the external `mfastboot`.
+fn reboot_with_mfastboot(
+    tool: &Mfastboot,
+    serial: &str,
+    mode: RebootMode,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
 ) -> Result<(), String> {
-    if let Err(error) = device.reboot() {
-        emit(FlashEvent::Log(format!("reboot: {error}")));
+    let directory = std::env::temp_dir();
+
+    // The sideload payload is written next to the tool's working directory,
+    // because `mfastboot flash` takes a file.
+    let sideload_path = directory.join("lmnflash-misc-sideload.img");
+
+    let (setup, restart): (Option<Vec<&str>>, Vec<&str>) = match mode {
+        RebootMode::System => (
+            // Clearing the flag first keeps the phone from booting back into
+            // fastboot, and it has to succeed to be worth anything.
+            Some(vec!["oem", "fb_mode_clear"]),
+            vec!["reboot"],
+        ),
+        RebootMode::Bootloader => (None, vec!["reboot-bootloader"]),
+        RebootMode::Recovery => (None, vec!["reboot", "recovery"]),
+        RebootMode::Fastbootd => (None, vec!["reboot", "fastboot"]),
+        RebootMode::Sideload => {
+            let payload = misc_sideload_bcb();
+            std::fs::write(&sideload_path, payload)
+                .map_err(|error| format!("could not write {}: {error}", sideload_path.display()))?;
+
+            (Some(vec!["flash", "misc", sideload_path.to_str().unwrap_or_default()]), vec!["reboot"])
+        }
+    };
+
+    if let Some(args) = setup {
+        emit(FlashEvent::Log(tool_command_line(tool, serial, &args)));
+
+        let command = tool_command(tool, serial, &args);
+        let status = run_tool_command(command, &directory, emit)?;
+
+        if !status.success() {
+            return Err(format!(
+                "{} failed for {}",
+                tool.label(),
+                args.join(" ")
+            ));
+        }
+    }
+
+    emit(FlashEvent::Log(tool_command_line(tool, serial, &restart)));
+
+    let command = tool_command(tool, serial, &restart);
+    let status = run_tool_command(command, &directory, emit)?;
+
+    // The phone leaves fastboot while the command runs, so a non-zero exit
+    // does not mean the reboot did not happen.
+    if !status.success() {
+        emit(FlashEvent::Log(format!(
+            "{} exited with {status}; the phone reboots anyway",
+            tool.label()
+        )));
+    }
+
+    if mode == RebootMode::Sideload {
+        let _ = std::fs::remove_file(&sideload_path);
     }
 
     Ok(())
+}
+
+/// The `mfastboot` command for `args`, addressing `serial` when there is one.
+fn tool_command(tool: &Mfastboot, serial: &str, args: &[&str]) -> Command {
+    let mut command = tool.emulator.command(&tool.path);
+
+    if !serial.is_empty() {
+        command.arg("-s").arg(serial);
+    }
+
+    command.args(args);
+    command
+}
+
+/// How a command is written into the log (`mfastboot 34.0.4 -s ZY22ABC reboot`).
+fn tool_command_line(tool: &Mfastboot, serial: &str, args: &[&str]) -> String {
+    let mut line = tool.label();
+
+    if !serial.is_empty() {
+        line.push_str(" -s ");
+        line.push_str(serial);
+    }
+
+    for arg in args {
+        line.push(' ');
+        line.push_str(arg);
+    }
+
+    line
+}
+
+/// The payload written to `misc` to make the phone boot into recovery's
+/// "apply update from ADB" (sideload) mode.
+///
+/// It is an Android bootloader control block: `command[32]`, `status[32]` and
+/// then the arguments handed to recovery. Only these 84 bytes matter — the
+/// `recovery` field is `768` bytes long, and the bootloader reads it up to the
+/// first newline.
+fn misc_sideload_bcb() -> [u8; 84] {
+    let mut bcb = [0u8; 84];
+
+    bcb[..13].copy_from_slice(b"boot-recovery");
+    bcb[64..83].copy_from_slice(b"recovery\n--sideload");
+    bcb[83] = b'\n';
+
+    bcb
 }
 
 /// Runs the steps through the built-in `fastboot` crate.
@@ -1099,6 +1212,22 @@ mod tests {
             assert_eq!(command.get_program(), binary.as_os_str());
             assert_eq!(command.get_args().count(), 0);
         }
+    }
+
+    #[test]
+    fn the_sideload_payload_matches_the_reference_file() {
+        // Hex dump of `reference/misc-sideload`: the command (`boot-recovery`),
+        // 51 zero bytes, then the arguments handed to recovery.
+        let zeros = "00".repeat(51);
+        let payload = misc_sideload_bcb()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+
+        assert_eq!(
+            payload,
+            format!("626f6f742d7265636f76657279{zeros}7265636f766572790a2d2d736964656c6f61640a")
+        );
     }
 
     #[test]
