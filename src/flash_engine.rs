@@ -1,6 +1,6 @@
 //! Flashing engine for the "Firmware Flash" feature (Mode 2).
 //!
-//! Two backends can run a [`FlashPackage`]:
+//! Three backends can run a [`FlashPackage`]:
 //!
 //! * **External `mfastboot`** — Motorola's `fastboot` fork, looked up next to
 //!   the application (see [`discover_mfastboot`]). Preferred, because its
@@ -8,10 +8,14 @@
 //!   Intel binaries, so an ARM machine runs them through an emulator —
 //!   Rosetta 2 on macOS, box64 on Linux — and when that is not installed yet
 //!   the user is told to install it (see [`Mfastboot::emulator`]).
+//! * **Google's `fastboot`** — the one from the Android platform-tools,
+//!   downloaded into the configuration directory when the user picks it (see
+//!   [`crate::platform_tools`]). It is the reference implementation and takes
+//!   the same commands as `mfastboot`.
 //! * **Built-in fastboot** — the pure-Rust `fastboot` crate used by the other
 //!   features. Used when no `mfastboot` binary is shipped for the platform.
 //!
-//! Both backends run the package's steps in order and report through a single
+//! All backends run the package's steps in order and report through a single
 //! callback, which the UI turns into messages: step transitions, byte
 //! progress, and the tool's own output as log lines.
 
@@ -21,23 +25,44 @@ use std::process::{Command, Stdio};
 
 use crate::flashfile::{self, FlashOp, FlashPackage};
 
-/// An external `mfastboot` executable found next to the application.
+/// An external `fastboot`-compatible executable the dialog can run: one of the
+/// shipped `mfastboot` builds, or Google's `fastboot` from the platform-tools.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mfastboot {
-    /// Label taken from the containing directory (e.g. `34.0.4`), or `local`
-    /// for a binary placed directly next to the application.
+    /// Label taken from the containing directory (e.g. `34.0.4`), `local`
+    /// for a binary placed directly next to the application, or `latest` for
+    /// the platform-tools, whose build is not versioned here.
     pub version: String,
     pub path: PathBuf,
     /// What starts this build on this machine. The shipped builds are Intel,
     /// so an ARM machine runs them through an emulator, which may still have
     /// to be installed (see [`Emulator::hint_ids`]).
     pub emulator: Emulator,
+    /// Where the build comes from: it decides what the picker and the log
+    /// call it.
+    pub origin: Origin,
+}
+
+/// Where an external `fastboot` comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A build that ships with the release, or was placed next to the
+    /// application by hand: Motorola's `mfastboot`.
+    Shipped,
+    /// Google's `fastboot` from the Android platform-tools, downloaded into
+    /// the configuration directory.
+    PlatformTools,
 }
 
 impl Mfastboot {
-    /// The label shown in the engine picker.
+    /// What the log calls this build (`mfastboot 34.0.4`, `Google Platform
+    /// Tools`). The picker labels the platform-tools in the user's language
+    /// instead, which is a product name rather than a version.
     pub fn label(&self) -> String {
-        format!("mfastboot {}", self.version)
+        match self.origin {
+            Origin::Shipped => format!("mfastboot {}", self.version),
+            Origin::PlatformTools => "Google Platform Tools".to_owned(),
+        }
     }
 }
 
@@ -46,8 +71,30 @@ impl Mfastboot {
 pub enum Engine {
     /// The built-in `fastboot` crate.
     Builtin,
-    /// An external `mfastboot` executable.
+    /// An external `fastboot` executable.
     Mfastboot(Mfastboot),
+}
+
+impl Engine {
+    /// The external tool this engine runs, or `None` for the built-in one.
+    pub fn tool(&self) -> Option<&Mfastboot> {
+        match self {
+            Self::Mfastboot(tool) => Some(tool),
+            Self::Builtin => None,
+        }
+    }
+
+    /// Whether this is Google's `fastboot`, which has to be downloaded before
+    /// it can run (see [`crate::platform_tools`]).
+    pub fn is_platform_tools(&self) -> bool {
+        matches!(
+            self,
+            Self::Mfastboot(Mfastboot {
+                origin: Origin::PlatformTools,
+                ..
+            })
+        )
+    }
 }
 
 /// Events emitted while a package is being loaded (ZIP extraction + parsing).
@@ -163,6 +210,7 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
                         // what the binary is for, so it is taken at face
                         // value.
                         emulator: Emulator::Native,
+                        origin: Origin::Shipped,
                     });
                     continue;
                 }
@@ -185,6 +233,7 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
                                     .to_string(),
                                 path: binary,
                                 emulator: build_emulator.clone(),
+                                origin: Origin::Shipped,
                             });
                         }
                     }
@@ -199,6 +248,7 @@ pub fn discover_mfastboot() -> Vec<Mfastboot> {
                 version: "local".to_owned(),
                 path: direct,
                 emulator: Emulator::Native,
+                origin: Origin::Shipped,
             });
         }
 
@@ -379,7 +429,7 @@ impl Emulator {
 /// as they are (an Intel machine), or because Windows emulates them itself (see
 /// [`platform_fit`]) — or because they cannot run here at all (32-bit ARM Linux,
 /// and macOS 28, which dropped Rosetta 2).
-fn intel_emulator() -> Option<Emulator> {
+pub(crate) fn intel_emulator() -> Option<Emulator> {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         if rosetta_runtime_present() {
             return Some(Emulator::Rosetta { installed: true });
@@ -521,6 +571,61 @@ pub fn run(job: FlashJob, emit: &(dyn Fn(FlashEvent) + Send + Sync)) {
     };
 
     emit(FlashEvent::Finished(result));
+}
+
+/// Asks an external tool what version it reports (`<tool> --version`).
+///
+/// Both tools answer with a version line (`fastboot version 37.0.1-15733141`,
+/// `fastboot version 34.0.4-eng.gongsc.20230918.193125` for a shipped
+/// `mfastboot`), so only the version itself is kept.
+pub fn tool_version(tool: &Mfastboot) -> Result<String, String> {
+    let mut command = tool.emulator.command(&tool.path);
+    command.arg("--version");
+
+    // A GUI application must not flash a console window on screen.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+
+    // The emulator, when there is one: failures have to name the program that
+    // was actually started (`box64`, not the binary it was given).
+    let program = command.get_program().to_string_lossy().to_string();
+
+    let output = command
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not run {program}: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    // A tool that refuses `--version` says why, on either stream.
+    let printed = if stdout.trim().is_empty() { stderr } else { stdout };
+
+    reported_version(&printed).ok_or_else(|| {
+        if output.status.success() {
+            format!("{program} did not report a version")
+        } else {
+            format!("{program} exited with {}", output.status)
+        }
+    })
+}
+
+/// The version in a tool's `--version` output: the first line that says
+/// anything, without the `<name> version` in front of it. A line that does not
+/// name the tool at all is kept as it is.
+fn reported_version(printed: &str) -> Option<String> {
+    let line = printed.lines().map(str::trim).find(|line| !line.is_empty())?;
+
+    let version = line
+        .rsplit_once(" version ")
+        .map(|(_, version)| version)
+        .unwrap_or(line)
+        .trim();
+
+    (!version.is_empty()).then(|| version.to_owned())
 }
 
 /// What the phone should boot into when a reboot is sent.
@@ -1081,16 +1186,19 @@ mod tests {
                 version: "26.0.0".to_owned(),
                 path: PathBuf::from("a"),
                 emulator: Emulator::Native,
+                origin: Origin::Shipped,
             },
             Mfastboot {
                 version: "34.0.4".to_owned(),
                 path: PathBuf::from("b"),
                 emulator: Emulator::Native,
+                origin: Origin::Shipped,
             },
             Mfastboot {
                 version: "28.0.2".to_owned(),
                 path: PathBuf::from("c"),
                 emulator: Emulator::Native,
+                origin: Origin::Shipped,
             },
         ];
 
@@ -1316,8 +1424,46 @@ mod tests {
             version: "34.0.4".to_owned(),
             path: PathBuf::from("mfastboot"),
             emulator: Emulator::Native,
+            origin: Origin::Shipped,
         };
 
         assert_eq!(tool.label(), "mfastboot 34.0.4");
+
+        // The downloaded platform-tools are a product, not a version of
+        // Motorola's fork.
+        let tools = Mfastboot {
+            version: "latest".to_owned(),
+            path: PathBuf::from("fastboot"),
+            emulator: Emulator::Native,
+            origin: Origin::PlatformTools,
+        };
+
+        assert_eq!(tools.label(), "Google Platform Tools");
+        assert!(Engine::Mfastboot(tools).is_platform_tools());
+        assert!(!Engine::Mfastboot(tool).is_platform_tools());
+        assert!(!Engine::Builtin.is_platform_tools());
+    }
+
+    #[test]
+    fn reads_the_version_out_of_a_version_line() {
+        // Google's `fastboot`, which names itself and adds where it runs from.
+        assert_eq!(
+            reported_version("fastboot version 37.0.1-15733141\nInstalled as C:\\pt\\fastboot.exe"),
+            Some("37.0.1-15733141".to_owned())
+        );
+        // A shipped `mfastboot` reports its own build stamp the same way.
+        assert_eq!(
+            reported_version("fastboot version 34.0.4-eng.gongsc.20230918.193125"),
+            Some("34.0.4-eng.gongsc.20230918.193125".to_owned())
+        );
+        // Leading blank lines are skipped, and a line of its own is taken as
+        // it is rather than dropped.
+        assert_eq!(
+            reported_version("\n\n  1.2.3\n"),
+            Some("1.2.3".to_owned())
+        );
+        // Nothing printed is nothing to show.
+        assert_eq!(reported_version(""), None);
+        assert_eq!(reported_version("\n \n"), None);
     }
 }

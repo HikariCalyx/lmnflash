@@ -25,7 +25,7 @@ use crate::flash_engine::{Engine, RebootMode};
 use crate::flashfile::{EraseGroup, FlashPart};
 use crate::guided::spinner;
 use crate::text;
-use crate::{enabled_procedures, FirmwareFlashDialog, Labeled, Message, State};
+use crate::{enabled_procedures, engine_tool_missing, FirmwareFlashDialog, Labeled, Message, State};
 
 /// Id of the flashing log's scrollable, so [`crate`] can scroll it to the
 /// newest line as lines arrive.
@@ -265,7 +265,8 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         );
     }
 
-    // Which tool runs the steps.
+    // Which tool runs the steps, with the button that downloads Google's
+    // platform-tools again next to it.
     let options = engine_options(state);
     let selected = options
         .iter()
@@ -276,16 +277,39 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         pick_list(options, Some(selected), |option| {
             Message::FirmwareFlashEngineSelected(option.value)
         })
-        .text_shaping(Shaping::Advanced);
+        .text_shaping(Shaping::Advanced)
+        .width(Fill);
 
-    content = content.push(
-        row![
-            text(l10n.tr("firmware-flash-tool")).size(13.0),
-            engine_picker,
-        ]
+    // The picker takes the room the button does not, so the button ends up at
+    // the right of the combobox.
+    let mut tool_row: iced::widget::Row<'_, Message> = iced::widget::Row::new()
         .spacing(8)
-        .align_y(Alignment::Center),
-    );
+        .align_y(Alignment::Center)
+        .push(text(l10n.tr("firmware-flash-tool")).size(13.0))
+        .push(engine_picker);
+
+    // Only Google's copy can be updated: the shipped builds are part of the
+    // release they came with.
+    if flash.engine.is_platform_tools() {
+        let update = button(text(l10n.tr("firmware-flash-tools-update")).size(12.0));
+        tool_row = tool_row.push(if flash.installing_tools {
+            update
+        } else {
+            update.on_press(Message::FirmwareFlashToolsUpdate)
+        });
+    }
+
+    content = content.push(tool_row);
+
+    // What the tool reports for `--version`.
+    if let Some(version) = tool_version_row(state) {
+        content = content.push(version);
+    }
+
+    // Google's platform-tools are downloaded the first time they are picked.
+    if let Some(status) = tools_status(state) {
+        content = content.push(status);
+    }
 
     // The shipped `mfastboot` is an Intel binary: an ARM machine only runs it
     // through an emulator (Rosetta 2 on macOS, box64 on Linux), which may
@@ -293,8 +317,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
     // first step fail, and keep Start disabled until it (or the built-in
     // engine) is chosen.
     let emulator_hint = emulator_hint(&flash.engine);
-    if let Some((needed, install)) = emulator_hint {
-        for key in [needed, install] {
+    if let Some((needed, install)) = emulator_hint {        for key in [needed, install] {
             content = content.push(
                 text(l10n.tr(key))
                     .size(12.0)
@@ -322,11 +345,14 @@ fn setup_section(state: &State) -> Element<'_, Message> {
     }
 
     // Flashing needs a parsed package, a selected device, at least one
-    // checked procedure, and a tool that can actually start (an Intel build
-    // whose emulator is missing cannot).
+    // checked procedure, a tool that can actually start (an Intel build whose
+    // emulator is missing cannot, and neither can platform-tools that are
+    // still downloading).
     let ready = flash.plan.is_some()
         && flash.selected.is_some()
         && enabled_procedures(flash) > 0
+        && !flash.installing_tools
+        && !engine_tool_missing(flash)
         && emulator_hint.is_none();
     let start = button(text(l10n.tr("firmware-flash-start"))).width(Fill);
     let start = if ready && !busy {
@@ -849,8 +875,9 @@ fn running_section(state: &State) -> Element<'_, Message> {
     content.into()
 }
 
-/// The engines offered by the picker: the built-in fastboot, then every
-/// `mfastboot` build found next to the application (newest first).
+/// The engines offered by the picker: the built-in fastboot, every `mfastboot`
+/// build found next to the application (newest first), and Google's
+/// platform-tools when this system has a download for them.
 fn engine_options(state: &State) -> Vec<Labeled<Engine>> {
     let mut options = vec![Labeled {
         value: Engine::Builtin,
@@ -864,7 +891,95 @@ fn engine_options(state: &State) -> Vec<Labeled<Engine>> {
         });
     }
 
+    if let Some(tool) = &state.flash.firmware.platform_tools {
+        options.push(Labeled {
+            value: Engine::Mfastboot(tool.clone()),
+            label: state.l10n.tr("firmware-flash-tool-platform-tools"),
+        });
+    }
+
     options
+}
+
+/// The state of the platform-tools download: the busy row while it runs, the
+/// error when it failed, or the confirmation once it finished.
+///
+/// `None` when the built-in engine or a shipped build is selected, so nothing
+/// is shown for them.
+fn tools_status(state: &State) -> Option<Element<'_, Message>> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    if !flash.engine.is_platform_tools() {
+        return None;
+    }
+
+    if flash.installing_tools {
+        return Some(busy_row(state, l10n.tr("firmware-flash-tools-installing")));
+    }
+
+    if let Some(error) = &flash.tools_error {
+        return Some(
+            text(l10n.tr_with_args(
+                "firmware-flash-tools-failed",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into(),
+        );
+    }
+
+    flash.tools_ready.then(|| {
+        text(l10n.tr("firmware-flash-tools-ready"))
+            .size(12.0)
+            .style(bright_success)
+            .into()
+    })
+}
+
+/// The version the selected tool reports for `--version`.
+///
+/// `None` for the built-in engine, which has no command line to ask, and while
+/// there is nothing reported yet.
+fn tool_version_row(state: &State) -> Option<Element<'_, Message>> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    flash.engine.tool()?;
+
+    if flash.reading_version {
+        return Some(busy_row(
+            state,
+            l10n.tr("firmware-flash-tool-version-reading"),
+        ));
+    }
+
+    match &flash.tool_version {
+        Some(Ok(version)) => Some(
+            text(l10n.tr_with_args(
+                "firmware-flash-tool-version",
+                &[("version", version.clone())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .into(),
+        ),
+        Some(Err(error)) => Some(
+            text(l10n.tr_with_args(
+                "firmware-flash-tool-version-failed",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into(),
+        ),
+        None => None,
+    }
 }
 
 /// The localized lines telling the user to install the emulator the selected

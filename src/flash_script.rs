@@ -147,8 +147,8 @@ pub fn render(job: &ScriptJob<'_>) -> String {
 
     let (tool, tool_note) = tool_of(job.engine);
     match shell {
-        Shell::Cmd => out.push_str(&format!("set \"MFASTBOOT={tool}\"\n")),
-        Shell::Sh => out.push_str(&format!("MFASTBOOT={}\n", shell.quote(&tool))),
+        Shell::Cmd => out.push_str(&format!("set \"FASTBOOT={tool}\"\n")),
+        Shell::Sh => out.push_str(&format!("FASTBOOT={}\n", shell.quote(&tool))),
     }
 
     if let Some(note) = tool_note {
@@ -175,8 +175,8 @@ pub fn render(job: &ScriptJob<'_>) -> String {
     }
 
     let prefix = match shell {
-        Shell::Cmd => format!("\"%MFASTBOOT%\"{device}"),
-        Shell::Sh => format!("\"$MFASTBOOT\"{device}"),
+        Shell::Cmd => format!("\"%FASTBOOT%\"{device}"),
+        Shell::Sh => format!("\"$FASTBOOT\"{device}"),
     };
 
     // The procedures, in the order they run.
@@ -324,11 +324,11 @@ mod tests {
 
         assert!(script.starts_with("@echo off\n"));
         assert!(script.contains("cd /d \"/firmware/arcfox\"\n"));
-        assert!(script.contains("set \"MFASTBOOT=fastboot\"\n"));
+        assert!(script.contains("set \"FASTBOOT=fastboot\"\n"));
         assert!(script.contains("set \"SERIAL=ZY22ABC\"\n"));
-        assert!(script.contains("\"%MFASTBOOT%\" -s \"%SERIAL%\" flash boot \"boot.img\"\n"));
-        assert!(script.contains("\"%MFASTBOOT%\" -s \"%SERIAL%\" oem fb_mode_clear\n"));
-        assert!(script.contains("\"%MFASTBOOT%\" -s \"%SERIAL%\" erase modemst2\n"));
+        assert!(script.contains("\"%FASTBOOT%\" -s \"%SERIAL%\" flash boot \"boot.img\"\n"));
+        assert!(script.contains("\"%FASTBOOT%\" -s \"%SERIAL%\" oem fb_mode_clear\n"));
+        assert!(script.contains("\"%FASTBOOT%\" -s \"%SERIAL%\" erase modemst2\n"));
         // Only the selected procedures, and no leftover of the others.
         assert!(!script.contains("getvar"));
     }
@@ -345,13 +345,14 @@ mod tests {
             version: "34.0.4".to_owned(),
             path: PathBuf::from("/opt/mfastboot 34/mfastboot"),
             emulator: crate::flash_engine::Emulator::Native,
+            origin: crate::flash_engine::Origin::Shipped,
         });
 
         let script = render(&job(&package, &steps, &[], &engine, "", Shell::Sh));
 
         assert!(script.starts_with("#!/bin/sh\n"));
-        assert!(script.contains("MFASTBOOT=\"/opt/mfastboot 34/mfastboot\"\n"));
-        assert!(script.contains("\"$MFASTBOOT\" flash boot \"boot image.img\"\n"));
+        assert!(script.contains("FASTBOOT=\"/opt/mfastboot 34/mfastboot\"\n"));
+        assert!(script.contains("\"$FASTBOOT\" flash boot \"boot image.img\"\n"));
         // No device selected: no `SERIAL` line and no `-s`.
         assert!(!script.contains("SERIAL="));
         assert!(!script.contains(" -s "));

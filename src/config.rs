@@ -112,7 +112,10 @@ fn save_config(config: &Config) -> Result<(), String> {
 /// - Windows: `%AppData%\lmnflash`
 /// - Linux: `~/.config/lmnflash`
 /// - macOS: `~/Library/Application Support/com.hikaricalyx.lmnflash`
-fn config_dir() -> PathBuf {
+///
+/// Google's platform-tools are unpacked next to it (see
+/// [`crate::platform_tools`]), so it is crate-visible.
+pub(crate) fn config_dir() -> PathBuf {
     let base = BaseDirs::new()
         .map(|dirs| dirs.config_dir().to_path_buf())
         .unwrap_or_default();

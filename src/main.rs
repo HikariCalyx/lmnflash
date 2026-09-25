@@ -18,6 +18,7 @@ mod flashfile;
 mod guided;
 mod l10n;
 mod login;
+mod platform_tools;
 mod telemetry;
 mod webview;
 
@@ -713,6 +714,21 @@ struct FirmwareFlashState {
     error: Option<String>,
     /// `mfastboot` builds found next to the application (newest first).
     mfastboot: Vec<flash_engine::Mfastboot>,
+    /// Google's `fastboot`, when this system has a download for it. Built when
+    /// the dialog opens, so the picker does not ask the system (Rosetta 2,
+    /// box64) on every frame.
+    platform_tools: Option<flash_engine::Mfastboot>,
+    /// `true` while that download runs.
+    installing_tools: bool,
+    /// Where the last download failed.
+    tools_error: Option<String>,
+    /// `true` once a download finished, so the dialog can say so.
+    tools_ready: bool,
+    /// `true` while the selected tool is asked for its version
+    /// (`fastboot --version`).
+    reading_version: bool,
+    /// What it reported, or why it could not be asked.
+    tool_version: Option<Result<String, String>>,
     /// Backend that runs the package's steps.
     engine: flash_engine::Engine,
     /// Verify the `MD5` recorded for every `flash` step.
@@ -786,6 +802,12 @@ impl Default for FirmwareFlashState {
             editing: false,
             error: None,
             mfastboot: Vec::new(),
+            platform_tools: None,
+            installing_tools: false,
+            tools_error: None,
+            tools_ready: false,
+            reading_version: false,
+            tool_version: None,
             engine: flash_engine::Engine::Builtin,
             // Checksum verification is on unless it is turned off explicitly.
             verify_checksums: true,
@@ -1052,6 +1074,15 @@ enum Message {
     FirmwareFlashPicked(Option<std::path::PathBuf>),
     /// Firmware Flash: the backend that runs the steps was switched.
     FirmwareFlashEngineSelected(flash_engine::Engine),
+    /// Firmware Flash: Google's platform-tools were downloaded, or could not
+    /// be.
+    FirmwareFlashToolsInstalled(Result<std::path::PathBuf, String>),
+    /// Firmware Flash: download Google's platform-tools again, to get the
+    /// current build.
+    FirmwareFlashToolsUpdate,
+    /// Firmware Flash: the selected tool answered `--version` (the path tells
+    /// an answer for a tool that is not selected any more apart).
+    FirmwareFlashToolVersionRead(std::path::PathBuf, Result<String, String>),
     /// Firmware Flash: the "verify checksums" box was toggled.
     FirmwareFlashVerifyToggled(bool),
     /// Firmware Flash: read what the selected phone reports about itself
@@ -1171,6 +1202,8 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.rebooting
         || firmware.reading_info
         || firmware.reading_device
+        || firmware.installing_tools
+        || firmware.reading_version
         || driver.busy;
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
@@ -1376,7 +1409,70 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             start_firmware_flash_load(state, path)
         }
         Message::FirmwareFlashEngineSelected(engine) => {
-            state.flash.firmware.engine = engine;
+            let flash = &mut state.flash.firmware;
+            flash.engine = engine;
+            flash.tools_error = None;
+            flash.tools_ready = false;
+            flash.tool_version = None;
+
+            // Google's platform-tools are fetched the first time they are
+            // picked and used as they are afterwards.
+            if flash.engine.is_platform_tools()
+                && !flash.installing_tools
+                && engine_tool_missing(flash)
+            {
+                return start_platform_tools_install(state);
+            }
+
+            // The versions differ per tool, so the new one is asked too.
+            start_tool_version_read(state)
+        }
+        Message::FirmwareFlashToolsUpdate => {
+            // Only the downloaded platform-tools can be updated, and not while
+            // a download is already running.
+            if !state.flash.firmware.engine.is_platform_tools()
+                || state.flash.firmware.installing_tools
+            {
+                return Task::none();
+            }
+
+            start_platform_tools_install(state)
+        }
+        Message::FirmwareFlashToolVersionRead(path, result) => {
+            let flash = &mut state.flash.firmware;
+
+            // A late answer about a tool that is not selected any more is
+            // dropped, like the device variables' serial guard.
+            if flash.engine.tool().map(|tool| tool.path.as_path()) != Some(path.as_path()) {
+                return Task::none();
+            }
+
+            flash.reading_version = false;
+            flash.tool_version = Some(result);
+            Task::none()
+        }
+        Message::FirmwareFlashToolsInstalled(result) => {
+            let flash = &mut state.flash.firmware;
+            flash.installing_tools = false;
+
+            match result {
+                Ok(path) => {
+                    flash.tools_error = None;
+                    flash.tools_ready = true;
+
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[firmware-flash] platform-tools installed: {}",
+                        path.display()
+                    );
+
+                    // What the fresh download reports is what the dialog
+                    // shows as the version from now on.
+                    return start_tool_version_read(state);
+                }
+                Err(error) => flash.tools_error = Some(error),
+            }
+
             Task::none()
         }
         Message::FirmwareFlashVerifyToggled(verify_checksums) => {
@@ -3086,7 +3182,8 @@ fn start_factory_reset(serial: String) -> Task<Message> {
 }
 
 /// Opens the Firmware Flash dialog: finds the `mfastboot` builds shipped next
-/// to the application and lists the connected devices.
+/// to the application, notes whether Google's platform-tools can be offered,
+/// and lists the connected devices.
 fn start_firmware_flash_dialog(state: &mut State) -> Task<Message> {
     // A fresh job id makes the events of a previous dialog stale.
     let job = state.flash.firmware.job + 1;
@@ -3103,6 +3200,7 @@ fn start_firmware_flash_dialog(state: &mut State) -> Task<Message> {
         dialog: FirmwareFlashDialog::Open,
         job,
         mfastboot,
+        platform_tools: platform_tools::engine(),
         engine,
         listing: true,
         ..FirmwareFlashState::default()
@@ -3112,7 +3210,66 @@ fn start_firmware_flash_dialog(state: &mut State) -> Task<Message> {
         start_firmware_flash_list_devices(),
         // A previous dialog may have left a multi-gigabyte package behind.
         cleanup_firmware_flash_package(),
+        // The engine picked above is the newest `mfastboot`, so its version is
+        // asked for as well.
+        start_tool_version_read(state),
     ])
+}
+
+/// Asks the selected tool what version it reports (`fastboot --version`).
+///
+/// Nothing is asked of the built-in engine, which has no command line, or of a
+/// tool whose file is not there yet — the download that is running reports its
+/// own result and this is started again once it finished.
+fn start_tool_version_read(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    flash.tool_version = None;
+    flash.reading_version = false;
+
+    let Some(tool) = flash.engine.tool().filter(|tool| tool.path.is_file()) else {
+        return Task::none();
+    };
+
+    flash.reading_version = true;
+    let tool = tool.clone();
+    let path = tool.path.clone();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || flash_engine::tool_version(&tool))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        // The mapper runs more than once, so the path it carries is cloned.
+        move |result| Message::FirmwareFlashToolVersionRead(path.clone(), result),
+    )
+}
+
+/// Whether the tool the selected engine runs is not on disk yet: only the
+/// platform-tools are downloaded, the shipped builds and the built-in fastboot
+/// are already there.
+fn engine_tool_missing(flash: &FirmwareFlashState) -> bool {
+    flash
+        .engine
+        .tool()
+        .is_some_and(|tool| !tool.path.is_file())
+}
+
+/// Downloads Google's platform-tools into the configuration directory.
+fn start_platform_tools_install(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    flash.installing_tools = true;
+    flash.tools_error = None;
+    flash.tools_ready = false;
+
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(platform_tools::install)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FirmwareFlashToolsInstalled,
+    )
 }
 
 /// Lists the connected fastboot devices for the Firmware Flash dialog.
@@ -3204,6 +3361,12 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
     };
 
     if flash.running || flash.loading {
+        return Task::none();
+    }
+
+    // Without the file there is nothing to run: the dialog keeps Start
+    // disabled while the platform-tools are downloaded.
+    if engine_tool_missing(flash) {
         return Task::none();
     }
 

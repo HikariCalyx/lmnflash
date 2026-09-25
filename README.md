@@ -54,6 +54,35 @@ The single-file artifacts (`lmnflash-win64.exe`, `lmnflash-win32.exe`,
 `lmnflash-win-arm64.exe`, `lmnflash-linux-x86_64`, …) do not carry `mfastboot`
 and therefore use the built-in fastboot.
 
+### Google's platform-tools
+
+The tool picker also offers Google's own `fastboot`, from the Android
+platform-tools: the archive for the system is downloaded the first time it is
+picked and unpacked into the configuration directory
+(`%AppData%\lmnflash\platform-tools`, `~/.config/lmnflash/platform-tools`,
+`~/Library/Application Support/com.hikaricalyx.lmnflash/platform-tools`). Only
+`fastboot` and the two ADB DLLs it loads on Windows are kept, not the rest of the
+archive.
+
+| System | Archive |
+| --- | --- |
+| Windows | `platform-tools-latest-windows.zip` |
+| Linux | `platform-tools-latest-linux.zip` |
+| macOS | `platform-tools-latest-darwin.zip` |
+
+Later runs use that copy as it is; the **Update** button next to the version
+downloads the current build again (deleting the folder has the same effect).
+
+Whichever engine is picked, the dialog also shows the version the tool reports
+for `--version` (`Reported version: 37.0.1-15733141`) — that is the build which
+will actually run, which for a downloaded `fastboot` is the only place its
+version is visible.
+
+Google publishes no ARM build for Linux, so there an ARM machine runs the
+downloaded `fastboot` through box64, exactly like the shipped `mfastboot`; the
+macOS archive is universal and the Windows one runs on every edition (see
+below).
+
 ### Intel `mfastboot` on ARM machines
 
 `mfastboot` is published for Intel only, so an ARM machine needs a translator to
