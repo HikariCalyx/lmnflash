@@ -19,19 +19,30 @@ use crate::{BootloaderDialog, Message, State};
 
 /// A brighter success green than the theme default, used for positive status
 /// lines (e.g. "Device ID copied to the clipboard.") so they stand out on the
-/// dark dialog background.
-pub(crate) fn bright_success(_theme: &iced::Theme) -> iced::widget::text::Style {
-    iced::widget::text::Style {
-        color: Some(iced::Color::from_rgb8(0x46, 0xE8, 0x8E)),
-    }
+/// dark dialog background. On a light one that green washes out, so the
+/// theme's own success colour is used there instead.
+pub(crate) fn bright_success(theme: &iced::Theme) -> iced::widget::text::Style {
+    let color = if theme.extended_palette().is_dark {
+        iced::Color::from_rgb8(0x46, 0xE8, 0x8E)
+    } else {
+        theme.extended_palette().success.strong.color
+    };
+
+    iced::widget::text::Style { color: Some(color) }
 }
 
 /// An orange used for warnings (e.g. "this phone may be unable to unlock the
-/// bootloader") so it reads as a caution rather than an outright error.
-pub(crate) fn warning_orange(_theme: &iced::Theme) -> iced::widget::text::Style {
-    iced::widget::text::Style {
-        color: Some(iced::Color::from_rgb8(0xFF, 0xA5, 0x00)),
-    }
+/// bootloader") so it reads as a caution rather than an outright error. On a
+/// light background the bright orange is hard to read, so a darker one is used
+/// there — iced's palette has no warning colour to borrow.
+pub(crate) fn warning_orange(theme: &iced::Theme) -> iced::widget::text::Style {
+    let color = if theme.extended_palette().is_dark {
+        iced::Color::from_rgb8(0xFF, 0xA5, 0x00)
+    } else {
+        iced::Color::from_rgb8(0xB4, 0x53, 0x09)
+    };
+
+    iced::widget::text::Style { color: Some(color) }
 }
 
 /// The rounded-box card style used by the dialogs, but with a much darker

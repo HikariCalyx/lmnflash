@@ -495,10 +495,15 @@ fn in_bootloader(state: &State) -> bool {
 
 /// The Reboot dropdown only ever shows its placeholder (`Reboot`), so it has
 /// to read as an active control rather than an empty field: its text takes the
-/// colour the buttons next to it label themselves with.
+/// colour plain text is written in — the one the spinner next to it uses, and
+/// the one the field's own background is made for — so the placeholder reads
+/// like a chosen value.
+///
+/// (The first attempt was `primary.strong.text`, which is the colour that goes
+/// *on* a primary button, i.e. white: invisible on a light theme's card.)
 fn reboot_menu_style(theme: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
     let mut style = pick_list::default(theme, status);
-    style.placeholder_color = theme.extended_palette().primary.strong.text;
+    style.placeholder_color = theme.palette().text;
 
     style
 }
