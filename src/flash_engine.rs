@@ -404,8 +404,9 @@ impl Emulator {
         }
     }
 
-    /// The command that runs `binary`, through the emulator when it needs one.
-    fn command(&self, binary: &Path) -> Command {
+    /// The command that runs `binary`, through the emulator when it needs one
+    /// (the binary itself on a machine that has none).
+    pub(crate) fn command(&self, binary: &Path) -> Command {
         match self {
             Self::Box64 {
                 program: Some(program),

@@ -11,6 +11,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use crate::config;
@@ -173,6 +174,334 @@ fn unpack(archive: &[u8], directory: &Path) -> Result<PathBuf, String> {
     Ok(binary)
 }
 
+/// The directory the `fastboot` alias lives in, next to the tools it stands in
+/// for.
+fn alias_dir() -> PathBuf {
+    install_dir().join("lmnflash-alias")
+}
+
+/// The file name of the alias: a batch file on Windows, a script elsewhere.
+/// Either way it is found through the `PATH` the terminal is started with.
+const ALIAS_FILE: &str = if cfg!(windows) {
+    "fastboot.cmd"
+} else {
+    "fastboot"
+};
+
+/// Whether "Minimal ADB and Fastboot" is installed (Windows).
+///
+/// That tool puts its own `adb.exe` and `fastboot.exe` on the `PATH` when it is
+/// installed, which would be used instead of the ones unpacked here, so the
+/// terminal has to ask the user to uninstall it first.
+///
+/// The uninstall entries are searched by value data (its `DisplayName` is the
+/// only place the name is recorded). `reg query` exits with 1 when nothing
+/// matched, so nothing has to be parsed — its messages are localized.
+pub fn minimal_adb_fastboot_installed() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Stdio;
+
+        const NAME: &str = "Minimal ADB and Fastboot";
+        const ROOTS: &[&str] = &[
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        ];
+
+        // Every root, so a per-user or 32-bit install is found too.
+        let registered = ROOTS.iter().any(|root| {
+            Command::new("reg")
+                .args(["query", *root, "/s", "/f", NAME, "/d"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        });
+
+        if registered {
+            return true;
+        }
+
+        // A copy that was unpacked rather than installed is not registered,
+        // but the installer's own directory is where it would be.
+        let program_files = std::env::var_os("ProgramFiles(x86)")
+            .or_else(|| std::env::var_os("ProgramFiles"));
+
+        program_files.is_some_and(|root| PathBuf::from(root).join(NAME).is_dir())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// Opens a terminal in the platform-tools directory, with `fastboot` aliased
+/// to `tool` when a build is selected, and returns that directory.
+///
+/// The alias matters because the tools are used from the command line: typing
+/// `fastboot` has to run the build the dialog is set to, not Google's copy.
+pub fn open_terminal(tool: Option<&Mfastboot>) -> Result<PathBuf, String> {
+    let directory = install_dir();
+
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+
+    let alias = write_alias(tool)?;
+    let banner = match tool {
+        Some(tool) => format!("LMN Flash: fastboot now runs {}", tool.label()),
+        None => "LMN Flash: platform-tools terminal".to_owned(),
+    };
+
+    #[cfg(target_os = "windows")]
+    spawn_windows_terminal(&directory, alias.as_deref(), &banner)?;
+
+    // A Unix terminal has no way to be given an environment, so the work is
+    // done by a script that the terminal runs.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let script = directory.join(LAUNCHER_FILE);
+
+        std::fs::write(&script, launcher_script(&directory, alias.as_deref(), &banner))
+            .map_err(|error| format!("could not write {}: {error}", script.display()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .map_err(|error| {
+                    format!("could not make {} executable: {error}", script.display())
+                })?;
+        }
+
+        spawn_unix_terminal(&script)?;
+    }
+
+    Ok(directory)
+}
+
+/// Writes the `fastboot` alias for `tool`, returning the directory holding it,
+/// or removes an alias left over from an earlier build when there is nothing
+/// to alias.
+fn write_alias(tool: Option<&Mfastboot>) -> Result<Option<PathBuf>, String> {
+    let directory = alias_dir();
+    let alias = directory.join(ALIAS_FILE);
+
+    let Some(tool) = tool else {
+        // The dialog is set to the built-in fastboot: an alias written before
+        // must not keep shadowing it.
+        let _ = std::fs::remove_file(&alias);
+        return Ok(None);
+    };
+
+    // The alias has to start what the engine starts: on an ARM machine that is
+    // the emulator in front of an Intel build, not the build itself.
+    let command = tool.emulator.command(&tool.path);
+    let program = command.get_program().to_string_lossy().into_owned();
+    let args: Vec<String> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+
+    let script = if cfg!(windows) {
+        windows_alias(&program, &args)
+    } else {
+        unix_alias(&program, &args)
+    };
+
+    std::fs::write(&alias, script)
+        .map_err(|error| format!("could not write {}: {error}", alias.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755)).map_err(
+            |error| format!("could not make {} executable: {error}", alias.display()),
+        )?;
+    }
+
+    Ok(Some(directory))
+}
+
+/// The batch shim: `%*` passes the arguments on as they were typed.
+fn windows_alias(program: &str, args: &[String]) -> String {
+    let mut script = String::from(
+        "@echo off\r\nREM LMN Flash: fastboot runs the build selected in the dialog.\r\n",
+    );
+
+    script.push_str(&windows_word(program));
+
+    for arg in args {
+        script.push(' ');
+        script.push_str(&windows_word(arg));
+    }
+
+    script.push_str(" %*\r\n");
+    script
+}
+
+/// The shell shim: `"$@"` passes the arguments on as they were typed.
+fn unix_alias(program: &str, args: &[String]) -> String {
+    let mut script = String::from(
+        "#!/bin/sh\n# LMN Flash: fastboot runs the build selected in the dialog.\nexec",
+    );
+
+    for word in std::iter::once(program).chain(args.iter().map(String::as_str)) {
+        script.push(' ');
+        script.push_str(&shell_word(word));
+    }
+
+    script.push_str(" \"$@\"\n");
+    script
+}
+
+/// `word` as a cmd argument (the quotes are what a path with spaces needs).
+fn windows_word(word: &str) -> String {
+    format!("\"{word}\"")
+}
+
+/// `word` as a single-quoted shell word, so nothing in it is expanded.
+fn shell_word(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// The script a Unix terminal runs: it puts the alias (and the unpacked tools)
+/// first on the `PATH`, enters the directory, and hands over to the shell.
+///
+/// Built on every platform (it is only *used* off Windows) so that the Unix
+/// path is still compiled — and tested — where the application is developed.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn launcher_script(directory: &Path, alias: Option<&Path>, banner: &str) -> String {
+    let mut paths = Vec::new();
+
+    if let Some(alias) = alias {
+        paths.push(alias.to_string_lossy().into_owned());
+    }
+
+    paths.push(directory.to_string_lossy().into_owned());
+
+    let path = paths
+        .iter()
+        .map(|path| shell_word(path))
+        .collect::<Vec<_>>()
+        .join(":");
+
+    format!(
+        "#!/bin/sh\n\
+         # LMN Flash: the terminal opened by the Firmware Flash dialog.\n\
+         cd {} || exit 1\n\
+         export PATH={path}:\"$PATH\"\n\
+         echo {}\n\
+         exec \"${{SHELL:-/bin/sh}}\" -i\n",
+        shell_word(&directory.to_string_lossy()),
+        shell_word(banner),
+    )
+}
+
+/// The name of that script; Terminal.app only runs a file it recognises as a
+/// script, which is what the `.command` extension is for.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+const LAUNCHER_FILE: &str = if cfg!(target_os = "macos") {
+    "lmnflash-terminal.command"
+} else {
+    "lmnflash-terminal.sh"
+};
+
+/// Starts a console window of its own: the application has none, and the user
+/// has to be able to type into it.
+#[cfg(target_os = "windows")]
+fn spawn_windows_terminal(
+    directory: &Path,
+    alias: Option<&Path>,
+    banner: &str,
+) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+    let mut command = Command::new("cmd.exe");
+    // `/K` prints the banner and keeps the prompt open.
+    command.arg("/K").arg(format!("echo {banner}"));
+    command.current_dir(directory);
+    command.env("PATH", terminal_path(alias, directory)?);
+    // Windows looks in the current directory before it looks at the `PATH`,
+    // and the terminal is opened *in* the platform-tools directory: without
+    // this, `fastboot` would always find Google's `fastboot.exe` there and
+    // never the alias. With it, the `PATH` decides — which is what the alias
+    // needs. (The variable is the documented way to turn that lookup off.)
+    command.env("NoDefaultCurrentDirectoryInExePath", "1");
+    command.creation_flags(CREATE_NEW_CONSOLE);
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not start cmd.exe: {error}"))
+}
+
+/// The `PATH` the terminal gets: the alias, then the unpacked tools, then what
+/// the user already had.
+#[cfg(target_os = "windows")]
+fn terminal_path(alias: Option<&Path>, directory: &Path) -> Result<std::ffi::OsString, String> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+
+    if let Some(alias) = alias {
+        paths.push(alias.to_path_buf());
+    }
+
+    paths.push(directory.to_path_buf());
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+
+    std::env::join_paths(paths).map_err(|error| format!("could not build PATH: {error}"))
+}
+
+/// Opens the script in Terminal.app, which runs it in a new window.
+#[cfg(target_os = "macos")]
+fn spawn_unix_terminal(script: &Path) -> Result<(), String> {
+    Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg("Terminal")
+        .arg(script)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not start Terminal: {error}"))
+}
+
+/// Opens the script in whichever terminal the desktop ships with; the first
+/// one that starts wins.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_unix_terminal(script: &Path) -> Result<(), String> {
+    const EMULATORS: &[(&str, &[&str])] = &[
+        ("x-terminal-emulator", &["-e"]),
+        ("gnome-terminal", &["--"]),
+        ("konsole", &["-e"]),
+        ("xfce4-terminal", &["-e"]),
+        ("xterm", &["-e"]),
+    ];
+
+    let mut failures = Vec::new();
+
+    for (program, args) in EMULATORS {
+        match Command::new(program).args(*args).arg(script).spawn() {
+            Ok(_) => return Ok(()),
+            Err(error) => failures.push(format!("{program}: {error}")),
+        }
+    }
+
+    Err(format!(
+        "no terminal emulator found ({})",
+        failures.join(", ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +583,59 @@ mod tests {
         assert!(unpack(&archive, &directory).is_err());
 
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The alias has to start the build the dialog selected — through the
+    /// emulator when one is needed — and pass the arguments on untouched.
+    #[test]
+    fn the_alias_starts_the_selected_build() {
+        let script = windows_alias(r"C:\tools\mfastboot.exe", &[]);
+        assert!(
+            script.contains("\"C:\\tools\\mfastboot.exe\" %*"),
+            "{script}"
+        );
+
+        // An Intel build on an ARM Linux machine is started through box64,
+        // which is what the alias has to spell out.
+        let script = unix_alias(
+            "box64",
+            &["/opt/mfastboot/darwin_amd64/29.0.6".to_owned()],
+        );
+        assert!(
+            script.contains("exec 'box64' '/opt/mfastboot/darwin_amd64/29.0.6' \"$@\""),
+            "{script}"
+        );
+    }
+
+    /// A path with a quote in it must not end the shell word it sits in.
+    #[test]
+    fn shell_words_survive_quotes() {
+        assert_eq!(shell_word("/a b"), "'/a b'");
+        assert_eq!(shell_word("/it's"), r"'/it'\''s'");
+    }
+
+    /// The Unix launcher enters the directory, puts the alias first on the
+    /// `PATH` and keeps the user's own entries behind it.
+    #[test]
+    fn the_launcher_script_sets_up_the_terminal() {
+        let script = launcher_script(
+            Path::new("/home/me/platform-tools"),
+            Some(Path::new("/home/me/platform-tools/lmnflash-alias")),
+            "LMN Flash: fastboot now runs mfastboot 34.0.4",
+        );
+
+        assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+        assert!(
+            script.contains("cd '/home/me/platform-tools' || exit 1"),
+            "{script}"
+        );
+        assert!(
+            script.contains(
+                "export PATH='/home/me/platform-tools/lmnflash-alias':\
+                 '/home/me/platform-tools':\"$PATH\""
+            ),
+            "{script}"
+        );
+        assert!(script.contains("exec \"${SHELL:-/bin/sh}\" -i"), "{script}");
     }
 }

@@ -724,6 +724,16 @@ struct FirmwareFlashState {
     tools_error: Option<String>,
     /// `true` once a download finished, so the dialog can say so.
     tools_ready: bool,
+    /// `true` while the "Open Terminal" flow runs on its own (the minimal-ADB
+    /// check or the launch itself).
+    terminal_busy: bool,
+    /// `true` while that flow has a platform-tools download running, so its
+    /// result opens the terminal instead of only refreshing the dialog.
+    terminal_after_install: bool,
+    /// Why the terminal could not be opened.
+    terminal_error: Option<TerminalError>,
+    /// The directory the terminal was opened in, once it was.
+    terminal_path: Option<std::path::PathBuf>,
     /// `true` while the selected tool is asked for its version
     /// (`fastboot --version`).
     reading_version: bool,
@@ -806,6 +816,10 @@ impl Default for FirmwareFlashState {
             installing_tools: false,
             tools_error: None,
             tools_ready: false,
+            terminal_busy: false,
+            terminal_after_install: false,
+            terminal_error: None,
+            terminal_path: None,
             reading_version: false,
             tool_version: None,
             engine: flash_engine::Engine::Builtin,
@@ -839,6 +853,16 @@ impl Default for FirmwareFlashState {
             export_result: None,
         }
     }
+}
+
+/// Why the "Open Terminal" button could not open a terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalError {
+    /// "Minimal ADB and Fastboot" is installed: its own `adb` and `fastboot`
+    /// would be used instead of the ones the dialog unpacks.
+    MinimalAdb,
+    /// Anything else, with the message the platform reported.
+    Other(String),
 }
 
 /// Inputs captured when a lookup starts, kept until it finishes so the
@@ -1080,6 +1104,14 @@ enum Message {
     /// Firmware Flash: download Google's platform-tools again, to get the
     /// current build.
     FirmwareFlashToolsUpdate,
+    /// Firmware Flash: open a terminal in the platform-tools directory.
+    FirmwareFlashOpenTerminal,
+    /// Firmware Flash: the check for a "Minimal ADB and Fastboot" install
+    /// finished (`true` = it is installed and has to be removed first).
+    FirmwareFlashTerminalChecked(bool),
+    /// Firmware Flash: the terminal was opened in the carried directory, or
+    /// could not be.
+    FirmwareFlashTerminalOpened(Result<std::path::PathBuf, String>),
     /// Firmware Flash: the selected tool answered `--version` (the path tells
     /// an answer for a tool that is not selected any more apart).
     FirmwareFlashToolVersionRead(std::path::PathBuf, Result<String, String>),
@@ -1203,6 +1235,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.reading_info
         || firmware.reading_device
         || firmware.installing_tools
+        || firmware.terminal_busy
         || firmware.reading_version
         || driver.busy;
     let ticks = if animating {
@@ -1438,6 +1471,48 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             start_platform_tools_install(state)
         }
+        Message::FirmwareFlashOpenTerminal => start_open_terminal(state),
+        Message::FirmwareFlashTerminalChecked(minimal_adb) => {
+            let flash = &mut state.flash.firmware;
+
+            // A minimal ADB install owns the `adb`/`fastboot` names on the
+            // `PATH`; the terminal would hand the user those instead of the
+            // tools here, so it is not opened at all.
+            if minimal_adb {
+                flash.terminal_busy = false;
+                flash.terminal_error = Some(TerminalError::MinimalAdb);
+                return Task::none();
+            }
+
+            flash.terminal_busy = false;
+
+            // The tools have to be on disk before there is anything to open a
+            // terminal for; the download reports back through
+            // `FirmwareFlashToolsInstalled`.
+            if platform_tools_missing(flash) {
+                flash.terminal_after_install = true;
+                return start_platform_tools_install(state);
+            }
+
+            open_platform_tools_terminal(state)
+        }
+        Message::FirmwareFlashTerminalOpened(result) => {
+            let flash = &mut state.flash.firmware;
+            flash.terminal_busy = false;
+
+            match result {
+                Ok(path) => {
+                    flash.terminal_error = None;
+                    flash.terminal_path = Some(path);
+                }
+                Err(error) => {
+                    flash.terminal_path = None;
+                    flash.terminal_error = Some(TerminalError::Other(error));
+                }
+            }
+
+            Task::none()
+        }
         Message::FirmwareFlashToolVersionRead(path, result) => {
             let flash = &mut state.flash.firmware;
 
@@ -1454,6 +1529,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::FirmwareFlashToolsInstalled(result) => {
             let flash = &mut state.flash.firmware;
             flash.installing_tools = false;
+            // A download the terminal button started opens the terminal once
+            // it worked; one the engine started only refreshes the dialog.
+            let for_terminal = std::mem::take(&mut flash.terminal_after_install);
 
             match result {
                 Ok(path) => {
@@ -1466,11 +1544,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         path.display()
                     );
 
+                    if for_terminal {
+                        return open_platform_tools_terminal(state);
+                    }
+
                     // What the fresh download reports is what the dialog
                     // shows as the version from now on.
                     return start_tool_version_read(state);
                 }
-                Err(error) => flash.tools_error = Some(error),
+                Err(error) => {
+                    if for_terminal {
+                        flash.terminal_error = Some(TerminalError::Other(error.clone()));
+                    }
+
+                    flash.tools_error = Some(error);
+                }
             }
 
             Task::none()
@@ -3272,6 +3360,70 @@ fn start_platform_tools_install(state: &mut State) -> Task<Message> {
                 .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
         },
         Message::FirmwareFlashToolsInstalled,
+    )
+}
+
+/// Starts the "Open Terminal" flow, which checks for a competing minimal ADB
+/// install before anything is downloaded.
+fn start_open_terminal(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+
+    if flash.terminal_busy || flash.installing_tools || flash.loading || flash.running {
+        return Task::none();
+    }
+
+    flash.terminal_busy = true;
+    flash.terminal_error = None;
+    flash.terminal_path = None;
+
+    Task::perform(
+        async {
+            // A registry read on Windows (a search through the uninstall
+            // entries), so it does not belong on the UI thread. A check that
+            // cannot run at all is treated as "not installed": the terminal
+            // itself reports what it cannot do.
+            tokio::task::spawn_blocking(platform_tools::minimal_adb_fastboot_installed)
+                .await
+                .unwrap_or(false)
+        },
+        Message::FirmwareFlashTerminalChecked,
+    )
+}
+
+/// Whether the platform-tools the terminal needs are not on disk yet.
+fn platform_tools_missing(flash: &FirmwareFlashState) -> bool {
+    match &flash.platform_tools {
+        // Google publishes nothing for this system: the download reports that
+        // itself, in the terminal's own status row.
+        None => true,
+        Some(tool) => !tool.path.is_file(),
+    }
+}
+
+/// Opens a terminal in the platform-tools directory, with `fastboot` aliased
+/// to the build the dialog is set to when it is an external one.
+fn open_platform_tools_terminal(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.firmware;
+    flash.terminal_busy = true;
+
+    // Only Motorola's `mfastboot` is worth aliasing: the built-in engine has
+    // no binary to point `fastboot` at, and Google's platform-tools *are* the
+    // `fastboot` of that directory (so the alias would shadow it with itself).
+    let alias = flash
+        .engine
+        .tool()
+        .filter(|tool| {
+            tool.origin == flash_engine::Origin::Shipped && tool.path.is_file()
+        })
+        .cloned();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || platform_tools::open_terminal(alias.as_ref()))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::FirmwareFlashTerminalOpened,
     )
 }
 

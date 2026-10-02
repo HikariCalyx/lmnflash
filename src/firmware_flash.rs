@@ -265,8 +265,9 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         );
     }
 
-    // Which tool runs the steps, with the button that downloads Google's
-    // platform-tools again next to it.
+    // Which tool runs the steps, with the buttons that act on the selection
+    // next to the picker: updating Google's copy, and opening a terminal that
+    // uses these tools.
     let options = engine_options(state);
     let selected = options
         .iter()
@@ -280,8 +281,19 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         .text_shaping(Shaping::Advanced)
         .width(Fill);
 
-    // The picker takes the room the button does not, so the button ends up at
-    // the right of the combobox.
+    // The tools are also useful by hand, so they can be handed to a terminal:
+    // it opens in the platform-tools directory, with `fastboot` running the
+    // selected build. Everything it needs to do that is checked when it is
+    // pressed, and it stays disabled while a flash is in flight.
+    let terminal = button(text(l10n.tr("firmware-flash-terminal")).size(12.0));
+    let terminal = if terminal_working(state) {
+        terminal
+    } else {
+        terminal.on_press(Message::FirmwareFlashOpenTerminal)
+    };
+
+    // The picker takes the room the buttons do not, so they end up at the
+    // right of the combobox.
     let mut tool_row: iced::widget::Row<'_, Message> = iced::widget::Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
@@ -299,6 +311,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         });
     }
 
+    tool_row = tool_row.push(terminal);
     content = content.push(tool_row);
 
     // What the tool reports for `--version`.
@@ -308,6 +321,11 @@ fn setup_section(state: &State) -> Element<'_, Message> {
 
     // Google's platform-tools are downloaded the first time they are picked.
     if let Some(status) = tools_status(state) {
+        content = content.push(status);
+    }
+
+    // Whether the terminal was opened, or why it could not be.
+    if let Some(status) = terminal_status(state) {
         content = content.push(status);
     }
 
@@ -954,7 +972,10 @@ fn tools_status(state: &State) -> Option<Element<'_, Message>> {
     let l10n = &state.l10n;
     let flash = &state.flash.firmware;
 
-    if !flash.engine.is_platform_tools() {
+    // While the download was started by the terminal button, the terminal's
+    // own status row carries it — including for the built-in engine, which
+    // does not use the platform-tools at all.
+    if !flash.engine.is_platform_tools() || flash.terminal_after_install {
         return None;
     }
 
@@ -1431,6 +1452,66 @@ fn info_row(label: String, value: Option<String>) -> Element<'static, Message> {
     ]
     .spacing(8)
     .into()
+}
+
+/// Whether the "Open Terminal" button has work in flight: the minimal-ADB
+/// check, a download it started, or the launch itself.
+fn terminal_working(state: &State) -> bool {
+    let flash = &state.flash.firmware;
+
+    flash.terminal_busy
+        || (flash.installing_tools && flash.terminal_after_install)
+        || flash.loading
+        || flash.running
+}
+
+/// The state of the "Open Terminal" button: the busy row while it works, why
+/// it could not open a terminal, or where it opened one.
+fn terminal_status(state: &State) -> Option<Element<'_, Message>> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    if flash.terminal_busy || (flash.installing_tools && flash.terminal_after_install) {
+        return Some(busy_row(
+            state,
+            l10n.tr("firmware-flash-terminal-preparing"),
+        ));
+    }
+
+    match &flash.terminal_error {
+        // A caution rather than a failure: the user can remove the other
+        // install and press the button again.
+        Some(crate::TerminalError::MinimalAdb) => Some(
+            text(l10n.tr("firmware-flash-terminal-minimal-adb"))
+                .size(12.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(warning_orange)
+                .into(),
+        ),
+        Some(crate::TerminalError::Other(error)) => Some(
+            text(l10n.tr_with_args(
+                "firmware-flash-terminal-failed",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into(),
+        ),
+        None => flash.terminal_path.as_ref().map(|path| {
+            text(l10n.tr_with_args(
+                "firmware-flash-terminal-opened",
+                &[("path", path.display().to_string())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(bright_success)
+            .into()
+        }),
+    }
 }
 
 /// A spinner plus its status text.

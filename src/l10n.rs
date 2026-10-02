@@ -386,5 +386,44 @@ mod tests {
             assert!(!failure.contains('\u{2068}'), "{language:?}: {failure}");
         }
     }
+
+    /// Every "Open Terminal" string must exist and interpolate in every locale:
+    /// the two arguments carry a directory and a raw error, and a translation
+    /// that names one differently would leave a hole in the line.
+    #[test]
+    fn the_terminal_messages_render_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "firmware-flash-terminal",
+            "firmware-flash-terminal-preparing",
+            "firmware-flash-terminal-minimal-adb",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                assert!(!bundle.tr(id).trim().is_empty(), "{language:?}: {id}");
+            }
+
+            let opened = bundle.tr_with_args(
+                "firmware-flash-terminal-opened",
+                &[("path", r"C:\tools\platform-tools".to_owned())],
+            );
+            assert!(
+                opened.contains(r"C:\tools\platform-tools"),
+                "{language:?}: {opened}"
+            );
+
+            let failed = bundle.tr_with_args(
+                "firmware-flash-terminal-failed",
+                &[("error", "no terminal emulator found".to_owned())],
+            );
+            assert!(
+                failed.contains("no terminal emulator found"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+        }
+    }
 }
 
