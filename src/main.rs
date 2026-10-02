@@ -1644,11 +1644,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     return Task::none();
                 };
 
+                // On a MediaTek package `dtbo` belongs to the bootloader.
+                let mediatek = package.is_mediatek();
+
                 package
                     .steps
                     .iter()
                     .enumerate()
-                    .filter(|(_, step)| step.part() == Some(part))
+                    .filter(|(_, step)| step.part(mediatek) == Some(part))
                     .map(|(index, _)| index)
                     .collect()
             };

@@ -653,6 +653,10 @@ pub struct DeviceVars {
     /// bootloader. `None` when the bootloader does not answer the variable at
     /// all — never an empty string.
     pub is_userspace: Option<String>,
+    /// The slot the phone is running from (`current-slot`), e.g. `a` or
+    /// `_a`. `None` when the bootloader does not know the variable — a device
+    /// without A/B slots has no other slot to switch to.
+    pub current_slot: Option<String>,
 }
 
 /// The commands the "Read Info" view runs on the selected phone, in order,
@@ -937,6 +941,9 @@ pub fn read_device_vars(serial: &str) -> Result<DeviceVars, String> {
         // `yes` in fastbootd, `no` in the bootloader; not every bootloader
         // knows the variable.
         is_userspace: read("is-userspace"),
+        // Unanswered on a device without A/B slots, and refused by some
+        // bootloaders — either way there is no other slot to switch to.
+        current_slot: read("current-slot"),
     })
 }
 
@@ -960,7 +967,10 @@ pub fn check_factory_reset(serial: &str) -> Result<FactoryResetCheck, String> {
 
 /// Reads a single `getvar` value, keeping the INFO payload the bootloader
 /// reports it in (see `FastbootDevice::getvar_lines`).
-fn getvar_value(device: &fastboot::FastbootDevice, name: &str) -> Result<String, String> {
+pub(crate) fn getvar_value(
+    device: &fastboot::FastbootDevice,
+    name: &str,
+) -> Result<String, String> {
     let lines = device.getvar_lines(name)?;
 
     Ok(parse_getvar_value(name, &lines))

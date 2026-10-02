@@ -550,6 +550,15 @@ impl<'a> FastbootDevice<'a> {
         Ok(())
     }
 
+    /// Sets the active slot: `set_active:<slot>`, the command the
+    /// `fastboot --set-active=<slot>` option sends. `slot` is a single slot
+    /// letter (`a`, `b`); `other` is resolved by the caller, because the
+    /// bootloader only understands the letters themselves.
+    pub fn set_active(&self, slot: &str) -> Result<(), String> {
+        self.simple_cmd(format!("set_active:{slot}").as_bytes())?;
+        Ok(())
+    }
+
     /// Sends a reboot command and returns **without waiting for the reply**.
     ///
     /// `target` is `None` for the system, or `bootloader`, `recovery` or

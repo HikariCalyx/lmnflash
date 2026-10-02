@@ -400,6 +400,17 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         ));
     }
 
+    // Switching slots needs a phone that reports one: a device without A/B
+    // slots answers `current-slot` with nothing (or refuses the variable), and
+    // then there is no other slot to switch to, so the choice is not offered.
+    if current_slot_known(state) {
+        modes.push(reboot_option(
+            l10n,
+            "firmware-flash-reboot-switch-slot",
+            RebootMode::SwitchSlot,
+        ));
+    }
+
     modes.push(reboot_option(
         l10n,
         "firmware-flash-reboot-sideload",
@@ -491,6 +502,17 @@ fn in_bootloader(state: &State) -> bool {
         .as_ref()
         .and_then(|variables| variables.is_userspace.as_deref())
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("no"))
+}
+
+/// Whether the selected phone reports the slot it is running from. Without
+/// one there is no other slot to switch to, and the choice stays hidden.
+fn current_slot_known(state: &State) -> bool {
+    state
+        .flash
+        .firmware
+        .device_vars
+        .as_ref()
+        .is_some_and(|variables| variables.current_slot.is_some())
 }
 
 /// The Reboot dropdown only ever shows its placeholder (`Reboot`), so it has
@@ -1026,6 +1048,14 @@ fn erased_partitions(state: &State) -> Vec<String> {
 /// whatever the user chose). Disabled when the package contains none of them
 /// (the count in the label then says `0`).
 fn part_button(state: &State, part: FlashPart) -> Element<'_, Message> {
+    // On a MediaTek package `dtbo` counts as part of the bootloader.
+    let mediatek = state
+        .flash
+        .firmware
+        .plan
+        .as_ref()
+        .is_some_and(|package| package.is_mediatek());
+
     let count = state
         .flash
         .firmware
@@ -1035,7 +1065,7 @@ fn part_button(state: &State, part: FlashPart) -> Element<'_, Message> {
             package
                 .steps
                 .iter()
-                .filter(|step| step.part() == Some(part))
+                .filter(|step| step.part(mediatek) == Some(part))
                 .count()
         })
         .unwrap_or(0);

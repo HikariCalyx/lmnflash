@@ -80,6 +80,13 @@ impl FlashPart {
 /// Partitions flashed with the baseband part (`do_flash_bp_*.cmd`).
 const BP_PARTITIONS: &[&str] = &["radio", "modem", "fsg", "md1img", "md1img2"];
 
+/// Partitions flashed with the bootloader part on a MediaTek device only.
+///
+/// MediaTek's bootloader chain (`do_flash_bl_mtk.cmd`) flashes `dtbo`
+/// alongside `lk`/`tee`/…, while Qualcomm packages put it in the AP part
+/// (which is why `dtbo` is not part of [`BL_PARTITIONS`]).
+const MTK_BL_PARTITIONS: &[&str] = &["dtbo"];
+
 /// Partitions flashed with the bootloader part (`do_flash_bl_*.cmd`).
 const BL_PARTITIONS: &[&str] = &[
     // GPT and the bootloader images of the Qualcomm / generic flow.
@@ -128,7 +135,10 @@ impl FlashOp {
     ///
     /// `erase` and `oem` commands are part of no group (they are not images),
     /// so they answer `None` and stay exactly as the user left them.
-    pub fn part(&self) -> Option<FlashPart> {
+    ///
+    /// `mediatek` says whether the package is for a MediaTek device: there
+    /// `dtbo` is flashed as part of the bootloader (see [`MTK_BL_PARTITIONS`]).
+    pub fn part(&self, mediatek: bool) -> Option<FlashPart> {
         // Only a flashed image belongs to a part.
         if !matches!(self, Self::Flash { .. }) {
             return None;
@@ -138,7 +148,9 @@ impl FlashOp {
 
         if BP_PARTITIONS.contains(&partition.as_str()) {
             Some(FlashPart::Bp)
-        } else if BL_PARTITIONS.contains(&partition.as_str()) {
+        } else if BL_PARTITIONS.contains(&partition.as_str())
+            || (mediatek && MTK_BL_PARTITIONS.contains(&partition.as_str()))
+        {
             Some(FlashPart::Bl)
         } else {
             Some(FlashPart::Ap)
@@ -220,6 +232,24 @@ pub struct FlashPackage {
     pub ignored_partitions: Vec<String>,
     /// The `flash` / `erase` / `oem` / `getvar` steps, in document order.
     pub steps: Vec<FlashOp>,
+}
+
+impl FlashPackage {
+    /// Whether the package is for a MediaTek device.
+    ///
+    /// The bootloader image names the chip vendor: a Qualcomm package flashes
+    /// `bootloader.img`, a MediaTek one a `preloader`, and a Unisoc one
+    /// `u-boot-spl-16k`. On MediaTek the `dtbo` image is part of the
+    /// bootloader, so the part classification depends on this.
+    pub fn is_mediatek(&self) -> bool {
+        self.steps.iter().any(|step| match step {
+            FlashOp::Flash { partition, file, .. } => {
+                normalize_partition(partition) == "preloader"
+                    || file.to_ascii_lowercase().contains("preloader")
+            }
+            _ => false,
+        })
+    }
 }
 
 /// What the `<header>` of a `flashfile.xml` declares.
@@ -938,34 +968,34 @@ mod tests {
         };
 
         // Bootloader: the GPT plus the bootloader images.
-        assert_eq!(flash("partition").part(), Some(FlashPart::Bl));
-        assert_eq!(flash("bootloader").part(), Some(FlashPart::Bl));
+        assert_eq!(flash("partition").part(false), Some(FlashPart::Bl));
+        assert_eq!(flash("bootloader").part(false), Some(FlashPart::Bl));
         // The MediaTek bootloader chain.
-        assert_eq!(flash("lk").part(), Some(FlashPart::Bl));
-        assert_eq!(flash("efuseBackup").part(), Some(FlashPart::Bl));
+        assert_eq!(flash("lk").part(false), Some(FlashPart::Bl));
+        assert_eq!(flash("efuseBackup").part(false), Some(FlashPart::Bl));
 
         // Baseband.
-        assert_eq!(flash("radio").part(), Some(FlashPart::Bp));
-        assert_eq!(flash("modem").part(), Some(FlashPart::Bp));
-        assert_eq!(flash("fsg").part(), Some(FlashPart::Bp));
-        assert_eq!(flash("md1img").part(), Some(FlashPart::Bp));
+        assert_eq!(flash("radio").part(false), Some(FlashPart::Bp));
+        assert_eq!(flash("modem").part(false), Some(FlashPart::Bp));
+        assert_eq!(flash("fsg").part(false), Some(FlashPart::Bp));
+        assert_eq!(flash("md1img").part(false), Some(FlashPart::Bp));
 
         // Everything else is the Android OS part.
-        assert_eq!(flash("super").part(), Some(FlashPart::Ap));
-        assert_eq!(flash("boot").part(), Some(FlashPart::Ap));
-        assert_eq!(flash("dtbo").part(), Some(FlashPart::Ap));
-        assert_eq!(flash("secdataBackup").part(), Some(FlashPart::Ap));
+        assert_eq!(flash("super").part(false), Some(FlashPart::Ap));
+        assert_eq!(flash("boot").part(false), Some(FlashPart::Ap));
+        assert_eq!(flash("dtbo").part(false), Some(FlashPart::Ap));
+        assert_eq!(flash("secdataBackup").part(false), Some(FlashPart::Ap));
 
         // `erase` and `oem` commands are an image of no part, so the part
         // buttons never touch them — not even when they name the partition of
         // a part (`erase preloader`).
-        assert_eq!(erase("userdata").part(), None);
-        assert_eq!(erase("preloader").part(), None);
+        assert_eq!(erase("userdata").part(false), None);
+        assert_eq!(erase("preloader").part(false), None);
         assert_eq!(
             FlashOp::Oem {
                 var: "config bootmode fastboot".to_owned(),
             }
-            .part(),
+            .part(false),
             None
         );
     }
@@ -978,11 +1008,59 @@ mod tests {
             md5: None,
         };
 
-        assert_eq!(flash("boot_a").part(), Some(FlashPart::Ap));
-        assert_eq!(flash("MODEM_B").part(), Some(FlashPart::Bp));
-        assert_eq!(flash(" Bootloader ").part(), Some(FlashPart::Bl));
-        assert_eq!(flash("vbmeta_system").part(), Some(FlashPart::Ap));
-        assert_eq!(flash("_b").part(), Some(FlashPart::Ap));
+        assert_eq!(flash("boot_a").part(false), Some(FlashPart::Ap));
+        assert_eq!(flash("MODEM_B").part(false), Some(FlashPart::Bp));
+        assert_eq!(flash(" Bootloader ").part(false), Some(FlashPart::Bl));
+        assert_eq!(flash("vbmeta_system").part(false), Some(FlashPart::Ap));
+        assert_eq!(flash("_b").part(false), Some(FlashPart::Ap));
+    }
+
+    #[test]
+    fn mediatek_packages_flash_dtbo_with_the_bootloader() {
+        let flash = |partition: &str| FlashOp::Flash {
+            partition: partition.to_owned(),
+            file: "image.img".to_owned(),
+            md5: None,
+        };
+
+        // A Qualcomm or Unisoc package keeps `dtbo` in the AP part.
+        assert_eq!(flash("dtbo").part(false), Some(FlashPart::Ap));
+
+        // The MediaTek bootloader chain flashes it next to `lk`.
+        assert_eq!(flash("dtbo").part(true), Some(FlashPart::Bl));
+        assert_eq!(flash("lk").part(true), Some(FlashPart::Bl));
+
+        // Everything else is classified the same on both.
+        assert_eq!(flash("boot").part(true), Some(FlashPart::Ap));
+        assert_eq!(flash("radio").part(true), Some(FlashPart::Bp));
+    }
+
+    #[test]
+    fn a_preloader_image_marks_a_mediatek_package() {
+        let flash = |partition: &str, file: &str| FlashOp::Flash {
+            partition: partition.to_owned(),
+            file: file.to_owned(),
+            md5: None,
+        };
+        let package = |steps: Vec<FlashOp>| FlashPackage {
+            directory: PathBuf::from("."),
+            flashfile: PathBuf::from("flashfile.xml"),
+            model: None,
+            software_version: None,
+            cid: None,
+            project_code: None,
+            ignored_partitions: Vec::new(),
+            steps,
+        };
+
+        // Qualcomm names its bootloader image `bootloader.img`, Unisoc
+        // `u-boot-spl-16k`.
+        assert!(!package(vec![flash("bootloader", "bootloader.img")]).is_mediatek());
+        assert!(!package(vec![flash("pre", "u-boot-spl-16k")]).is_mediatek());
+
+        // A MediaTek package carries a `preloader` image.
+        assert!(package(vec![flash("preloader", "preloader.img")]).is_mediatek());
+        assert!(package(vec![flash("pre", "preloader.bin")]).is_mediatek());
     }
 
     #[test]
@@ -1121,7 +1199,7 @@ mod tests {
         );
         assert_eq!(steps[0].describe(), "getvar max-sparse-size");
         // A query is no image of a part.
-        assert_eq!(steps[0].part(), None);
+        assert_eq!(steps[0].part(false), None);
     }
 
     #[test]

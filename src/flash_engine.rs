@@ -644,7 +644,15 @@ pub enum RebootMode {
     /// Write the sideload payload to `misc` and reboot: the phone comes up in
     /// recovery's "apply update from ADB" mode.
     Sideload,
+    /// Clear the boot-mode flag, switch to the slot the phone is *not*
+    /// running, and reboot: the phone comes back up from the other slot.
+    SwitchSlot,
 }
+
+/// The slot a freshly flashed phone is made to boot from: the firmware is
+/// written to the inactive slot, so the active one has to be set for the
+/// update to take effect.
+const ACTIVE_SLOT: &str = "a";
 
 /// Reboots the phone, into `mode`, through the engine the dialog is set to.
 ///
@@ -661,6 +669,40 @@ pub fn reboot(
         Engine::Builtin => reboot_builtin(serial, mode, emit),
         Engine::Mfastboot(tool) => reboot_with_mfastboot(tool, serial, mode, emit),
     }
+}
+
+/// The number of slots the phone reports, falling back to the two of an A/B
+/// device when the bootloader does not answer `slot-count`.
+fn slot_count(device: &fastboot::FastbootDevice) -> usize {
+    crate::fastboot_info::getvar_value(device, "slot-count")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|count| *count >= 2)
+        .unwrap_or(2)
+}
+
+/// The slot `--set-active=other` means: the next one after the current,
+/// wrapping around at the slot count (on an A/B device `a` and `b` swap).
+fn other_slot(current: &str, count: usize) -> Option<String> {
+    if count < 2 {
+        return None;
+    }
+
+    // Bootloaders report the slot as `a`, or `_a` on some models.
+    let current = current.trim().trim_start_matches('_').to_ascii_lowercase();
+    let letter = current.chars().next()?;
+
+    if !letter.is_ascii_lowercase() {
+        return None;
+    }
+
+    let index = (letter as u8 - b'a') as usize;
+
+    if index >= count {
+        return None;
+    }
+
+    Some(((b'a' + ((index + 1) % count) as u8) as char).to_string())
 }
 
 /// Runs one reboot through the built-in `fastboot` crate.
@@ -684,19 +726,19 @@ fn reboot_builtin(
             device.oem("fb_mode_clear")?;
 
             emit(FlashEvent::Log("reboot".to_string()));
-            device.send_reboot(None)
+            send_reboot_tolerantly(&device, None, emit)
         }
         RebootMode::Bootloader => {
             emit(FlashEvent::Log("reboot-bootloader".to_string()));
-            device.send_reboot(Some("bootloader"))
+            send_reboot_tolerantly(&device, Some("bootloader"), emit)
         }
         RebootMode::Recovery => {
             emit(FlashEvent::Log("reboot-recovery".to_string()));
-            device.send_reboot(Some("recovery"))
+            send_reboot_tolerantly(&device, Some("recovery"), emit)
         }
         RebootMode::Fastbootd => {
             emit(FlashEvent::Log("reboot-fastboot".to_string()));
-            device.send_reboot(Some("fastboot"))
+            send_reboot_tolerantly(&device, Some("fastboot"), emit)
         }
         RebootMode::Sideload => {
             let payload = misc_sideload_bcb();
@@ -708,15 +750,45 @@ fn reboot_builtin(
             device.flash("misc", &payload, None)?;
 
             emit(FlashEvent::Log("reboot".to_string()));
-            device.send_reboot(None)
+            send_reboot_tolerantly(&device, None, emit)
+        }
+        RebootMode::SwitchSlot => {
+            emit(FlashEvent::Log("oem fb_mode_clear".to_string()));
+            device.oem("fb_mode_clear")?;
+
+            // `--set-active=other` is resolved on the host: the bootloader
+            // only knows the slot letters themselves.
+            let current = crate::fastboot_info::getvar_value(&device, "current-slot")?;
+            let other = other_slot(&current, slot_count(&device)).ok_or_else(|| {
+                format!("could not tell the other slot from {current:?}")
+            })?;
+
+            emit(FlashEvent::Log(format!("set_active:{other}")));
+            device.set_active(&other)?;
+
+            emit(FlashEvent::Log("reboot".to_string()));
+            send_reboot_tolerantly(&device, None, emit)
         }
     }
-    // A reboot is a send-and-forget command: nothing is read back, so the only
-    // failure left is the write itself (the phone may already be gone).
-    .or_else(|error| {
-        emit(FlashEvent::Log(format!("reboot: {error}")));
-        Ok(())
-    })
+}
+
+/// Sends a reboot command and treats a failed write as a logged note.
+///
+/// A reboot is a send-and-forget command: nothing is read back, so the phone
+/// may already have left fastboot (or left without answering at all) by the
+/// time the packet is written, which is not a failed reboot.
+fn send_reboot_tolerantly(
+    device: &fastboot::FastbootDevice,
+    target: Option<&str>,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<(), String> {
+    match device.send_reboot(target) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            emit(FlashEvent::Log(format!("reboot: {error}")));
+            Ok(())
+        }
+    }
 }
 
 /// Runs one reboot through the external `mfastboot`.
@@ -742,6 +814,12 @@ fn reboot_with_mfastboot(
         RebootMode::Bootloader => (None, vec!["reboot-bootloader"]),
         RebootMode::Recovery => (None, vec!["reboot", "recovery"]),
         RebootMode::Fastbootd => (None, vec!["reboot", "fastboot"]),
+        // `--set-active=other` is a fastboot option: the tool resolves the
+        // other slot itself and sets it before the reboot runs.
+        RebootMode::SwitchSlot => (
+            Some(vec!["oem", "fb_mode_clear"]),
+            vec!["--set-active=other", "reboot"],
+        ),
         RebootMode::Sideload => {
             let payload = misc_sideload_bcb();
             std::fs::write(&sideload_path, payload)
@@ -834,6 +912,50 @@ fn misc_sideload_bcb() -> [u8; 84] {
 }
 
 /// Runs the steps through the built-in `fastboot` crate.
+/// Sets the active slot after a flash, best effort.
+///
+/// The firmware was written to the inactive slot, so the active one is set to
+/// [`ACTIVE_SLOT`] for the update to take effect. A phone without slots (or
+/// one whose bootloader refuses the command) must not turn a successful flash
+/// into a failure, so a failure is only logged.
+fn set_active_builtin(
+    device: &fastboot::FastbootDevice,
+    slot: &str,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) {
+    emit(FlashEvent::Log(format!("set_active:{slot}")));
+
+    if let Err(error) = device.set_active(slot) {
+        emit(FlashEvent::Log(format!(
+            "set active slot {slot} skipped: {error}"
+        )));
+    }
+}
+
+/// [`set_active_builtin`] through an external `fastboot` executable.
+fn set_active_with_mfastboot(
+    tool: &Mfastboot,
+    serial: &str,
+    directory: &Path,
+    slot: &str,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) {
+    let option = format!("--set-active={slot}");
+    let args = [option.as_str()];
+
+    emit(FlashEvent::Log(tool_command_line(tool, serial, &args)));
+
+    let failure = match run_tool_command(tool_command(tool, serial, &args), directory, emit) {
+        Ok(status) if status.success() => return,
+        Ok(status) => format!("{} exited with {status}", tool.label()),
+        Err(error) => error,
+    };
+
+    emit(FlashEvent::Log(format!(
+        "set active slot {slot} skipped: {failure}"
+    )));
+}
+
 fn run_with_builtin(
     job: &FlashJob,
     emit: &(dyn Fn(FlashEvent) + Send + Sync),
@@ -876,6 +998,9 @@ fn run_with_builtin(
             emit(FlashEvent::Log(format!("erase {partition} skipped: {error}")));
         }
     }
+
+    // The firmware went to the inactive slot: make the phone boot from `a`.
+    set_active_builtin(&device, ACTIVE_SLOT, emit);
 
     Ok(())
 }
@@ -977,6 +1102,9 @@ fn run_with_mfastboot(
             )));
         }
     }
+
+    // The firmware went to the inactive slot: make the phone boot from `a`.
+    set_active_with_mfastboot(tool, &job.serial, &job.package.directory, ACTIVE_SLOT, emit);
 
     Ok(())
 }
@@ -1206,6 +1334,25 @@ mod tests {
 
         assert_eq!(versions[0].version, "34.0.4");
         assert_eq!(versions[2].version, "26.0.0");
+    }
+
+    #[test]
+    fn the_other_slot_is_the_next_one() {
+        // An A/B device: the slots swap.
+        assert_eq!(other_slot("a", 2).as_deref(), Some("b"));
+        assert_eq!(other_slot("b", 2).as_deref(), Some("a"));
+        // Some bootloaders report the slot as `_a`.
+        assert_eq!(other_slot("_a", 2).as_deref(), Some("b"));
+        assert_eq!(other_slot(" A ", 2).as_deref(), Some("b"));
+
+        // Three slots (a virtual A/B device) wrap around.
+        assert_eq!(other_slot("c", 3).as_deref(), Some("a"));
+
+        // Nothing to switch to, or nothing that names a slot.
+        assert_eq!(other_slot("", 2), None);
+        assert_eq!(other_slot("a", 1), None);
+        assert_eq!(other_slot("d", 2), None);
+        assert_eq!(other_slot("1", 2), None);
     }
 
     #[test]

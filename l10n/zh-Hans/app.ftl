@@ -165,6 +165,7 @@ firmware-flash-reboot-bootloader = Bootloader
 firmware-flash-reboot-recovery = Recovery
 firmware-flash-reboot-fastbootd = Fastbootd
 firmware-flash-reboot-sideload = ADB Sideload
+firmware-flash-reboot-switch-slot = 切换到另一个启动槽位
 firmware-flash-edit = 编辑
 firmware-flash-select-all = 全选
 firmware-flash-select-part = 选择 { $part } ({ $count })

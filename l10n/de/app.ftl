@@ -165,6 +165,7 @@ firmware-flash-reboot-bootloader = Bootloader
 firmware-flash-reboot-recovery = Recovery
 firmware-flash-reboot-fastbootd = Fastbootd
 firmware-flash-reboot-sideload = ADB Sideload
+firmware-flash-reboot-switch-slot = Zu anderem Boot-Slot wechseln
 firmware-flash-edit = Bearbeiten
 firmware-flash-select-all = Alle auswählen
 firmware-flash-select-part = { $part } auswählen ({ $count })
