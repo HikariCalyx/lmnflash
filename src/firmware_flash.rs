@@ -515,17 +515,34 @@ fn current_slot_known(state: &State) -> bool {
         .is_some_and(|variables| variables.current_slot.is_some())
 }
 
-/// The Reboot dropdown only ever shows its placeholder (`Reboot`), so it has
-/// to read as an active control rather than an empty field: its text takes the
-/// colour plain text is written in — the one the spinner next to it uses, and
-/// the one the field's own background is made for — so the placeholder reads
-/// like a chosen value.
+/// The Reboot dropdown is a menu of one-shot actions sitting in the same row as
+/// two buttons, so it is drawn like them: it borrows the style of a primary
+/// button — the class a plain `button(..)` uses — instead of the pick list's
+/// own field, which is nearly white on a light theme and disappears against
+/// the white dialog.
 ///
-/// (The first attempt was `primary.strong.text`, which is the colour that goes
-/// *on* a primary button, i.e. white: invisible on a light theme's card.)
+/// (The first attempt only recoloured the placeholder, to
+/// `primary.strong.text` — the colour that goes *on* a primary button, i.e.
+/// white in a light theme — and then to the plain text colour, which read as a
+/// chosen value but still left the field looking like an empty input rather
+/// than the button it sits next to.)
 fn reboot_menu_style(theme: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
+    let button_status = match status {
+        pick_list::Status::Active => button::Status::Active,
+        // A button has no "open" state of its own; an open list is still being
+        // hovered by the pointer.
+        pick_list::Status::Hovered | pick_list::Status::Opened => button::Status::Hovered,
+    };
+    let button = button::primary(theme, button_status);
+
     let mut style = pick_list::default(theme, status);
-    style.placeholder_color = theme.palette().text;
+    style.background = button.background.unwrap_or(style.background);
+    style.text_color = button.text_color;
+    // The control always shows its `Reboot` placeholder instead of a selection,
+    // so that is the text that has to read like a button label.
+    style.placeholder_color = button.text_color;
+    style.handle_color = button.text_color;
+    style.border = button.border;
 
     style
 }
