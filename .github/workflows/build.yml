@@ -182,14 +182,19 @@ jobs:
           set -euo pipefail
           mkdir release
 
+          # Standalone binaries are NOT published on their own any more: the
+          # release page only carries the distribution packages (ZIP/TAR.GZ/
+          # DMG). The bundle steps below take the executables straight from the
+          # downloaded artifacts, so nothing has to be staged here.
+          #
           # Windows
-          cp artifacts/lmnflash-x86_64-pc-windows-msvc/lmnflash.exe   release/lmnflash-win64.exe
-          cp artifacts/lmnflash-i686-pc-windows-msvc/lmnflash.exe     release/lmnflash-win32.exe
-          cp artifacts/lmnflash-aarch64-pc-windows-msvc/lmnflash.exe  release/lmnflash-win-arm64.exe
-
+          # cp artifacts/lmnflash-x86_64-pc-windows-msvc/lmnflash.exe   release/lmnflash-win64.exe
+          # cp artifacts/lmnflash-i686-pc-windows-msvc/lmnflash.exe     release/lmnflash-win32.exe
+          # cp artifacts/lmnflash-aarch64-pc-windows-msvc/lmnflash.exe  release/lmnflash-win-arm64.exe
+          #
           # Linux
-          cp artifacts/lmnflash-x86_64-unknown-linux-gnu/lmnflash     release/lmnflash-linux-x86_64
-          cp artifacts/lmnflash-aarch64-unknown-linux-gnu/lmnflash    release/lmnflash-linux-arm64
+          # cp artifacts/lmnflash-x86_64-unknown-linux-gnu/lmnflash     release/lmnflash-linux-x86_64
+          # cp artifacts/lmnflash-aarch64-unknown-linux-gnu/lmnflash    release/lmnflash-linux-arm64
 
           # macOS
           cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg
@@ -207,11 +212,16 @@ jobs:
         run: |
           set -euo pipefail
           for name in win64 win32 win-arm64; do
+            case "$name" in
+              win64)     target=x86_64-pc-windows-msvc ;;
+              win32)     target=i686-pc-windows-msvc ;;
+              win-arm64) target=aarch64-pc-windows-msvc ;;
+            esac
             for version in 34.0.4 28.0.2 26.0.0; do
               mkdir -p "bundle-$name/mfastboot/windows_x86/$version"
               cp prebuilt_binary/windows/$version/* "bundle-$name/mfastboot/windows_x86/$version/"
             done
-            cp "release/lmnflash-$name.exe" "bundle-$name/lmnflash.exe"
+            cp "artifacts/lmnflash-$target/lmnflash.exe" "bundle-$name/lmnflash.exe"
             (cd "bundle-$name" && zip -r -q "../release/lmnflash-$name.zip" .)
           done
 
@@ -223,8 +233,12 @@ jobs:
         run: |
           set -euo pipefail
           for arch in x86_64 arm64; do
+            case "$arch" in
+              x86_64) target=x86_64-unknown-linux-gnu ;;
+              arm64)  target=aarch64-unknown-linux-gnu ;;
+            esac
             mkdir -p "bundle-linux-$arch/mfastboot/linux_amd64/31.0.2"
-            cp "release/lmnflash-linux-$arch" "bundle-linux-$arch/lmnflash"
+            cp "artifacts/lmnflash-$target/lmnflash" "bundle-linux-$arch/lmnflash"
             cp prebuilt_binary/linux_amd64/31.0.2/mfastboot \
                "bundle-linux-$arch/mfastboot/linux_amd64/31.0.2/mfastboot"
             chmod +x "bundle-linux-$arch/lmnflash" \
