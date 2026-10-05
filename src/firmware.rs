@@ -27,6 +27,10 @@ const CN_UNZIP_PASSWORD: &str = "FC(fv:SknR";
 /// (path minus the last two segments).
 const RSA_KEY_ENDPOINT: &str = "https://lsa.lenovo.com/Interface/common/rsa.jhtml";
 
+/// The [`FirmwareError::Other`] message used when the server answered
+/// successfully but had no resource to return for the IMEI.
+const NO_RESOURCE_MESSAGE: &str = "API returned no matching resource";
+
 /// Why an IMEI value was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImeiError {
@@ -117,6 +121,248 @@ fn imei2(imei: &str) -> Option<String> {
     let body = &imei[..14];
     let value: u64 = body.parse::<u64>().ok()?.checked_add(1)?;
     Some(append_check_digit(&format!("{value:014}")))
+}
+
+/// The device codename and Android version encoded in a build fingerprint.
+///
+/// A Motorola fingerprint looks like
+/// `motorola/naples_g_syseq/naples:16/W2WIS36.43-92-4/…`: the second field is
+/// the product name and the third is `<device>:<android version>`. The
+/// codename is the **product**'s first `_` token (`naples`); the device field
+/// can carry a different name (`nevada` builds report `utah`, `paros` builds
+/// report `sorap`), so it is not used for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FingerprintParts {
+    /// The device codename, e.g. `naples` from `naples_g_syseq`.
+    pub codename: String,
+    /// The Android version, e.g. `16`.
+    pub android_version: String,
+}
+
+/// Splits a build fingerprint into its codename and Android version.
+///
+/// Returns `None` when the fingerprint does not have the
+/// `brand/product/device:version/…` shape (a value the device did not report,
+/// or one from another vendor).
+pub fn parse_fingerprint(fingerprint: &str) -> Option<FingerprintParts> {
+    let mut fields = fingerprint.trim().split('/');
+    let product = fields.nth(1)?;
+    let device_version = fields.next()?;
+
+    let codename = file_codename(product).trim();
+    let android_version = device_version.split_once(':')?.1.trim();
+
+    if codename.is_empty() || android_version.is_empty() {
+        return None;
+    }
+
+    Some(FingerprintParts {
+        codename: codename.to_string(),
+        android_version: android_version.to_string(),
+    })
+}
+
+/// The codename at the front of an internal file name or product name
+/// (`NAPLES_G_SYS_…` → `naples`, `naples_g_syseq` → `naples`).
+fn file_codename(name: &str) -> &str {
+    name.split('_').next().unwrap_or_default()
+}
+
+/// True for the China channels, which all share CID `0x000B`.
+fn is_china_channel(carrier: &str) -> bool {
+    ["retcn", "cmcc", "ctcn"]
+        .iter()
+        .any(|channel| carrier.trim().eq_ignore_ascii_case(channel))
+}
+
+/// The channel the mirror spells the file name with.
+///
+/// Every China edition shares CID `0x000B`, so the mirror publishes a single
+/// `RETCN` build for the retail, China Mobile and China Telecom channels: the
+/// `cmcc` and `ctcn` codes are folded into `RETCN` here (`retcn` itself is
+/// left as it is). Every other channel is upper-cased whatever case the
+/// service used — the mirror's `Softbank/` directory holds
+/// `XT2507-3_CYBERT_SOFTBANK_…`.
+fn lolinet_carrier(carrier: &str) -> String {
+    if is_china_channel(carrier) {
+        "RETCN".to_string()
+    } else {
+        carrier.trim().to_uppercase()
+    }
+}
+
+/// The channel segment of the assumed mirror directory.
+///
+/// Unlike the file name, the directory keeps a channel the service already
+/// capitalized (`Softbank`, `TracFone`) as it is and only upper-cases a plain
+/// lower-case code (`retin` → `RETIN`). A China channel becomes `RETCN`.
+fn directory_carrier(carrier: &str) -> String {
+    if is_china_channel(carrier) {
+        return "RETCN".to_string();
+    }
+
+    let carrier = carrier.trim();
+    if carrier.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        carrier.to_string()
+    } else {
+        carrier.to_uppercase()
+    }
+}
+
+/// The model code the mirror uses: the XT code (`modelName`), or the sales
+/// model when the service did not report one.
+fn lolinet_model(info: &FirmwareInfo) -> &str {
+    if info.model_name.trim().is_empty() {
+        info.sale_model.trim()
+    } else {
+        info.model_name.trim()
+    }
+}
+
+/// The product codename of `info` in upper case (e.g. `NAPLES`), from the
+/// fingerprint's product field or, failing that, the internal file name.
+///
+/// The fingerprint's *device* field is deliberately not used: it can carry a
+/// different name (`nevada` builds report `utah`).
+fn lolinet_codename(info: &FirmwareInfo) -> String {
+    match parse_fingerprint(&info.fingerprint) {
+        Some(parts) => parts.codename.to_uppercase(),
+        None => file_codename(&info.file_name).to_uppercase(),
+    }
+}
+
+/// The release year assumed from a model code: `20` followed by the first two
+/// digits of its number (`XT2611-1` → `2026`). `None` when `model` does not
+/// start with an `XT` code.
+fn model_year(model: &str) -> Option<String> {
+    let model = model.trim();
+    let prefix = model.get(..2)?;
+    let digits = model.get(2..4)?;
+
+    if !prefix.eq_ignore_ascii_case("XT") || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    Some(format!("20{digits}"))
+}
+
+/// The name mirrors.lolinet.com uses for the archive behind `info`.
+///
+/// The service hands out its own internal file name
+/// (`NAPLES_G_SYS_W2WIS36.43-92-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip`)
+/// while the mirror lists the same build as
+/// `XT2621-6_NAPLES_RETEU_16_W2WIS36.43-92-4_…`: the XT code (`modelName`,
+/// **not** the sales part number `saleModel`), the product codename, the
+/// channel and the Android version in front of the build id and the
+/// regulatory suffix.
+///
+/// The original name is returned unchanged when it carries no build id, so
+/// the report never holds an empty cell for a build that was found.
+pub fn lolinet_filename(info: &FirmwareInfo) -> String {
+    let model = lolinet_model(info);
+    let codename = lolinet_codename(info);
+    let android_version = parse_fingerprint(&info.fingerprint)
+        .map(|parts| parts.android_version)
+        .unwrap_or_default();
+    let carrier = lolinet_carrier(&info.carrier);
+
+    let tail = build_tail(&info.file_name);
+    if tail.is_empty() {
+        return info.file_name.clone();
+    }
+
+    let prefix = [
+        model,
+        codename.as_str(),
+        carrier.as_str(),
+        android_version.as_str(),
+    ];
+
+    let mut name = String::new();
+    for part in prefix {
+        if !part.is_empty() {
+            name.push_str(part);
+            name.push('_');
+        }
+    }
+    name.push_str(tail);
+
+    name
+}
+
+/// The mirrors.lolinet.com directory the archive is filed under, as far as it
+/// can be assumed from `info`.
+///
+/// The mirror lays its Lenomola firmware out as
+/// `<year>/<codename>[_retcn]/official/<channel>`: the year is the first two
+/// digits of the model number (`XT2611-1` → `2026`), the codename is the
+/// product codename and the trailing channel keeps the service's own
+/// capitalisation (`Softbank`, `RETIN`; see [`directory_carrier`]). A China
+/// channel gets the `_retcn` codename suffix (`avr` → `avr_retcn`).
+///
+/// Returns `None` when the model code, the codename or the channel is missing,
+/// since the directory cannot be assumed then.
+pub fn lolinet_directory(info: &FirmwareInfo) -> Option<String> {
+    let year = model_year(lolinet_model(info))?;
+
+    let codename = lolinet_codename(info).to_lowercase();
+    let carrier = directory_carrier(&info.carrier);
+
+    if codename.is_empty() || carrier.is_empty() {
+        return None;
+    }
+
+    let codename_directory = if is_china_channel(&info.carrier) {
+        format!("{codename}_retcn")
+    } else {
+        codename
+    };
+
+    Some(format!("{year}/{codename_directory}/official/{carrier}"))
+}
+
+/// The build-id-and-suffix tail of an internal file name: everything after
+/// the `_SYS_` marker, or from the first `_`-separated token that carries a
+/// dot (the build id always does, e.g. `W1VVC36H.7-73-6-3`) when that marker
+/// is absent.
+///
+/// `CYBERT_G_SYS_A171VVH.36-23_subsidy-DEFAULT_…xml.zip`
+/// → `A171VVH.36-23_subsidy-DEFAULT_…xml.zip`.
+fn build_tail(file_name: &str) -> &str {
+    const MARKER: &str = "_SYS_";
+
+    if let Some(index) = file_name.find(MARKER) {
+        return &file_name[index + MARKER.len()..];
+    }
+
+    // The build id carries a dot while the codename may well carry digits
+    // (`AITO25`), so "contains a digit" alone would cut too early.
+    first_token_matching(file_name, |token| token.contains('.')).unwrap_or(file_name)
+}
+
+/// The `file_name` slice starting at the first `_`-separated token that
+/// `matches`, or `None` when no token does.
+fn first_token_matching(
+    file_name: &str,
+    matches: impl Fn(&str) -> bool,
+) -> Option<&str> {
+    let mut start = 0;
+    for token in file_name.split('_') {
+        if matches(token) {
+            return Some(&file_name[start..]);
+        }
+        start += token.len() + 1;
+    }
+
+    None
+}
+
+/// True when a lookup error means "the server has no build for this IMEI"
+/// (business code `1000`, or a successful answer with an empty resource list)
+/// rather than a transport or authentication failure.
+pub fn is_no_resource(error: &FirmwareError) -> bool {
+    api_error_code(error) == Some(1000)
+        || matches!(error, FirmwareError::Other(message) if message == NO_RESOURCE_MESSAGE)
 }
 
 /// Firmware information returned for a device.
@@ -730,9 +976,7 @@ fn post_lookup(
         .content
         .as_array()
         .and_then(|items| items.first())
-        .ok_or_else(|| {
-            FirmwareError::Other("API returned no matching resource".to_string())
-        })?;
+        .ok_or_else(|| FirmwareError::Other(NO_RESOURCE_MESSAGE.to_string()))?;
 
     let mut info = parse_firmware_item(item, api.raw_json);
 
@@ -1383,5 +1627,248 @@ mod tests {
             "My ROM+1.zip"
         );
         assert_eq!(filename_from_url(""), "");
+    }
+
+    /// Builds a [`FirmwareInfo`] with everything empty but the given fields.
+    fn firmware(name: &str, sale_model: &str, carrier: &str, fingerprint: &str) -> FirmwareInfo {
+        FirmwareInfo {
+            market_name: String::new(),
+            model_name: name.to_string(),
+            sale_model: sale_model.to_string(),
+            carrier: carrier.to_string(),
+            comments: String::new(),
+            publish_date: String::new(),
+            rom_match_id: String::new(),
+            fingerprint: fingerprint.to_string(),
+            rom_id: String::new(),
+            rom_uri: String::new(),
+            tool_uri: String::new(),
+            file_name: name.to_string(),
+            file_size: String::new(),
+            raw_json: String::new(),
+        }
+    }
+
+    #[test]
+    fn parses_codename_and_version_from_a_fingerprint() {
+        let parts = parse_fingerprint(
+            "motorola/cybert/cybert:17/U1TQS34.28-11/3b6f4b:user/release-keys",
+        )
+        .expect("fingerprint should parse");
+
+        assert_eq!(parts.codename, "cybert");
+        assert_eq!(parts.android_version, "17");
+
+        // Values without the `brand/product/device:version` shape are refused
+        // instead of yielding a half-filled name.
+        assert!(parse_fingerprint("").is_none());
+        assert!(parse_fingerprint("cybert").is_none());
+        assert!(parse_fingerprint("motorola/cybert").is_none());
+        assert!(parse_fingerprint("motorola/cybert/cybert").is_none());
+    }
+
+    #[test]
+    fn renames_an_api_file_to_the_lolinet_name() {
+        let mut info = firmware(
+            "XT2507-4",
+            "XT2507-4",
+            "retin",
+            "motorola/cybert/cybert:17/U1TQS34.28-11/3b6f4b:user/release-keys",
+        );
+        info.file_name =
+            "CYBERT_G_SYS_A171VVH.36-23_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+                .to_string();
+
+        assert_eq!(
+            lolinet_filename(&info),
+            "XT2507-4_CYBERT_RETIN_17_A171VVH.36-23_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+        );
+    }
+
+    /// Every China edition shares CID `0x000B`, so the mirror publishes one
+    /// `RETCN` build: the `cmcc` and `ctcn` channels are folded into `RETCN`
+    /// while every other channel is left alone.
+    #[test]
+    fn folds_the_china_channels_into_retcn() {
+        let mut info = firmware(
+            "XT2437-4",
+            "",
+            "cmcc",
+            "motorola/paros_cn/sorap:16/W1UQ36H.1-57-9/4beb56-8d0fe:user/release-keys",
+        );
+        info.file_name =
+            "PAROS_CN_W1UQ36H.1-57-9_subsidy-DEFAULT_regulatory-DEFAULT_CFC.xml.zip"
+                .to_string();
+
+        assert_eq!(
+            lolinet_filename(&info),
+            "XT2437-4_PAROS_RETCN_16_W1UQ36H.1-57-9_subsidy-DEFAULT_regulatory-DEFAULT_CFC.xml.zip"
+        );
+
+        info.carrier = "ctcn".to_string();
+        assert!(lolinet_filename(&info).contains("_PAROS_RETCN_16_"));
+
+        // A non-China channel keeps its own name.
+        info.carrier = "retin".to_string();
+        assert!(lolinet_filename(&info).contains("_PAROS_RETIN_16_"));
+    }
+
+    /// The assumed mirror directory is
+    /// `<year>/<codename>[_retcn]/official/<CARRIER>`: the year is the first
+    /// two digits of the XT code and a China channel adds the `_retcn`
+    /// codename suffix.
+    #[test]
+    fn assumes_the_mirror_directory() {
+        let mut naples = firmware(
+            "XT2621-6",
+            "PBBS0003SE",
+            "reteu",
+            "motorola/naples_g_syseq/naples:16/W2WIS36.43-92-4/160cd:user/release-keys",
+        );
+        naples.file_name =
+            "NAPLES_G_SYS_W2WIS36.43-92-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+                .to_string();
+        assert_eq!(
+            lolinet_directory(&naples).as_deref(),
+            Some("2026/naples/official/RETEU")
+        );
+
+        // A China channel gets the `_retcn` codename suffix (`XT2611-1` /
+        // `avr` → `2026/avr_retcn/official/RETCN`).
+        let mut avr = firmware(
+            "XT2611-1",
+            "",
+            "retcn",
+            "motorola/avr_retcn/avr_retcn:16/U1UXS36.1-1/abcd:user/release-keys",
+        );
+        avr.file_name = "AVR_RETCN_U1UXS36.1-1_subsidy-DEFAULT_CFC.xml.zip".to_string();
+        assert_eq!(
+            lolinet_directory(&avr).as_deref(),
+            Some("2026/avr_retcn/official/RETCN")
+        );
+
+        // `cmcc` is folded to `RETCN` as well.
+        let mut paros = firmware(
+            "XT2437-4",
+            "",
+            "cmcc",
+            "motorola/paros_cn/sorap:16/W1UQ36H.1-57-9/4beb56:user/release-keys",
+        );
+        paros.file_name =
+            "PAROS_CN_W1UQ36H.1-57-9_subsidy-DEFAULT_regulatory-DEFAULT_CFC.xml.zip"
+                .to_string();
+        assert_eq!(
+            lolinet_directory(&paros).as_deref(),
+            Some("2024/paros_retcn/official/RETCN")
+        );
+
+        // A channel the service already capitalized (`Softbank`) is kept as it
+        // is in the directory, while the file name stays upper-cased.
+        let mut softbank = firmware(
+            "XT2507-3",
+            "",
+            "Softbank",
+            "motorola/cybert/cybert:15/V2VVA35.58-46-4/abcd:user/release-keys",
+        );
+        softbank.file_name =
+            "CYBERT_SOFTBANK_V2VVA35.58-46-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+                .to_string();
+        assert_eq!(
+            lolinet_directory(&softbank).as_deref(),
+            Some("2025/cybert/official/Softbank")
+        );
+        assert_eq!(
+            lolinet_filename(&softbank),
+            "XT2507-3_CYBERT_SOFTBANK_15_V2VVA35.58-46-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+        );
+
+        // No XT code → no year → no assumed directory.
+        let mut unknown = firmware(
+            "TB350FU",
+            "",
+            "reteu",
+            "motorola/naples_g_syseq/naples:16/W2WIS36.43-92-4/160cd:user/release-keys",
+        );
+        unknown.file_name = "NAPLES_G_SYS_W2WIS36.43-92-4_x.zip".to_string();
+        assert_eq!(lolinet_directory(&unknown), None);
+    }
+
+    /// The XT code (`modelName`) is the model in front of the name — never the
+    /// sales part number (`saleModel`), which is what the API returns for e.g.
+    /// `PBBS0003SE` and which the mirror does not use.
+    #[test]
+    fn uses_the_xt_code_not_the_sale_model() {
+        let mut info = firmware(
+            "XT2621-6",
+            "PBBS0003SE",
+            "reteu",
+            "motorola/naples_g_syseq/naples:16/W2WIS36.43-92-4/160cd-e8cff0:user/release-keys",
+        );
+        info.file_name =
+            "NAPLES_G_SYS_W2WIS36.43-92-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+                .to_string();
+
+        assert_eq!(
+            lolinet_filename(&info),
+            "XT2621-6_NAPLES_RETEU_16_W2WIS36.43-92-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip"
+        );
+    }
+
+    /// The codename comes from the fingerprint's PRODUCT field, not its device
+    /// field: a `nevada_g_sysu` build reports the device `utah`, but the
+    /// mirror still calls it `NEVADA`.
+    #[test]
+    fn takes_the_codename_from_the_product_not_the_device() {
+        let mut info = firmware(
+            "XT2613-1",
+            "610214688644",
+            "tmo",
+            "motorola/nevada_g_sysu/utah:16/W1WNS36.18-114-3-1-2/0022e6-e652657:user/release-keys",
+        );
+        info.file_name =
+            "NEVADA_G_SYS_W1WNS36.18-114-3-1-2_subsidy-TMO_USKU_RSU_regulatory-DEFAULT_cid50_CFC.xml.zip"
+                .to_string();
+
+        assert_eq!(
+            lolinet_filename(&info),
+            "XT2613-1_NEVADA_TMO_16_W1WNS36.18-114-3-1-2_subsidy-TMO_USKU_RSU_regulatory-DEFAULT_cid50_CFC.xml.zip"
+        );
+    }
+
+    /// Without the `_SYS_` marker the tail starts at the first token carrying
+    /// a dot (the build id), so a codename that itself carries digits
+    /// (`AITO25`) is not eaten by the `A171VVH.36-23`-style match. A name with
+    /// no build id at all is reported unchanged.
+    #[test]
+    fn falls_back_to_the_first_token_with_a_dot() {
+        let mut info = firmware(
+            "XT2507-4",
+            "XT2507-4",
+            "retin",
+            "motorola/cybert/cybert:17/U1TQS34.28-11/3b6f4b:user/release-keys",
+        );
+
+        info.file_name = "CYBERT_A171VVH.36-23_subsidy-DEFAULT.xml.zip".to_string();
+        assert_eq!(
+            lolinet_filename(&info),
+            "XT2507-4_CYBERT_RETIN_17_A171VVH.36-23_subsidy-DEFAULT.xml.zip"
+        );
+
+        // A codename that itself carries digits must survive.
+        let mut aito = firmware(
+            "XT2553-2",
+            "XT2553-2",
+            "retcn",
+            "motorola/aito25_retcn/aito25_retcn:16/V2VVC35.58-33-5/1234:user/release-keys",
+        );
+        aito.file_name = "AITO25_RETCN_V2VVC35.58-33-5_subsidy-DEFAULT_CFC.xml.zip".to_string();
+        assert_eq!(
+            lolinet_filename(&aito),
+            "XT2553-2_AITO25_RETCN_16_V2VVC35.58-33-5_subsidy-DEFAULT_CFC.xml.zip"
+        );
+
+        // Nothing to rename: the empty name stays empty.
+        info.file_name = String::new();
+        assert_eq!(lolinet_filename(&info), "");
     }
 }
