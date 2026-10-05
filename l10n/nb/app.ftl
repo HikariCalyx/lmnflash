@@ -186,6 +186,8 @@ login-button = Logg inn
 login-button-hint = Venstreklikk: innebygd nettleser · Høyreklikk: logg inn manuelt
 login-fetching = Henter påloggings-URL…
 login-webview-open = Fullfør påloggingen i dialogvinduet.
+login-button-hint-browser = Venstreklikk: logg inn med nettleseren · Høyreklikk: logg inn manuelt
+login-browser-waiting = Fullfør påloggingen i nettleseren — dette vinduet logger inn så snart du kommer tilbake.
 login-manual-prompt = Logg inn i nettleseren, og lim deretter inn SoftwareFix://callback-lenken nedenfor:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Åpne i nettleser
@@ -196,6 +198,13 @@ login-cancel = Avbryt
 login-back = Tilbake
 login-error = Pålogging mislyktes: { $error }
 login-webview-fallback = Det innebygde påloggingsvinduet kunne ikke åpnes. Logg inn med nettleseren i stedet.
+login-protocol-title = softwarefix://-lenkehåndtering
+login-protocol-none = Ingen programmer er registrert for å åpne softwarefix://-lenker.
+login-protocol-current = softwarefix://-lenker åpnes for tiden med { $program }.
+login-protocol-ours = LMN Flash håndterer for tiden softwarefix://-lenker.
+login-protocol-switch = Bruk LMN Flash
+login-protocol-restore = Gjenopprett den opprinnelige håndteringen
+login-protocol-failed = Kunne ikke endre softwarefix://-håndteringen: { $error }
 
 lookup-mode-row = Søk etter IMEI
 lookup-mode-retcn = Søk etter enhetsinformasjon

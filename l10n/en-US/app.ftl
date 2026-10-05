@@ -186,6 +186,8 @@ login-button = Log in
 login-button-hint = Left-click: built-in browser · Right-click: log in manually
 login-fetching = Fetching login URL…
 login-webview-open = Complete the login in the dialog window.
+login-button-hint-browser = Left-click: log in with your browser · Right-click: log in manually
+login-browser-waiting = Complete the login in your browser — this window signs in as soon as you return.
 login-manual-prompt = Log in with your browser, then paste the SoftwareFix://callback link:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Open in browser
@@ -196,6 +198,13 @@ login-cancel = Cancel
 login-back = Back
 login-error = Login failed: { $error }
 login-webview-fallback = The built-in login window could not be opened; please log in with your browser instead.
+login-protocol-title = softwarefix:// link handler
+login-protocol-none = No program is currently registered to open softwarefix:// links.
+login-protocol-current = softwarefix:// links currently open with { $program }.
+login-protocol-ours = LMN Flash currently handles softwarefix:// links.
+login-protocol-switch = Use LMN Flash
+login-protocol-restore = Restore the original handler
+login-protocol-failed = Could not change the softwarefix:// handler: { $error }
 
 lookup-mode-row = Lookup by IMEI
 lookup-mode-retcn = Lookup by device info

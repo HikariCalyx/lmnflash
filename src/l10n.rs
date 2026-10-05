@@ -425,5 +425,46 @@ mod tests {
             assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
         }
     }
+
+    /// Every `softwarefix://` handler string must exist and interpolate in
+    /// every locale: the status and failure lines carry an argument, and a
+    /// translation that names one differently would leave a hole in the line.
+    #[test]
+    fn the_protocol_messages_render_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "login-protocol-title",
+            "login-protocol-none",
+            "login-protocol-ours",
+            "login-protocol-switch",
+            "login-protocol-restore",
+            "login-button-hint-browser",
+            "login-browser-waiting",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                assert!(!bundle.tr(id).trim().is_empty(), "{language:?}: {id}");
+            }
+
+            let current = bundle.tr_with_args(
+                "login-protocol-current",
+                &[("program", r"C:\Tools\SoftwareFix.exe".to_owned())],
+            );
+            assert!(
+                current.contains(r"C:\Tools\SoftwareFix.exe"),
+                "{language:?}: {current}"
+            );
+            assert!(!current.contains('\u{2068}'), "{language:?}: {current}");
+
+            let failed = bundle.tr_with_args(
+                "login-protocol-failed",
+                &[("error", "access denied".to_owned())],
+            );
+            assert!(failed.contains("access denied"), "{language:?}: {failed}");
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+        }
+    }
 }
 

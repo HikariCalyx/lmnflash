@@ -17,9 +17,11 @@ mod flash_engine;
 mod flash_script;
 mod flashfile;
 mod guided;
+mod instance;
 mod l10n;
 mod login;
 mod platform_tools;
+mod protocol;
 mod telemetry;
 mod webview;
 
@@ -48,6 +50,25 @@ pub fn main() -> iced::Result {
         std::process::exit(code);
     }
 
+    // A `softwarefix://` callback (the browser login redirect) is handed to the
+    // running instance when there is one, so the login completes in the window
+    // the user is already looking at. This runs before any other startup work,
+    // because a forwarding process exits again right away.
+    let callback = protocol::callback_arg();
+    let receiver = match instance::start(callback.as_deref()) {
+        instance::Endpoint::Primary(receiver) => Some(receiver),
+        instance::Endpoint::Secondary => {
+            if callback.is_some() {
+                // The URL was delivered to the running instance.
+                return Ok(());
+            }
+
+            // A plain second launch still opens its own window.
+            None
+        }
+        instance::Endpoint::Disabled => None,
+    };
+
     // Warm the WebView2 availability cache before the first frame. The probe
     // spawns `reg.exe`; without this the render that first shows the
     // Bootloader Unlock chooser (whose "Guided" button is gated on it) would
@@ -65,7 +86,20 @@ pub fn main() -> iced::Result {
         .window_size(Size::new(720.0, 720.0))
         .centered()
         .subscription(subscription)
-        .run_with(|| (State::initial(), Task::none()))
+        .run_with(move || {
+            let mut state = State::initial();
+            // Only the primary instance receives forwarded callbacks.
+            state.receives_callbacks = receiver.is_some();
+
+            // Live as long as the process: a later instance forwards the
+            // `softwarefix://` callback here.
+            let callbacks = match receiver {
+                Some(receiver) => Task::run(receiver, Message::LoginCallback),
+                None => Task::none(),
+            };
+
+            (state, callbacks)
+        })
 }
 
 /// True for Traditional-Chinese OS locales (Taiwan, Hong Kong, Macau, or an
@@ -908,6 +942,11 @@ enum LoginStatus {
     WebViewOpen {
         url: String,
     },
+    /// Waiting for the system browser to hand the `softwarefix://` callback
+    /// back through [`instance`] (LMN Flash owns the scheme).
+    WaitingForBrowser {
+        url: String,
+    },
     Manual {
         url: String,
         input: String,
@@ -926,6 +965,15 @@ struct State {
     l10n: l10n::Bundle,
     client_uuid: String,
     login: LoginStatus,
+    /// How `softwarefix://` links are handled on this machine (Windows only;
+    /// `Handler::Unsupported` elsewhere).
+    protocol: protocol::Handler,
+    /// The last `softwarefix://` registration failure, shown on the Manual
+    /// Login page.
+    protocol_error: Option<String>,
+    /// Whether this instance owns the single-instance endpoint and therefore
+    /// receives `softwarefix://` callbacks (see [`instance`]).
+    receives_callbacks: bool,
     lookup: LookupState,
     decrypt: DecryptState,
     flash: SmartphoneFlashState,
@@ -952,6 +1000,9 @@ impl Default for State {
             lang,
             client_uuid: uuid::Uuid::new_v4().to_string(),
             login: LoginStatus::default(),
+            protocol: protocol::Handler::Unsupported,
+            protocol_error: None,
+            receives_callbacks: false,
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
             flash: SmartphoneFlashState::default(),
@@ -980,6 +1031,20 @@ impl State {
                 token,
                 full_name: None,
             };
+        }
+
+        // Register the `softwarefix://` scheme when nothing else handles it,
+        // so the browser can hand the login callback back to us.
+        let (handler, error) = protocol::ensure_registered();
+        state.protocol = handler;
+        state.protocol_error = error;
+
+        // Started by the browser through the `softwarefix://` callback: use the
+        // URL right away instead of asking the user to paste it.
+        if let Some(url) = protocol::callback_arg() {
+            // No lookup can be pending before the first frame, so the task the
+            // helper returns is always empty here.
+            let _ = apply_login_callback(&mut state, &url);
         }
 
         state
@@ -1027,9 +1092,11 @@ enum Message {
     WebViewFinished(Result<String, String>),
     ManualInputChanged(String),
     SubmitManual,
+    LoginCallback(String),
     OpenBrowser,
     CopyUrl,
     CancelLogin,
+    ProtocolToggled,
     BrowserOpened,
     LookupModeSelected(LookupMode),
     ImeiInputChanged(String),
@@ -2680,6 +2747,14 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                         Task::none()
                     }
                     Click::Left => {
+                        // When LMN Flash owns the `softwarefix://` scheme the
+                        // browser can hand the callback straight back to us, so
+                        // the embedded WebView is not needed.
+                        if browser_login_available(state) {
+                            state.login = LoginStatus::WaitingForBrowser { url: url.clone() };
+                            return open_browser(&url);
+                        }
+
                         state.login = LoginStatus::WebViewOpen { url: url.clone() };
                         let title = state.l10n.tr("login-dialog-title");
 
@@ -2769,11 +2844,14 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::OpenBrowser => {
             let url = match &state.login {
-                LoginStatus::Manual { url, .. } => url.clone(),
+                LoginStatus::Manual { url, .. } | LoginStatus::WaitingForBrowser { url } => {
+                    url.clone()
+                }
                 _ => return Task::none(),
             };
             open_browser(&url)
         }
+        Message::LoginCallback(url) => apply_login_callback(state, &url),
         Message::CopyUrl => {
             let url = match &state.login {
                 LoginStatus::Manual { url, .. } => url.clone(),
@@ -3084,8 +3162,66 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
         }
+        Message::ProtocolToggled => {
+            let result = if matches!(state.protocol, protocol::Handler::Ours) {
+                protocol::restore()
+            } else {
+                protocol::register()
+            };
+
+            match result {
+                Ok(()) => {
+                    state.protocol = protocol::current();
+                    state.protocol_error = None;
+                }
+                Err(error) => state.protocol_error = Some(error),
+            }
+
+            Task::none()
+        }
         Message::BrowserOpened => Task::none(),
     }
+}
+
+/// True when a browser login can complete through the `softwarefix://`
+/// callback: LMN Flash owns the scheme and this instance receives the
+/// forwarded callback.
+fn browser_login_available(state: &State) -> bool {
+    matches!(state.protocol, protocol::Handler::Ours) && state.receives_callbacks
+}
+
+/// Applies a `softwarefix://` callback URL: this is how a browser login
+/// completes, both when this process was started with the URL and when a later
+/// instance forwards it over [`instance`].
+fn apply_login_callback(state: &mut State, url: &str) -> Task<Message> {
+    match login::extract_login(url) {
+        Ok(info) => {
+            if let Err(error) = config::save_credentials(&info.token, &state.client_uuid) {
+                eprintln!("failed to save credentials: {error}");
+            }
+
+            state.login = LoginStatus::LoggedIn {
+                token: info.token,
+                full_name: info.full_name,
+            };
+
+            if state.lookup.retry_after_login {
+                state.lookup.retry_after_login = false;
+                return request_lookup(state);
+            }
+        }
+        Err(error) => {
+            // A failure is only shown when a browser login was expected;
+            // otherwise it is a stray connection on the local endpoint.
+            if matches!(state.login, LoginStatus::WaitingForBrowser { .. }) {
+                state.login = LoginStatus::Error(error);
+            } else {
+                eprintln!("[instance] ignored callback: {error}");
+            }
+        }
+    }
+
+    Task::none()
 }
 
 /// Starts the login flow (fetches the login URL; the actual dialog/browser
@@ -4931,29 +5067,106 @@ fn decrypt_view(state: &State) -> Element<'_, Message> {
         .into()
 }
 
+/// The `softwarefix://` handler row of the Manual Login page.
+///
+/// Returns `None` on platforms without registry-based protocol handling, so
+/// the whole section disappears there.
+fn protocol_section(state: &State) -> Option<Element<'_, Message>> {
+    let l10n = &state.l10n;
+
+    let (status, action) = match &state.protocol {
+        protocol::Handler::Unsupported => return None,
+        protocol::Handler::None => (
+            l10n.tr("login-protocol-none"),
+            l10n.tr("login-protocol-switch"),
+        ),
+        protocol::Handler::Ours => (
+            l10n.tr("login-protocol-ours"),
+            l10n.tr("login-protocol-restore"),
+        ),
+        protocol::Handler::Other(_) => (
+            l10n.tr_with_args(
+                "login-protocol-current",
+                &[("program", state.protocol.program().unwrap_or_default())],
+            ),
+            l10n.tr("login-protocol-switch"),
+        ),
+    };
+
+    let mut block = column![
+        text(l10n.tr("login-protocol-title")).size(14.0),
+        text(status)
+            .size(13.0)
+            .width(460)
+            .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+        button(text(action)).on_press(Message::ProtocolToggled),
+    ]
+    .spacing(8)
+    .align_x(Alignment::Center);
+
+    if let Some(error) = &state.protocol_error {
+        let message =
+            l10n.tr_with_args("login-protocol-failed", &[("error", error.clone())]);
+
+        block = block.push(
+            text(message)
+                .size(12.0)
+                .width(460)
+                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                .style(iced::widget::text::danger),
+        );
+    }
+
+    Some(block.into())
+}
+
 fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
     let l10n = &state.l10n;
 
     let inner: Element<'_, Message> = match &state.login {
-        LoginStatus::LoggedOut => column![
-            text(l10n.tr("login-prompt")).size(24.0),
-            mouse_area(
-                button(text(l10n.tr("login-button")).size(20.0))
-                    .padding([12, 24])
-                    .on_press(Message::LoginRequested(Click::Left)),
-            )
-            .on_right_press(Message::LoginRequested(Click::Right)),
-            text(l10n.tr("login-button-hint")).size(14.0),
-        ]
-        .spacing(16)
-        .align_x(Alignment::Center)
-        .into(),
+        LoginStatus::LoggedOut => {
+            // With the scheme in our hands the left-click login runs in the
+            // system browser and comes back through the protocol callback.
+            let hint = if browser_login_available(state) {
+                l10n.tr("login-button-hint-browser")
+            } else {
+                l10n.tr("login-button-hint")
+            };
+
+            column![
+                text(l10n.tr("login-prompt")).size(24.0),
+                mouse_area(
+                    button(text(l10n.tr("login-button")).size(20.0))
+                        .padding([12, 24])
+                        .on_press(Message::LoginRequested(Click::Left)),
+                )
+                .on_right_press(Message::LoginRequested(Click::Right)),
+                text(hint).size(14.0),
+            ]
+            .spacing(16)
+            .align_x(Alignment::Center)
+            .into()
+        }
         LoginStatus::Fetching { .. } => {
             text(l10n.tr("login-fetching")).size(20.0).into()
         }
         LoginStatus::WebViewOpen { .. } => column![
             text(l10n.tr("login-webview-open")).size(20.0),
             button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
+        ]
+        .spacing(12)
+        .align_x(Alignment::Center)
+        .into(),
+        LoginStatus::WaitingForBrowser { .. } => column![
+            text(l10n.tr("login-browser-waiting"))
+                .size(18.0)
+                .width(460)
+                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+            row![
+                button(text(l10n.tr("login-open-browser"))).on_press(Message::OpenBrowser),
+                button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
+            ]
+            .spacing(8),
         ]
         .spacing(12)
         .align_x(Alignment::Center)
@@ -5001,6 +5214,10 @@ fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
                             .style(iced::widget::text::danger),
                     )
                     .push(text(reason.clone()).size(12.0));
+            }
+
+            if let Some(section) = protocol_section(state) {
+                content = content.push(section);
             }
 
             content.into()

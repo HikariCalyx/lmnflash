@@ -140,3 +140,43 @@ installer for it).
   ```
   git submodule update --init --recursive
   ```
+
+## Login and the `softwarefix://` protocol
+
+Firmware lookup needs a Lenovo ID login. The browser flow ends by redirecting
+to a `softwarefix://callback?Authorization=…` link, which the official
+Software Fix program registers itself to handle.
+
+LMN Flash registers the same scheme so that link can be handed straight to it:
+
+* If nothing handles the scheme, LMN Flash registers itself automatically on
+  startup; an existing handler is never taken over silently. The **Manual
+  Login** page (right-click → *Log in manually*) shows a button that switches
+  the handler between the registered program and LMN Flash, and back again.
+* **Windows** — a per-user registry class
+  (`HKCU\Software\Classes\softwarefix`). No administrator rights are needed,
+  and a per-user handler that is replaced is remembered so switching back
+  restores it; a machine-wide handler needs no backup, because deleting the
+  per-user key reveals it again.
+* **Linux** — a desktop entry (`~/.local/share/applications/lmnflash.desktop`)
+  plus `xdg-mime default`, which needs `xdg-mime` on `PATH`. The entry runs the
+  executable with the URL as an argument, so the callback arrives directly.
+* **macOS** — not registered: LaunchServices would start the application, but
+  the URL arrives as an Apple Event that iced exposes no API for, so the
+  callback would be silently dropped. Paste the link into the **Manual Login**
+  page instead.
+
+Both registrations name the executable by its full path, so moving the
+application is detected on the next launch and the entry is rewritten in place;
+a handler that was previously replaced stays remembered for switching back.
+
+### Browser login
+
+Once LMN Flash owns the scheme, **Log in** uses the browser installed on the
+system instead of the built-in WebView: the login page opens in the default
+browser, and when it redirects to `softwarefix://callback…` the operating
+system starts a second copy of the application. That copy hands the URL to the
+running instance over a loopback socket (advertised in `<config>/instance`) and
+exits, so the login completes in the window the user is already looking at
+instead of in a second one. Without the scheme in hand the callback would go to
+the other handler, so the built-in WebView is still used then.

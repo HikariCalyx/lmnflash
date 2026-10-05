@@ -186,6 +186,8 @@ login-button = 로그인
 login-button-hint = 왼쪽 클릭: 내장 브라우저 · 오른쪽 클릭: 수동 로그인
 login-fetching = 로그인 URL 가져오는 중…
 login-webview-open = 대화 상자 창에서 로그인을 완료하세요.
+login-button-hint-browser = 왼쪽 클릭: 브라우저로 로그인 · 오른쪽 클릭: 수동으로 로그인
+login-browser-waiting = 브라우저에서 로그인을 완료하세요. 돌아오면 이 창이 자동으로 로그인됩니다.
 login-manual-prompt = 브라우저에서 로그인한 후 SoftwareFix://callback 링크를 아래에 붙여넣으세요.
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = 브라우저에서 열기
@@ -196,6 +198,13 @@ login-cancel = 취소
 login-back = 뒤로
 login-error = 로그인 실패: { $error }
 login-webview-fallback = 내장 로그인 창을 열 수 없습니다. 브라우저로 로그인하세요.
+login-protocol-title = softwarefix:// 링크 처리기
+login-protocol-none = softwarefix:// 링크를 열도록 등록된 프로그램이 없습니다.
+login-protocol-current = softwarefix:// 링크는 현재 { $program }(으)로 열립니다.
+login-protocol-ours = 현재 LMN Flash가 softwarefix:// 링크를 처리합니다.
+login-protocol-switch = LMN Flash 사용
+login-protocol-restore = 원래 처리기로 복원
+login-protocol-failed = softwarefix:// 처리기를 변경할 수 없습니다: { $error }
 
 lookup-mode-row = IMEI로 조회
 lookup-mode-retcn = 기기 정보로 조회

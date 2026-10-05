@@ -26,6 +26,11 @@ struct Config {
     /// (`en-US` / `zh-Hans`).
     #[serde(default)]
     language: Option<String>,
+    /// The per-user `softwarefix://` handler command that was replaced when
+    /// LMN Flash took the scheme over, so it can be put back (see
+    /// [`crate::protocol`]).
+    #[serde(default)]
+    protocol_backup: Option<String>,
 }
 
 /// Loads cached credentials if they exist and are younger than 3 hours.
@@ -79,6 +84,27 @@ pub fn save_language(language: crate::l10n::Language) -> Result<(), String> {
     config.language = Some(language.code().to_string());
 
     save_config(&config)
+}
+
+/// The per-user `softwarefix://` handler that was replaced when LMN Flash
+/// registered itself, if any.
+pub fn load_protocol_backup() -> Option<String> {
+    load_config().protocol_backup
+}
+
+/// Stores the per-user `softwarefix://` handler that LMN Flash is about to
+/// replace, so [`crate::protocol::restore`] can put it back.
+pub fn save_protocol_backup(command: Option<&str>) -> Result<(), String> {
+    let mut config = load_config();
+
+    config.protocol_backup = command.map(str::to_string);
+
+    save_config(&config)
+}
+
+/// Forgets the stored `softwarefix://` handler.
+pub fn clear_protocol_backup() -> Result<(), String> {
+    save_protocol_backup(None)
 }
 
 /// Reads the config file, falling back to an empty config when missing or

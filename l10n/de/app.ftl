@@ -186,6 +186,8 @@ login-button = Anmelden
 login-button-hint = Linksklick: integrierter Browser · Rechtsklick: manuell anmelden
 login-fetching = Anmelde-URL wird abgerufen…
 login-webview-open = Schließen Sie die Anmeldung im Dialogfenster ab.
+login-button-hint-browser = Linksklick: mit dem Browser anmelden · Rechtsklick: manuell anmelden
+login-browser-waiting = Schließen Sie die Anmeldung im Browser ab – dieses Fenster meldet sich automatisch an, sobald Sie zurückkehren.
 login-manual-prompt = Melden Sie sich im Browser an und fügen Sie dann den SoftwareFix://callback-Link unten ein:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Im Browser öffnen
@@ -196,6 +198,13 @@ login-cancel = Abbrechen
 login-back = Zurück
 login-error = Anmeldung fehlgeschlagen: { $error }
 login-webview-fallback = Das integrierte Anmeldefenster konnte nicht geöffnet werden; melden Sie sich bitte über den Browser an.
+login-protocol-title = softwarefix://-Link-Handler
+login-protocol-none = Derzeit ist kein Programm zum Öffnen von softwarefix://-Links registriert.
+login-protocol-current = softwarefix://-Links werden derzeit mit { $program } geöffnet.
+login-protocol-ours = LMN Flash verarbeitet derzeit softwarefix://-Links.
+login-protocol-switch = LMN Flash verwenden
+login-protocol-restore = Ursprünglichen Handler wiederherstellen
+login-protocol-failed = Der softwarefix://-Handler konnte nicht geändert werden: { $error }
 
 lookup-mode-row = Suche nach IMEI
 lookup-mode-retcn = Suche nach Geräteinformationen

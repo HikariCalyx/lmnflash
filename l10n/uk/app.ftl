@@ -186,6 +186,8 @@ login-button = Увійти
 login-button-hint = ЛКМ: вбудований браузер · ПКМ: вхід вручну
 login-fetching = Отримання URL входу…
 login-webview-open = Завершіть вхід у діалоговому вікні.
+login-button-hint-browser = Лівий клік: вхід через браузер · Правий клік: ручний вхід
+login-browser-waiting = Завершіть вхід у браузері — це вікно виконає вхід, щойно ви повернетеся.
 login-manual-prompt = Увійдіть у браузері, потім вставте посилання SoftwareFix://callback нижче:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Відкрити в браузері
@@ -196,6 +198,13 @@ login-cancel = Скасувати
 login-back = Назад
 login-error = Помилка входу: { $error }
 login-webview-fallback = Не вдалося відкрити вбудоване вікно входу; увійдіть через браузер.
+login-protocol-title = Обробник посилань softwarefix://
+login-protocol-none = Жодна програма не зареєстрована для відкриття посилань softwarefix://.
+login-protocol-current = Зараз посилання softwarefix:// відкриваються за допомогою { $program }.
+login-protocol-ours = Зараз посилання softwarefix:// обробляє LMN Flash.
+login-protocol-switch = Використовувати LMN Flash
+login-protocol-restore = Відновити початковий обробник
+login-protocol-failed = Не вдалося змінити обробник softwarefix://: { $error }
 
 lookup-mode-row = Пошук за IMEI
 lookup-mode-retcn = Пошук за даними пристрою

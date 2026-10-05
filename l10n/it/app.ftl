@@ -186,6 +186,8 @@ login-button = Accedi
 login-button-hint = Clic sinistro: browser integrato · Clic destro: accesso manuale
 login-fetching = Recupero URL di accesso…
 login-webview-open = Completa l'accesso nella finestra di dialogo.
+login-button-hint-browser = Clic sinistro: accedi con il browser · Clic destro: accedi manualmente
+login-browser-waiting = Completa l'accesso nel browser: questa finestra effettuerà l'accesso appena torni.
 login-manual-prompt = Accedi con il browser, poi incolla il link SoftwareFix://callback qui sotto:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Apri nel browser
@@ -196,6 +198,13 @@ login-cancel = Annulla
 login-back = Indietro
 login-error = Accesso non riuscito: { $error }
 login-webview-fallback = Impossibile aprire la finestra di accesso integrata; accedi con il browser.
+login-protocol-title = Gestore dei link softwarefix://
+login-protocol-none = Al momento nessun programma è registrato per aprire i link softwarefix://.
+login-protocol-current = I link softwarefix:// vengono attualmente aperti con { $program }.
+login-protocol-ours = LMN Flash gestisce attualmente i link softwarefix://.
+login-protocol-switch = Usa LMN Flash
+login-protocol-restore = Ripristina il gestore originale
+login-protocol-failed = Impossibile modificare il gestore softwarefix://: { $error }
 
 lookup-mode-row = Cerca per IMEI
 lookup-mode-retcn = Cerca per informazioni del dispositivo

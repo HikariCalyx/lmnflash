@@ -186,6 +186,8 @@ login-button = 登录
 login-button-hint = 左键单击：内置浏览器 · 右键单击：手动登录
 login-fetching = 正在获取登录链接…
 login-webview-open = 请在弹窗中完成登录。
+login-button-hint-browser = 左键单击：使用浏览器登录 · 右键单击：手动登录
+login-browser-waiting = 请在浏览器中完成登录，回到本窗口后将自动登录。
 login-manual-prompt = 请在浏览器中登录，然后将 SoftwareFix://callback 链接粘贴到下面：
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = 在浏览器中打开
@@ -196,6 +198,13 @@ login-cancel = 取消
 login-back = 返回
 login-error = 登录失败：{ $error }
 login-webview-fallback = 无法打开内置登录窗口，请在浏览器中登录。
+login-protocol-title = softwarefix:// 链接处理程序
+login-protocol-none = 当前没有已注册的程序可用于打开 softwarefix:// 链接。
+login-protocol-current = softwarefix:// 链接当前由 { $program } 打开。
+login-protocol-ours = 当前由 LMN Flash 处理 softwarefix:// 链接。
+login-protocol-switch = 使用 LMN Flash
+login-protocol-restore = 恢复原处理程序
+login-protocol-failed = 无法更改 softwarefix:// 处理程序：{ $error }
 
 lookup-mode-row = 按 IMEI 查询
 lookup-mode-retcn = 按设备信息查询

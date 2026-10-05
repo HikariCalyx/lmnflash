@@ -186,6 +186,8 @@ login-button = Kirjaudu sisään
 login-button-hint = Vasen napsautus: sisäänrakennettu selain · Oikea napsautus: manuaalinen kirjautuminen
 login-fetching = Noudetaan kirjautumis-URL-osoitetta…
 login-webview-open = Viimeistele kirjautuminen valintaikkunassa.
+login-button-hint-browser = Vasen klikkaus: kirjaudu selaimella · Oikea klikkaus: kirjaudu manuaalisesti
+login-browser-waiting = Viimeistele kirjautuminen selaimessa — tämä ikkuna kirjautuu heti, kun palaat.
 login-manual-prompt = Kirjaudu selaimella ja liitä SoftwareFix://callback-linkki alle:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Avaa selaimessa
@@ -196,6 +198,13 @@ login-cancel = Peruuta
 login-back = Takaisin
 login-error = Kirjautuminen epäonnistui: { $error }
 login-webview-fallback = Sisäänrakennettua kirjautumisikkunaa ei voitu avata; kirjaudu selaimella.
+login-protocol-title = softwarefix://-linkkien käsittelijä
+login-protocol-none = Yhtään ohjelmaa ei ole rekisteröity avaamaan softwarefix://-linkkejä.
+login-protocol-current = softwarefix://-linkit avautuvat tällä hetkellä ohjelmalla { $program }.
+login-protocol-ours = LMN Flash käsittelee tällä hetkellä softwarefix://-linkit.
+login-protocol-switch = Käytä LMN Flashia
+login-protocol-restore = Palauta alkuperäinen käsittelijä
+login-protocol-failed = softwarefix://-käsittelijää ei voitu vaihtaa: { $error }
 
 lookup-mode-row = Haku IMEI-numerolla
 lookup-mode-retcn = Haku laitetiedoilla

@@ -186,6 +186,8 @@ login-button = Aanmelden
 login-button-hint = Linksklik: ingebouwde browser · Rechtsklik: handmatig aanmelden
 login-fetching = Aanmeld-URL ophalen…
 login-webview-open = Voltooi het aanmelden in het dialoogvenster.
+login-button-hint-browser = Linksklik: aanmelden met uw browser · Rechtsklik: handmatig aanmelden
+login-browser-waiting = Voltooi het aanmelden in uw browser; dit venster meldt u aan zodra u terugkeert.
 login-manual-prompt = Meld u aan in uw browser en plak daarna de SoftwareFix://callback-link hieronder:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = In browser openen
@@ -196,6 +198,13 @@ login-cancel = Annuleren
 login-back = Terug
 login-error = Aanmelden mislukt: { $error }
 login-webview-fallback = Het ingebouwde aanmeldvenster kon niet worden geopend; meld u aan via uw browser.
+login-protocol-title = softwarefix://-linkhandler
+login-protocol-none = Er is momenteel geen programma geregistreerd om softwarefix://-links te openen.
+login-protocol-current = softwarefix://-links worden momenteel geopend met { $program }.
+login-protocol-ours = LMN Flash verwerkt momenteel softwarefix://-links.
+login-protocol-switch = LMN Flash gebruiken
+login-protocol-restore = Oorspronkelijke handler herstellen
+login-protocol-failed = Kan de softwarefix://-handler niet wijzigen: { $error }
 
 lookup-mode-row = Zoeken op IMEI
 lookup-mode-retcn = Zoeken op apparaatinformatie

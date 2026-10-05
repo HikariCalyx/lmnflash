@@ -186,6 +186,8 @@ login-button = ログイン
 login-button-hint = 左クリック：内蔵ブラウザー · 右クリック：手動ログイン
 login-fetching = ログイン URL を取得中…
 login-webview-open = ダイアログ ウィンドウでログインを完了してください。
+login-button-hint-browser = 左クリック：ブラウザーでログイン · 右クリック：手動でログイン
+login-browser-waiting = ブラウザーでログインを完了してください。戻るとこのウィンドウが自動的にサインインします。
 login-manual-prompt = ブラウザーでログインし、SoftwareFix://callback リンクを下に貼り付けてください：
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = ブラウザーで開く
@@ -196,6 +198,13 @@ login-cancel = キャンセル
 login-back = 戻る
 login-error = ログインに失敗しました：{ $error }
 login-webview-fallback = 内蔵ログイン ウィンドウを開けませんでした。ブラウザーでログインしてください。
+login-protocol-title = softwarefix:// リンクの関連付け
+login-protocol-none = softwarefix:// リンクを開くプログラムが登録されていません。
+login-protocol-current = softwarefix:// リンクは現在 { $program } で開きます。
+login-protocol-ours = 現在、softwarefix:// リンクは LMN Flash が処理します。
+login-protocol-switch = LMN Flash を使用
+login-protocol-restore = 元のプログラムに戻す
+login-protocol-failed = softwarefix:// の関連付けを変更できませんでした：{ $error }
 
 lookup-mode-row = IMEI で検索
 lookup-mode-retcn = 端末情報で検索
