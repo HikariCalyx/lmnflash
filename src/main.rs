@@ -1534,14 +1534,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             let for_terminal = std::mem::take(&mut flash.terminal_after_install);
 
             match result {
-                Ok(path) => {
+                Ok(_path) => {
                     flash.tools_error = None;
                     flash.tools_ready = true;
 
                     #[cfg(debug_assertions)]
                     eprintln!(
                         "[firmware-flash] platform-tools installed: {}",
-                        path.display()
+                        _path.display()
                     );
 
                     if for_terminal {

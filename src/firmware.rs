@@ -1081,8 +1081,12 @@ pub fn fetch_portal_profile(cookie_header: &str) -> Result<(String, String), Str
         .set("Cookie", cookie_header)
         .call()
         .map_err(|e| format!("portal profile request failed: {e}"))?;
-    let status = response.status();
-    let final_url = response.get_url().to_string();
+
+    // Only the debug log below needs these; keeping them behind the same cfg
+    // avoids "unused variable" warnings in release builds.
+    #[cfg(debug_assertions)]
+    let (status, final_url) = (response.status(), response.get_url().to_string());
+
     let body = response
         .into_string()
         .map_err(|e| format!("failed to read portal profile response: {e}"))?;
