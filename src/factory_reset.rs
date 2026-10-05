@@ -22,6 +22,11 @@ use crate::guided::spinner;
 use crate::text;
 use crate::{FactoryResetDialog, Message, ResetCheckOutcome, State};
 
+/// Whether the Factory Reset dialog is open.
+pub(crate) fn is_open(state: &State) -> bool {
+    state.flash.factory_reset.dialog == FactoryResetDialog::Open
+}
+
 /// Renders the Factory Reset overlay over the app, or `None` when the dialog
 /// is closed. Clicks on empty space are swallowed (they neither dismiss the
 /// dialog nor reach the UI underneath); the modal is left only via its own

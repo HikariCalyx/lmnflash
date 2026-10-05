@@ -2,6 +2,7 @@
 // `eprintln!` diagnostics remain visible with `cargo run`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod anim;
 mod bootloader;
 mod carrier;
 mod config;
@@ -931,6 +932,14 @@ struct State {
     /// Monotonic UI animation tick, advanced by a time subscription while a
     /// busy indicator (spinner) is visible.
     anim_tick: u64,
+    /// In-flight fade + slide of the tab content, started when the user
+    /// switches to another feature (Mode 1/2/3).
+    content_transition: Option<anim::Transition>,
+    /// In-flight fade + slide of the modal dialog (see `overlay_key`).
+    overlay_transition: Option<anim::Transition>,
+    /// The close of a dialog, held back until it has finished animating out;
+    /// `Some` while it is leaving.
+    pending_close: Option<Message>,
 }
 
 impl Default for State {
@@ -947,6 +956,9 @@ impl Default for State {
             decrypt: DecryptState::default(),
             flash: SmartphoneFlashState::default(),
             anim_tick: 0,
+            content_transition: None,
+            overlay_transition: None,
+            pending_close: None,
         }
     }
 }
@@ -1217,6 +1229,12 @@ enum Message {
     /// UI animation tick, emitted while a busy indicator is shown (drives the
     /// spinners without blocking the UI thread).
     AnimTick,
+    /// Advances an in-flight feature-switch transition. Emitted every frame
+    /// while one is running (see `anim`).
+    TransitionTick,
+    /// Click on a dialog that is animating out: swallowed, so nothing can be
+    /// started while its card is leaving.
+    OverlayLeavingPressed,
 }
 
 /// Drives the small UI spinner animations while a busy status is shown.
@@ -1257,13 +1275,230 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     } else {
         iced::Subscription::none()
     };
+    // A feature-switch transition animates at full frame rate, but only while
+    // one is actually running; iced redraws once per tick.
+    let transition = if state.content_transition.is_some()
+        || state.overlay_transition.is_some()
+        || state.pending_close.is_some()
+    {
+        iced::time::every(anim::FRAME).map(|_| Message::TransitionTick)
+    } else {
+        iced::Subscription::none()
+    };
 
-    iced::Subscription::batch([ticks, countdown])
+    iced::Subscription::batch([ticks, countdown, transition])
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
+    // A dialog that is animating out has already queued the close that removes
+    // it, and its buttons are blocked: a second close request would only
+    // restart the animation.
+    if state.pending_close.is_some() && closes_overlay(&message) {
+        return Task::none();
+    }
+
+    let before = overlay_key(state);
+
+    // The user closing the dialog is held back for the length of the exit
+    // transition, so the dialog can be seen to leave; the close itself runs
+    // when that transition ends (see `Message::TransitionTick`).
+    if before != OVERLAY_NONE && closes_overlay(&message) {
+        // Start from wherever the card is now, so closing a card that is still
+        // moving (a step change the user interrupted) does not jump.
+        let from = state
+            .overlay_transition
+            .as_ref()
+            .map_or_else(anim::dialog_rest, |transition| transition.pose());
+
+        state.pending_close = Some(message);
+        state.overlay_transition =
+            Some(anim::Transition::leave(from, anim::dialog_exit()));
+        return Task::none();
+    }
+
+    let task = handle(state, message);
+
+    // A dialog that appeared, or whose card changed, eases in. A dialog that
+    // closed without the user asking for it just disappears.
+    if state.pending_close.is_none() {
+        start_overlay_transition(state, before, overlay_key(state));
+    }
+
+    task
+}
+
+/// Plays the transition that matches a change of the dialog card on screen.
+fn start_overlay_transition(state: &mut State, before: u8, after: u8) {
+    if after == before {
+        return;
+    }
+
+    state.overlay_transition = match (before, after) {
+        (_, OVERLAY_NONE) => None,
+        (OVERLAY_NONE, _) => Some(anim::Transition::settle(
+            anim::dialog_enter(),
+            anim::dialog_rest(),
+        )),
+        // A card stacked on top of this one is dismissed: the card below was
+        // never gone, so it is revealed rather than played in again.
+        _ if is_stacked(before) && !is_stacked(after) => None,
+        _ => Some(anim::Transition::settle(
+            anim::dialog_switch(switch_forward(before, after)),
+            anim::dialog_rest(),
+        )),
+    };
+}
+
+/// Whether the message is the user closing the dialog, rather than a step
+/// inside it. Only these are held back for the exit animation.
+fn closes_overlay(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::BootloaderCancel
+            | Message::FactoryResetCancel
+            | Message::FirmwareFlashCancel
+            | Message::DriverCancel
+            | Message::FastbootDevicePickerCancelled
+    )
+}
+
+/// Which way the card moved when one dialog card replaced another. A card of
+/// another dialog always comes in from the right; inside one dialog the step
+/// decides, except that a card stacked on top counts as one step deeper.
+fn switch_forward(before: u8, after: u8) -> bool {
+    if is_stacked(after) {
+        return true;
+    }
+
+    if is_stacked(before) {
+        return false;
+    }
+
+    before & 0xF0 != after & 0xF0 || after > before
+}
+
+/// A card that is drawn on top of another dialog card.
+fn is_stacked(key: u8) -> bool {
+    key == OVERLAY_BOOTLOADER_PICKER || key == OVERLAY_GUIDED_CONFIRM
+}
+
+/// No dialog is open.
+const OVERLAY_NONE: u8 = 0x00;
+/// The dialog cards, keyed by the dialog they belong to and the step they show.
+const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
+const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
+const OVERLAY_GUIDED: u8 = 0x30;
+const OVERLAY_BOOTLOADER_PICKER: u8 = 0x40;
+const OVERLAY_GUIDED_CONFIRM: u8 = 0x50;
+const OVERLAY_FACTORY_RESET: u8 = 0x60;
+const OVERLAY_FIRMWARE_FLASH: u8 = 0x80;
+const OVERLAY_DRIVER: u8 = 0xA0;
+const OVERLAY_RETCN_PICKER: u8 = 0xC0;
+
+/// Identifies the dialog card that is on screen (or [`OVERLAY_NONE`]), so that
+/// opening, closing, stepping through and replacing a dialog can be noticed
+/// and animated.
+///
+/// The order mirrors `view`, so the reported card is the one that is actually
+/// drawn; a card stacked on top of a dialog (a device picker, the guided
+/// request prompt) takes the place of the card below it. A step number must
+/// only change when the card really changes: everything that keeps updating
+/// while a dialog stays on screen (flashing log lines, progress, a spinner)
+/// has to leave its key alone.
+fn overlay_key(state: &State) -> u8 {
+    if bootloader::is_open(state) {
+        let bootloader = &state.flash.bootloader;
+        if bootloader.picker.is_some() {
+            return OVERLAY_BOOTLOADER_PICKER;
+        }
+
+        return match bootloader.dialog {
+            BootloaderDialog::Closed => OVERLAY_NONE,
+            BootloaderDialog::Choosing => OVERLAY_BOOTLOADER_CHOOSER,
+            BootloaderDialog::Manual => OVERLAY_BOOTLOADER_MANUAL,
+            BootloaderDialog::Guided if bootloader.guided.confirming_request => {
+                OVERLAY_GUIDED_CONFIRM
+            }
+            BootloaderDialog::Guided => OVERLAY_GUIDED + guided_step(bootloader.guided.step),
+        };
+    }
+
+    if factory_reset::is_open(state) {
+        // The one modal shows the erase running, its result, the requirement
+        // check, the confirmation, or the device list: in that order of
+        // precedence, numbered the way the flow reaches them.
+        let reset = &state.flash.factory_reset;
+        let step = if reset.resetting {
+            3
+        } else if reset.result.is_some() {
+            4
+        } else if reset.checking {
+            1
+        } else if reset.check.is_some() {
+            2
+        } else {
+            0
+        };
+
+        return OVERLAY_FACTORY_RESET + step;
+    }
+
+    if firmware_flash::is_open(state) {
+        // The running flash and its result share a card; the procedure
+        // checklist, the confirmation and the read-info view each have one.
+        let flash = &state.flash.firmware;
+        let step = if flash.running || flash.result.is_some() {
+            3
+        } else if flash.editing {
+            1
+        } else if flash.confirming {
+            2
+        } else if flash.info_view {
+            4
+        } else {
+            0
+        };
+
+        return OVERLAY_FIRMWARE_FLASH + step;
+    }
+
+    if driver::is_open(state) {
+        return OVERLAY_DRIVER;
+    }
+
+    if matches!(state.lookup.retcn.device_picker, DevicePicker::Open(_)) {
+        return OVERLAY_RETCN_PICKER;
+    }
+
+    OVERLAY_NONE
+}
+
+/// The card the guided wizard shows for a step, as a step number.
+fn guided_step(step: GuidedStep) -> u8 {
+    match step {
+        GuidedStep::Login => 0,
+        GuidedStep::Read => 1,
+        GuidedStep::Request => 2,
+        GuidedStep::Key => 3,
+    }
+}
+
+/// The index of a tab, used to tell which way the user is moving through the
+/// feature tabs (and therefore which way the content should slide in).
+fn mode_index(mode: Mode) -> usize {
+    Mode::ALL.iter().position(|&tab| tab == mode).unwrap_or(0)
+}
+
+fn handle(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::ModeSelected(mode) => {
+            if mode != state.mode {
+                state.content_transition = Some(anim::Transition::settle(
+                    anim::content_start(mode_index(mode) >= mode_index(state.mode)),
+                    anim::content_rest(),
+                ));
+            }
+
             state.mode = mode;
             Task::none()
         }
@@ -1271,6 +1506,34 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.anim_tick = state.anim_tick.wrapping_add(1);
             Task::none()
         }
+        Message::TransitionTick => {
+            anim::tick(&mut state.content_transition);
+            anim::tick(&mut state.overlay_transition);
+
+            // A dialog that has finished leaving now runs the close that was
+            // held back for it.
+            if state.overlay_transition.is_none() {
+                if let Some(close) = state.pending_close.take() {
+                    let task = handle(state, close);
+
+                    // Either the close was refused (a busy dialog ignores it)
+                    // or another dialog took this one's place: ease a card
+                    // back in rather than leaving one half gone. A dialog that
+                    // really closed just disappears.
+                    if overlay_key(state) != OVERLAY_NONE {
+                        state.overlay_transition = Some(anim::Transition::settle(
+                            anim::dialog_enter(),
+                            anim::dialog_rest(),
+                        ));
+                    }
+
+                    return task;
+                }
+            }
+
+            Task::none()
+        }
+        Message::OverlayLeavingPressed => Task::none(),
         Message::SmartphoneFeaturePressed(feature) => match feature {
             SmartphoneFeature::BootloaderUnlock => {
                 let bootloader = &mut state.flash.bootloader;
@@ -4329,14 +4592,30 @@ fn view(state: &State) -> Element<'_, Message> {
     })
     .text_shaping(Shaping::Advanced);
 
-    // Language selector overlay in the top-right corner.
-    let content_area = stack![
-        content,
+    // The tab that was just switched to slides in a little and fades in from
+    // the window background colour (see `anim`).
+    let mut content_layers: Vec<Element<'_, Message>> = match &state.content_transition {
+        Some(transition) => {
+            let pose = transition.pose();
+            vec![
+                anim::animated(content, pose),
+                anim::veil(anim::window_background(), pose.veil),
+            ]
+        }
+        None => vec![content],
+    };
+
+    // Language selector overlay in the top-right corner. It stays above the
+    // transition's veil, so it does not flicker along with the content.
+    content_layers.push(
         container(language_dropdown)
             .padding(8)
             .align_top(Fill)
-            .align_right(Fill),
-    ];
+            .align_right(Fill)
+            .into(),
+    );
+
+    let content_area = iced::widget::Stack::with_children(content_layers);
 
     let tab_bar = container(
         row(Mode::ALL.iter().map(|&mode| {
@@ -4361,25 +4640,25 @@ fn view(state: &State) -> Element<'_, Message> {
     // Bootloader Unlock dialog (chooser / manual flow) drawn over the whole
     // window (including the tab bar) when a dialog is open.
     if let Some(overlay) = bootloader::overlay(state) {
-        return stack![base, overlay].into();
+        return stack![base, animated_overlay(state, overlay)].into();
     }
 
     // Factory Reset dialog (device selection / requirement checks / confirm)
     // drawn over the whole window when it is open.
     if let Some(overlay) = factory_reset::overlay(state) {
-        return stack![base, overlay].into();
+        return stack![base, animated_overlay(state, overlay)].into();
     }
 
     // Firmware Flash dialog (package + device selection, progress and log)
     // drawn over the whole window while it is open.
     if let Some(overlay) = firmware_flash::overlay(state) {
-        return stack![base, overlay].into();
+        return stack![base, animated_overlay(state, overlay)].into();
     }
 
     // Install Driver dialog (download progress / sudo password) drawn over
     // the whole window while it is open.
     if let Some(overlay) = driver::overlay(state) {
-        return stack![base, overlay].into();
+        return stack![base, animated_overlay(state, overlay)].into();
     }
 
     // Device picker modal: shown when more than one fastboot device is
@@ -4414,17 +4693,55 @@ fn view(state: &State) -> Element<'_, Message> {
 
         return stack![
             base,
-            backdrop,
-            container(card)
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .center_y(Fill),
+            animated_overlay(
+                state,
+                stack![
+                    backdrop,
+                    container(card)
+                        .width(Fill)
+                        .height(Fill)
+                        .center_x(Fill)
+                        .center_y(Fill),
+                ]
+                .into(),
+            ),
         ]
         .into();
     }
 
     base.into()
+}
+
+/// Draws an open dialog: normally in its settled pose behind a dimming scrim,
+/// and posed (rising, sliding in, or dropping away) while a transition runs.
+///
+/// The scrim is part of the modal's settled look, not just of the animation,
+/// so a dialog that is not moving still carries it. Closing is animated by
+/// holding the close back (see `update`), so while the card is leaving its
+/// buttons are blocked and clicks cannot start anything.
+fn animated_overlay<'a>(
+    state: &State,
+    overlay: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let pose = state
+        .overlay_transition
+        .as_ref()
+        .map_or_else(anim::dialog_rest, |transition| transition.pose());
+
+    let mut children: Vec<Element<'a, Message>> = vec![
+        anim::scrim(pose.veil),
+        anim::animated(overlay, pose),
+    ];
+
+    if state.pending_close.is_some() {
+        children.push(
+            mouse_area(Space::new(Fill, Fill))
+                .on_press(Message::OverlayLeavingPressed)
+                .into(),
+        );
+    }
+
+    iced::widget::Stack::with_children(children).into()
 }
 
 /// The smartphone-firmware-flash UI (Mode 2): a grid of feature tiles, each

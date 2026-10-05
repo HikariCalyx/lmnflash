@@ -64,7 +64,10 @@ pub(crate) fn darker_card(theme: &iced::Theme) -> iced::widget::container::Style
 
     style
 }
-
+/// Whether the Bootloader Unlock dialog is open (in any of its steps).
+pub(crate) fn is_open(state: &State) -> bool {
+    state.flash.bootloader.dialog != BootloaderDialog::Closed
+}
 /// Renders the Bootloader Unlock overlay over the app, or `None` when no
 /// dialog is open. The overlay covers the whole window, including the tab
 /// bar. Clicks on empty space are swallowed (they neither dismiss the dialog

@@ -1,10 +1,13 @@
 [package]
 name = "lmnflash"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.13", features = ["tokio", "system", "image", "canvas"] }
+# `advanced` exposes `iced::advanced` (the `Widget` trait and the renderer's
+# layer/transformation API), which the feature-switch transitions in
+# `src/anim.rs` draw through.
+iced = { version = "0.13", features = ["tokio", "system", "image", "canvas", "advanced"] }
 fluent = "0.16"
 unic-langid = "0.9"
 wry = "0.50"

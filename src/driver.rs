@@ -27,6 +27,11 @@ use crate::{DriverDialog, DriverStage, Message, State};
 /// belongs to.
 const BAR_HEIGHT: f32 = 6.0;
 
+/// Whether the Install Driver dialog is open.
+pub(crate) fn is_open(state: &State) -> bool {
+    state.flash.driver.dialog == DriverDialog::Open
+}
+
 /// Renders the "Install Driver" overlay over the app, or `None` when the
 /// dialog is closed. Clicks on empty space are swallowed (they neither dismiss
 /// the dialog nor reach the UI underneath); the modal is left only via its own

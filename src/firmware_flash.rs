@@ -77,6 +77,11 @@ fn bar<'a>(fraction: f32) -> Element<'a, Message> {
         .into()
 }
 
+/// Whether the Firmware Flash dialog is open.
+pub(crate) fn is_open(state: &State) -> bool {
+    state.flash.firmware.dialog == FirmwareFlashDialog::Open
+}
+
 /// Renders the Firmware Flash overlay over the app, or `None` when the dialog
 /// is closed. Clicks on empty space are swallowed (they neither dismiss the
 /// dialog nor reach the UI underneath); the modal is left only via Cancel.
