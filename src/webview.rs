@@ -50,6 +50,11 @@ pub struct PortalLogin {
 }
 
 /// True when the built-in webview can be used on this machine.
+///
+/// Cheap and side-effect free to call: on Windows the runtime is detected by
+/// reading the registry directly, and the result is cached for the life of the
+/// process (see `webview2_runtime_installed`), so this is safe to call from the
+/// render path.
 pub fn webview_available() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -70,15 +75,31 @@ pub fn webview_available() -> bool {
 }
 
 /// Whether the WebView2 runtime is installed (Windows).
+///
+/// Reads the registry directly (no `reg.exe` process). The result is cached
+/// because `webview_available()` is called from the render path (the
+/// Bootloader Unlock chooser gates its "Guided" button on it); installation
+/// state cannot change while the app runs. `main` warms the cache once at
+/// startup so even the first frame that needs it never blocks.
 #[cfg(target_os = "windows")]
 fn webview2_runtime_installed() -> bool {
-    use std::process::Command;
+    use std::sync::OnceLock;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY};
+    use winreg::RegKey;
 
-    let key = "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
-    let output = Command::new("reg")
-        .args(["query", key, "/v", "pv"])
-        .output();
-    matches!(output, Ok(out) if out.status.success())
+    static INSTALLED: OnceLock<bool> = OnceLock::new();
+
+    *INSTALLED.get_or_init(|| {
+        // The WebView2 Evergreen Runtime registers as an EdgeUpdate client
+        // under the 32-bit (WOW6432Node) view on 64-bit Windows.
+        RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey_with_flags(
+                r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+                KEY_READ | KEY_WOW64_32KEY,
+            )
+            .and_then(|key| key.get_value::<String, _>("pv"))
+            .is_ok()
+    })
 }
 
 /// If this process was started as the login dialog, runs it and returns the

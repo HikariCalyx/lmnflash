@@ -2775,6 +2775,7 @@ dependencies = [
  "url",
  "uuid",
  "winit",
+ "winreg 0.52.0",
  "wry",
  "zip",
 ]

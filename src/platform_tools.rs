@@ -188,6 +188,30 @@ const ALIAS_FILE: &str = if cfg!(windows) {
     "fastboot"
 };
 
+/// Whether any string value in the registry tree rooted at `key` contains
+/// `needle_lower` (which must already be lower-case). Mirrors a recursive
+/// `reg query <key> /s /f <needle> /d`, including its case-insensitive,
+/// substring match on value data.
+#[cfg(target_os = "windows")]
+fn key_tree_contains(key: &winreg::RegKey, needle_lower: &str) -> bool {
+    use winreg::types::FromRegValue;
+
+    let value_matches = key.enum_values().flatten().any(|(_, value)| {
+        String::from_reg_value(&value)
+            .map(|text| text.to_lowercase().contains(needle_lower))
+            .unwrap_or(false)
+    });
+
+    value_matches
+        || key
+            .enum_keys()
+            .flatten()
+            .any(|child| match key.open_subkey(&child) {
+                Ok(child) => key_tree_contains(&child, needle_lower),
+                Err(_) => false,
+            })
+}
+
 /// Whether "Minimal ADB and Fastboot" is installed (Windows).
 ///
 /// That tool puts its own `adb.exe` and `fastboot.exe` on the `PATH` when it is
@@ -195,29 +219,33 @@ const ALIAS_FILE: &str = if cfg!(windows) {
 /// terminal has to ask the user to uninstall it first.
 ///
 /// The uninstall entries are searched by value data (its `DisplayName` is the
-/// only place the name is recorded). `reg query` exits with 1 when nothing
-/// matched, so nothing has to be parsed — its messages are localized.
+/// only place the name is recorded), across the 64-bit and 32-bit HKLM views
+/// and the per-user hive. The registry is read directly rather than shelling
+/// out to `reg.exe`.
 pub fn minimal_adb_fastboot_installed() -> bool {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Stdio;
+        use winreg::enums::{
+            HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+        };
+        use winreg::RegKey;
 
         const NAME: &str = "Minimal ADB and Fastboot";
-        const ROOTS: &[&str] = &[
-            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-            r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-            r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        ];
+        const UNINSTALL: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
 
-        // Every root, so a per-user or 32-bit install is found too.
-        let registered = ROOTS.iter().any(|root| {
-            Command::new("reg")
-                .args(["query", *root, "/s", "/f", NAME, "/d"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
+        // Every view an install can live in: 64-bit HKLM, 32-bit
+        // (WOW6432Node) HKLM, and the per-user hive.
+        let roots = [
+            (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_64KEY),
+            (HKEY_LOCAL_MACHINE, KEY_READ | KEY_WOW64_32KEY),
+            (HKEY_CURRENT_USER, KEY_READ),
+        ];
+        let needle = NAME.to_lowercase();
+
+        let registered = roots.iter().any(|(hive, flags)| {
+            RegKey::predef(*hive)
+                .open_subkey_with_flags(UNINSTALL, *flags)
+                .is_ok_and(|root| key_tree_contains(&root, &needle))
         });
 
         if registered {

@@ -47,6 +47,12 @@ pub fn main() -> iced::Result {
         std::process::exit(code);
     }
 
+    // Warm the WebView2 availability cache before the first frame. The probe
+    // spawns `reg.exe`; without this the render that first shows the
+    // Bootloader Unlock chooser (whose "Guided" button is gated on it) would
+    // stall on that process spawn.
+    let _ = webview::webview_available();
+
     let icon = iced::window::icon::from_file_data(include_bytes!("icon.ico"), None).ok();
 
     iced::application(|state: &State| state.l10n.tr("app-title"), update, view)

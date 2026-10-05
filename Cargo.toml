@@ -44,6 +44,11 @@ rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
 # Linux webview dialog (wry's WebKitGTK backend needs a GTK container).
 gtk = "0.18"
 
+# Windows registry access (WebView2 runtime detection) without spawning
+# `reg.exe`.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [build-dependencies]
 embed-resource = "2"
 
