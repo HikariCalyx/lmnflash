@@ -329,3 +329,15 @@ driver-password = Salasana
 driver-failed = Ajuria ei voitu asentaa: { $error }
 driver-error-password = Salasanaa ei hyväksytty. Yritä uudelleen.
 driver-error-no-sudo = Sudoa ei löytynyt, joten udev-sääntöjä ei voi asentaa.
+
+flash-bootloader-tablet-desc = Pyytääksesi bootloaderin avausta tarvitset tabletin sarjanumeron sekä Bootloader_SN:n (jos saatavilla).
+flash-bootloader-tablet-site-desc = Kun sinulla on ne, voit syöttää ne ZUI Bootloader Unlock -sivustolle.
+flash-bootloader-tablet-site-button = Siirry Lenovo ZUI Bootloader Unlock -sivustolle (vain kiinaksi)
+flash-bootloader-tablet-serial = Sarjanumero
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Ei sovellu
+flash-bootloader-tablet-legion = Käytä Legion Y700 5th Gen -osiota bootloaderin avauksen pyytämiseen.
+flash-bootloader-tablet-unlock-desc = Kun olet pyytänyt bootloaderin avausta onnistuneesti, voit napsauttaa alla olevaa painiketta saadaksesi avausavaimen.
+flash-bootloader-tablet-not-generated = Laitteesi avauskoodia ei ole vielä luotu. Luo se ensin tai yritä myöhemmin uudelleen, jos olet jo tehnyt niin.
+flash-bootloader-tablet-confirm-unlock = Katso tablettiasi vahvistaaksesi bootloaderin avauksen.
+flash-bootloader-tablet-unknown-error = Tapahtui tuntematon virhe. { $error }

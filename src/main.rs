@@ -22,6 +22,8 @@ mod l10n;
 mod login;
 mod platform_tools;
 mod protocol;
+mod tablet_bootloader;
+mod tablet_unlock;
 mod telemetry;
 mod webview;
 
@@ -271,10 +273,13 @@ impl SmartphoneFeature {
 
         match self {
             // The bootloader unlock procedure differs between phones and
-            // tablets; the tablet procedure is not implemented yet.
+            // tablets.
             Self::BootloaderUnlock => vec![
                 ("flash-bootloader-smartphone-button", pressed()),
-                ("flash-bootloader-tablet-button", None),
+                (
+                    "flash-bootloader-tablet-button",
+                    Some(Message::TabletUnlockSelected),
+                ),
             ],
             Self::FactoryReset => vec![("flash-factory-reset-button", pressed())],
             // Firmware flashing is offered per device type; tablet firmware
@@ -609,6 +614,7 @@ struct DecryptState {
 #[derive(Default)]
 struct SmartphoneFlashState {
     bootloader: BootloaderState,
+    tablet_unlock: TabletUnlockState,
     factory_reset: FactoryResetState,
     firmware: FirmwareFlashState,
     driver: DriverState,
@@ -745,6 +751,63 @@ struct BootloaderState {
     unlock_info: Option<String>,
     /// Guided (wizard) flow state.
     guided: GuidedState,
+}
+
+/// Which tablet Bootloader Unlock dialog is currently on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TabletUnlockDialog {
+    #[default]
+    Closed,
+    /// Guided-vs-Manual chooser (the guided wizard is not implemented for
+    /// tablets, so its button is disabled).
+    Choosing,
+    /// The manual (ZUI) unlock flow.
+    Manual,
+}
+
+/// Fastboot devices offered by the tablet flow when several are connected.
+#[derive(Debug, Clone)]
+struct TabletPicker {
+    /// USB serials, in discovery order.
+    devices: Vec<String>,
+}
+
+/// State of the tablet "Bootloader Unlock" feature (Mode 2).
+#[derive(Default)]
+struct TabletUnlockState {
+    dialog: TabletUnlockDialog,
+    picker: Option<TabletPicker>,
+    /// USB serial of the device the identity was read from.
+    device: Option<String>,
+    /// Serial number, left-padded to eight characters.
+    serial: String,
+    /// `Bootloader_SN_Part1` / `_Part2`, as read from the bootloader.
+    bootloader_sn_part1: String,
+    bootloader_sn_part2: String,
+    /// The two parts concatenated, i.e. what the UI shows; empty when the
+    /// bootloader does not report it.
+    bootloader_sn: String,
+    /// `true` once a read attempt finished (so the "Not applicable" watermark
+    /// only appears after the device was actually asked).
+    read_done: bool,
+    reading: bool,
+    read_error: Option<String>,
+    /// Orange notice shown after a read (e.g. which ZUI section to use).
+    read_notice: Option<String>,
+    unlocking: bool,
+    unlock_error: Option<String>,
+    unlock_info: Option<String>,
+}
+
+impl TabletUnlockState {
+    /// The identity the token URL is built from.
+    fn info(&self) -> tablet_unlock::TabletUnlockInfo {
+        tablet_unlock::TabletUnlockInfo {
+            serial: self.serial.clone(),
+            bootloader_sn_part1: self.bootloader_sn_part1.clone(),
+            bootloader_sn_part2: self.bootloader_sn_part2.clone(),
+        }
+    }
 }
 
 /// Which Factory Reset dialog is currently on screen.
@@ -1247,6 +1310,36 @@ enum Message {
     BootloaderPasteFetched(Option<String>),
     BootloaderUnlockRequested,
     BootloaderUnlockFinished(Result<String, fastboot_info::UnlockFailure>),
+    /// Tablet Bootloader Unlock: the feature tile's Tablet button was pressed.
+    TabletUnlockSelected,
+    /// Tablet Bootloader Unlock: the manual (ZUI) flow was chosen.
+    TabletUnlockManualSelected,
+    /// Tablet Bootloader Unlock: go back to the chooser.
+    TabletUnlockReturnToChooser,
+    /// Tablet Bootloader Unlock: close the dialog.
+    TabletUnlockCancel,
+    /// Click on the dialog's empty space (swallowed).
+    TabletUnlockBackdropPressed,
+    /// Tablet Bootloader Unlock: open ZUI's unlock website.
+    TabletUnlockOpenSite,
+    /// Tablet Bootloader Unlock: copy the serial number.
+    TabletUnlockCopySerial,
+    /// Tablet Bootloader Unlock: copy the Bootloader_SN.
+    TabletUnlockCopySn,
+    /// Tablet Bootloader Unlock: read the identity from fastboot.
+    TabletUnlockReadRequested,
+    /// Tablet Bootloader Unlock: the connected fastboot devices were listed.
+    TabletUnlockDevicesFetched(Result<Vec<String>, String>),
+    /// Tablet Bootloader Unlock: the user picked a device to read from.
+    TabletUnlockDeviceSelected(String),
+    /// Tablet Bootloader Unlock: the device picker was cancelled.
+    TabletUnlockPickerCancelled,
+    /// Tablet Bootloader Unlock: the identity was read from a device.
+    TabletUnlockInfoRead(String, Result<tablet_unlock::TabletUnlockInfo, String>),
+    /// Tablet Bootloader Unlock: the user asked to unlock.
+    TabletUnlockRequested,
+    /// Tablet Bootloader Unlock: the unlock job finished.
+    TabletUnlockFinished(tablet_unlock::UnlockOutcome),
     GuidedLogin,
     GuidedLoginFinished(Result<webview::PortalLogin, String>),
     GuidedLogoutFinished(Result<(), String>),
@@ -1410,6 +1503,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let reset = &state.flash.factory_reset;
     let firmware = &state.flash.firmware;
     let driver = &state.flash.driver;
+    let tablet = &state.flash.tablet_unlock;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
@@ -1417,6 +1511,8 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || reset.listing
         || reset.checking
         || reset.resetting
+        || tablet.reading
+        || tablet.unlocking
         || firmware.listing
         || firmware.loading
         || firmware.running
@@ -1520,6 +1616,7 @@ fn closes_overlay(message: &Message) -> bool {
     matches!(
         message,
         Message::BootloaderCancel
+            | Message::TabletUnlockCancel
             | Message::FactoryResetCancel
             | Message::FirmwareFlashCancel
             | Message::DriverCancel
@@ -1544,7 +1641,9 @@ fn switch_forward(before: u8, after: u8) -> bool {
 
 /// A card that is drawn on top of another dialog card.
 fn is_stacked(key: u8) -> bool {
-    key == OVERLAY_BOOTLOADER_PICKER || key == OVERLAY_GUIDED_CONFIRM
+    key == OVERLAY_BOOTLOADER_PICKER
+        || key == OVERLAY_GUIDED_CONFIRM
+        || key == OVERLAY_TABLET_PICKER
 }
 
 /// No dialog is open.
@@ -1556,6 +1655,11 @@ const OVERLAY_GUIDED: u8 = 0x30;
 const OVERLAY_BOOTLOADER_PICKER: u8 = 0x40;
 const OVERLAY_GUIDED_CONFIRM: u8 = 0x50;
 const OVERLAY_FACTORY_RESET: u8 = 0x60;
+/// The tablet unlock chooser and the manual (ZUI) flow, then its device
+/// picker stacked on top.
+const OVERLAY_TABLET_CHOOSER: u8 = 0x70;
+const OVERLAY_TABLET_MANUAL: u8 = 0x71;
+const OVERLAY_TABLET_PICKER: u8 = 0x72;
 const OVERLAY_FIRMWARE_FLASH: u8 = 0x80;
 const OVERLAY_DRIVER: u8 = 0xA0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
@@ -1585,6 +1689,19 @@ fn overlay_key(state: &State) -> u8 {
                 OVERLAY_GUIDED_CONFIRM
             }
             BootloaderDialog::Guided => OVERLAY_GUIDED + guided_step(bootloader.guided.step),
+        };
+    }
+
+    if tablet_bootloader::is_open(state) {
+        let tablet = &state.flash.tablet_unlock;
+        if tablet.picker.is_some() {
+            return OVERLAY_TABLET_PICKER;
+        }
+
+        return match tablet.dialog {
+            TabletUnlockDialog::Closed => OVERLAY_NONE,
+            TabletUnlockDialog::Choosing => OVERLAY_TABLET_CHOOSER,
+            TabletUnlockDialog::Manual => OVERLAY_TABLET_MANUAL,
         };
     }
 
@@ -2585,6 +2702,63 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::BootloaderUnlockFinished(result) => finish_bootloader_unlock(state, result),
+        Message::TabletUnlockSelected => {
+            state.flash.tablet_unlock = TabletUnlockState {
+                dialog: TabletUnlockDialog::Choosing,
+                ..TabletUnlockState::default()
+            };
+            Task::none()
+        }
+        Message::TabletUnlockManualSelected => {
+            state.flash.tablet_unlock.dialog = TabletUnlockDialog::Manual;
+            Task::none()
+        }
+        Message::TabletUnlockReturnToChooser => {
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.dialog = TabletUnlockDialog::Choosing;
+            tablet.picker = None;
+            Task::none()
+        }
+        Message::TabletUnlockCancel => {
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.dialog = TabletUnlockDialog::Closed;
+            tablet.picker = None;
+            tablet.reading = false;
+            tablet.unlocking = false;
+            Task::none()
+        }
+        // Clicks on empty modal space are swallowed here so they neither
+        // dismiss the dialog nor reach the UI underneath.
+        Message::TabletUnlockBackdropPressed => Task::none(),
+        Message::TabletUnlockOpenSite => open_browser(tablet_unlock::UNLOCK_SITE_URL),
+        Message::TabletUnlockCopySerial => {
+            let serial = state.flash.tablet_unlock.serial.clone();
+            if serial.is_empty() {
+                Task::none()
+            } else {
+                iced::clipboard::write::<Message>(serial)
+            }
+        }
+        Message::TabletUnlockCopySn => {
+            let sn = state.flash.tablet_unlock.bootloader_sn.clone();
+            if sn.is_empty() {
+                Task::none()
+            } else {
+                iced::clipboard::write::<Message>(sn)
+            }
+        }
+        Message::TabletUnlockReadRequested => start_tablet_read(state),
+        Message::TabletUnlockDevicesFetched(result) => finish_tablet_device_list(state, result),
+        Message::TabletUnlockDeviceSelected(serial) => start_tablet_read_device(state, serial),
+        Message::TabletUnlockPickerCancelled => {
+            state.flash.tablet_unlock.picker = None;
+            Task::none()
+        }
+        Message::TabletUnlockInfoRead(device, result) => {
+            finish_tablet_read(state, device, result)
+        }
+        Message::TabletUnlockRequested => start_tablet_unlock(state),
+        Message::TabletUnlockFinished(outcome) => finish_tablet_unlock(state, outcome),
         Message::GuidedLogin => {
             let guided = &mut state.flash.bootloader.guided;
             // Only one portal window (or logout) at a time. When already
@@ -5077,13 +5251,198 @@ fn finish_bootloader_unlock(
     }
 }
 
+/// Starts the tablet identity read by listing the connected fastboot devices.
+fn start_tablet_read(state: &mut State) -> Task<Message> {
+    let tablet = &mut state.flash.tablet_unlock;
+    if tablet.reading || tablet.unlocking {
+        return Task::none();
+    }
+    tablet.reading = true;
+    tablet.read_error = None;
+    tablet.read_notice = None;
+    tablet.picker = None;
+
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(fastboot::FastbootDevice::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::TabletUnlockDevicesFetched,
+    )
+}
+
+/// Handles the tablet device listing: reads directly from a single device,
+/// opens the picker for several, or reports that none is connected.
+fn finish_tablet_device_list(
+    state: &mut State,
+    result: Result<Vec<String>, String>,
+) -> Task<Message> {
+    if !state.flash.tablet_unlock.reading {
+        return Task::none();
+    }
+
+    match result {
+        Ok(devices) if devices.len() == 1 => start_tablet_read_device(state, devices[0].clone()),
+        Ok(devices) if devices.len() > 1 => {
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.reading = false;
+            tablet.picker = Some(TabletPicker { devices });
+            Task::none()
+        }
+        Ok(_) => {
+            let message = state.l10n.tr("retcn-fill-fastboot-no-device");
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.reading = false;
+            tablet.read_error = Some(message);
+            Task::none()
+        }
+        Err(error) => {
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.reading = false;
+            tablet.read_error = Some(error);
+            Task::none()
+        }
+    }
+}
+
+/// Reads the tablet identity from the chosen device in the background.
+fn start_tablet_read_device(state: &mut State, serial: String) -> Task<Message> {
+    let tablet = &mut state.flash.tablet_unlock;
+    tablet.picker = None;
+    tablet.reading = true;
+    tablet.read_error = None;
+    tablet.read_notice = None;
+
+    let device = serial.clone();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || tablet_unlock::read_info(&serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        move |result| Message::TabletUnlockInfoRead(device.clone(), result),
+    )
+}
+
+/// Stores the identity read from a device, or surfaces the read error.
+fn finish_tablet_read(
+    state: &mut State,
+    device: String,
+    result: Result<tablet_unlock::TabletUnlockInfo, String>,
+) -> Task<Message> {
+    if !state.flash.tablet_unlock.reading {
+        return Task::none();
+    }
+
+    match result {
+        Ok(info) => {
+            // A readable Bootloader_SN is exactly the "enhanced" case, which
+            // ZUI files under the Legion Y700 5th Gen section.
+            let notice = info
+                .has_bootloader_sn()
+                .then(|| state.l10n.tr("flash-bootloader-tablet-legion"));
+
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.reading = false;
+            tablet.read_error = None;
+            tablet.read_notice = notice;
+            tablet.device = Some(device);
+            tablet.bootloader_sn = info.bootloader_sn();
+            tablet.bootloader_sn_part1 = info.bootloader_sn_part1;
+            tablet.bootloader_sn_part2 = info.bootloader_sn_part2;
+            tablet.serial = info.serial;
+            tablet.read_done = true;
+        }
+        Err(error) => {
+            let tablet = &mut state.flash.tablet_unlock;
+            tablet.reading = false;
+            tablet.read_error = Some(error);
+        }
+    }
+
+    Task::none()
+}
+
+/// Starts the ZUI unlock: download the token for the values read earlier,
+/// flash it to the `unlock` partition, then send `oem unlock-go`.
+fn start_tablet_unlock(state: &mut State) -> Task<Message> {
+    let tablet = &state.flash.tablet_unlock;
+    if tablet.reading || tablet.unlocking {
+        return Task::none();
+    }
+    let Some(device) = tablet.device.clone() else {
+        return Task::none();
+    };
+    if tablet.serial.trim().is_empty() {
+        return Task::none();
+    }
+    let info = tablet.info();
+
+    let tablet = &mut state.flash.tablet_unlock;
+    tablet.unlocking = true;
+    tablet.unlock_error = None;
+    tablet.unlock_info = None;
+
+    let token = tablet_unlock::token_path();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || tablet_unlock::unlock(&device, &info, &token))
+                .await
+                .unwrap_or_else(|e| {
+                    tablet_unlock::UnlockOutcome::Failed(format!("background task failed: {e}"))
+                })
+        },
+        Message::TabletUnlockFinished,
+    )
+}
+
+/// Shows the result of the ZUI unlock.
+fn finish_tablet_unlock(
+    state: &mut State,
+    outcome: tablet_unlock::UnlockOutcome,
+) -> Task<Message> {
+    if !state.flash.tablet_unlock.unlocking {
+        return Task::none();
+    }
+
+    let l10n = &state.l10n;
+    let (info, error) = match outcome {
+        tablet_unlock::UnlockOutcome::Unlocked => (
+            Some(l10n.tr("flash-bootloader-tablet-confirm-unlock")),
+            None,
+        ),
+        tablet_unlock::UnlockOutcome::NotGenerated => (
+            None,
+            Some(l10n.tr("flash-bootloader-tablet-not-generated")),
+        ),
+        tablet_unlock::UnlockOutcome::FlashFailed(message) => (
+            None,
+            Some(l10n.tr_with_args(
+                "flash-bootloader-tablet-unknown-error",
+                &[("error", message)],
+            )),
+        ),
+        tablet_unlock::UnlockOutcome::OemUnlockingDisabled => (
+            None,
+            Some(l10n.tr("flash-bootloader-oem-unlocking-required")),
+        ),
+        tablet_unlock::UnlockOutcome::Failed(message) => (None, Some(message)),
+    };
+
+    let tablet = &mut state.flash.tablet_unlock;
+    tablet.unlocking = false;
+    tablet.unlock_info = info;
+    tablet.unlock_error = error;
+    Task::none()
+}
+
 fn view(state: &State) -> Element<'_, Message> {
     let content = match state.mode {
         Mode::Mode1 => firmware_lookup_view(state),
         Mode::Mode2 => smartphone_flash_view(state),
         Mode::Mode3 => decrypt_view(state),
     };
-
     let language_options: Vec<Labeled<l10n::Language>> = l10n::Language::ALL
         .iter()
         .map(|&language| Labeled {
@@ -5148,6 +5507,12 @@ fn view(state: &State) -> Element<'_, Message> {
     // Bootloader Unlock dialog (chooser / manual flow) drawn over the whole
     // window (including the tab bar) when a dialog is open.
     if let Some(overlay) = bootloader::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Tablet Bootloader Unlock dialog (chooser / ZUI manual flow) drawn over
+    // the whole window when it is open.
+    if let Some(overlay) = tablet_bootloader::overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 

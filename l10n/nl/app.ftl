@@ -329,3 +329,15 @@ driver-password = Wachtwoord
 driver-failed = Kan het stuurprogramma niet installeren: { $error }
 driver-error-password = Het wachtwoord is niet geaccepteerd. Probeer het opnieuw.
 driver-error-no-sudo = sudo is niet gevonden, dus de udev-regels kunnen niet worden geïnstalleerd.
+
+flash-bootloader-tablet-desc = Om het ontgrendelen van de bootloader aan te vragen, heb je het serienummer van de tablet nodig, evenals de Bootloader_SN (indien van toepassing).
+flash-bootloader-tablet-site-desc = Zodra je ze hebt, kun je ze invoeren op de ZUI Bootloader Unlock-website.
+flash-bootloader-tablet-site-button = Ga naar de Lenovo ZUI Bootloader Unlock-website (alleen Chinees)
+flash-bootloader-tablet-serial = Serienummer
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Niet van toepassing
+flash-bootloader-tablet-legion = Gebruik de sectie Legion Y700 5th Gen om het ontgrendelen van de bootloader aan te vragen.
+flash-bootloader-tablet-unlock-desc = Zodra je het ontgrendelen van de bootloader hebt aangevraagd, kun je op de onderstaande knop klikken om de ontgrendelingssleutel te krijgen.
+flash-bootloader-tablet-not-generated = De ontgrendelingscode voor je apparaat is nog niet gegenereerd. Genereer deze eerst, of probeer het later opnieuw als je dat al hebt gedaan.
+flash-bootloader-tablet-confirm-unlock = Kijk op je tablet om het ontgrendelen van de bootloader te bevestigen.
+flash-bootloader-tablet-unknown-error = Er is een onbekende fout opgetreden. { $error }

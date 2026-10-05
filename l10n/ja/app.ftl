@@ -329,3 +329,15 @@ driver-password = パスワード
 driver-failed = ドライバーをインストールできませんでした：{ $error }
 driver-error-password = パスワードが受け入れられませんでした。もう一度お試しください。
 driver-error-no-sudo = sudo が見つからないため、udev ルールをインストールできません。
+
+flash-bootloader-tablet-desc = ブートローダーのロック解除を申請するには、タブレットのシリアル番号と Bootloader_SN（該当する場合）が必要です。
+flash-bootloader-tablet-site-desc = 取得したら、ZUI ブートローダー ロック解除ウェブサイトに入力できます。
+flash-bootloader-tablet-site-button = Lenovo ZUI ブートローダー ロック解除ウェブサイトへ（中国語のみ）
+flash-bootloader-tablet-serial = シリアル番号
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = 該当なし
+flash-bootloader-tablet-legion = ブートローダーのロック解除を申請するには、Legion Y700 5th Gen のセクションを使用してください。
+flash-bootloader-tablet-unlock-desc = ブートローダーのロック解除を申請したら、以下のボタンをクリックしてロック解除キーを取得できます。
+flash-bootloader-tablet-not-generated = お使いのデバイスのロック解除コードはまだ生成されていません。まず生成するか、すでに生成済みの場合はしばらくしてから再試行してください。
+flash-bootloader-tablet-confirm-unlock = タブレットを確認して、ブートローダーのロック解除を承認してください。
+flash-bootloader-tablet-unknown-error = 不明なエラーが発生しました。{ $error }

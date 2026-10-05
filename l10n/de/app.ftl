@@ -329,3 +329,15 @@ driver-password = Passwort
 driver-failed = Der Treiber konnte nicht installiert werden: { $error }
 driver-error-password = Das Passwort wurde nicht akzeptiert. Bitte versuche es erneut.
 driver-error-no-sudo = sudo wurde nicht gefunden, daher können die udev-Regeln nicht installiert werden.
+
+flash-bootloader-tablet-desc = Um die Entsperrung des Bootloaders zu beantragen, benötigen Sie die Seriennummer des Tablets sowie die Bootloader_SN (falls vorhanden).
+flash-bootloader-tablet-site-desc = Sobald Sie sie haben, können Sie sie auf der ZUI-Bootloader-Unlock-Website eingeben.
+flash-bootloader-tablet-site-button = Zur Lenovo ZUI Bootloader Unlock-Website (nur Chinesisch)
+flash-bootloader-tablet-serial = Seriennummer
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Nicht zutreffend
+flash-bootloader-tablet-legion = Bitte verwenden Sie den Abschnitt Legion Y700 5th Gen, um die Entsperrung des Bootloaders zu beantragen.
+flash-bootloader-tablet-unlock-desc = Nachdem Sie die Entsperrung des Bootloaders erfolgreich beantragt haben, können Sie auf die folgende Schaltfläche klicken, um den Entsperrschlüssel zu erhalten.
+flash-bootloader-tablet-not-generated = Der Entsperrcode für Ihr Gerät wurde noch nicht generiert. Bitte generieren Sie ihn zuerst oder versuchen Sie es später erneut, falls Sie dies bereits getan haben.
+flash-bootloader-tablet-confirm-unlock = Bitte schauen Sie auf Ihr Tablet, um die Entsperrung des Bootloaders zu bestätigen.
+flash-bootloader-tablet-unknown-error = Ein unbekannter Fehler ist aufgetreten. { $error }

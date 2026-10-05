@@ -466,5 +466,42 @@ mod tests {
             assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
         }
     }
+
+    /// Every tablet Bootloader Unlock string must exist and interpolate in
+    /// every locale: the failure line carries the bootloader's raw message, and
+    /// a translation that names `$error` differently would leave a hole in it.
+    #[test]
+    fn the_tablet_unlock_messages_render_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-bootloader-tablet-desc",
+            "flash-bootloader-tablet-site-desc",
+            "flash-bootloader-tablet-site-button",
+            "flash-bootloader-tablet-serial",
+            "flash-bootloader-tablet-sn",
+            "flash-bootloader-tablet-sn-na",
+            "flash-bootloader-tablet-legion",
+            "flash-bootloader-tablet-unlock-desc",
+            "flash-bootloader-tablet-not-generated",
+            "flash-bootloader-tablet-confirm-unlock",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                assert!(!bundle.tr(id).trim().is_empty(), "{language:?}: {id}");
+            }
+
+            let failure = bundle.tr_with_args(
+                "flash-bootloader-tablet-unknown-error",
+                &[("error", "Partition not found".to_owned())],
+            );
+            assert!(
+                failure.contains("Partition not found"),
+                "{language:?}: {failure}"
+            );
+            assert!(!failure.contains('\u{2068}'), "{language:?}: {failure}");
+        }
+    }
 }
 

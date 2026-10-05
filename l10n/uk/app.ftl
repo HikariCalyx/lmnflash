@@ -329,3 +329,15 @@ driver-password = Пароль
 driver-failed = Не вдалося встановити драйвер: { $error }
 driver-error-password = Пароль не прийнято. Спробуйте ще раз.
 driver-error-no-sudo = sudo не знайдено, тому правила udev встановити неможливо.
+
+flash-bootloader-tablet-desc = Щоб запросити розблокування завантажувача, потрібно отримати серійний номер планшета, а також Bootloader_SN (якщо застосовно).
+flash-bootloader-tablet-site-desc = Коли ви їх матимете, ви можете ввести їх на сайті розблокування завантажувача ZUI.
+flash-bootloader-tablet-site-button = Перейти на сайт розблокування завантажувача Lenovo ZUI (лише китайською)
+flash-bootloader-tablet-serial = Серійний номер
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Не застосовно
+flash-bootloader-tablet-legion = Використовуйте розділ Legion Y700 5th Gen, щоб запросити розблокування завантажувача.
+flash-bootloader-tablet-unlock-desc = Після запиту розблокування завантажувача ви можете натиснути наступну кнопку, щоб отримати ключ розблокування.
+flash-bootloader-tablet-not-generated = Код розблокування для вашого пристрою ще не створено. Спершу створіть його або повторіть спробу пізніше, якщо ви вже це зробили.
+flash-bootloader-tablet-confirm-unlock = Подивіться на планшет, щоб підтвердити розблокування завантажувача.
+flash-bootloader-tablet-unknown-error = Сталася невідома помилка. { $error }

@@ -329,3 +329,15 @@ driver-password = 암호
 driver-failed = 드라이버를 설치할 수 없습니다: { $error }
 driver-error-password = 암호가 승인되지 않았습니다. 다시 시도하세요.
 driver-error-no-sudo = sudo를 찾을 수 없어 udev 규칙을 설치할 수 없습니다.
+
+flash-bootloader-tablet-desc = 부트로더 잠금 해제를 요청하려면 태블릿의 일련 번호와 Bootloader_SN(해당하는 경우)이 필요합니다.
+flash-bootloader-tablet-site-desc = 이를 확보한 후 ZUI 부트로더 잠금 해제 웹사이트에 입력할 수 있습니다.
+flash-bootloader-tablet-site-button = Lenovo ZUI 부트로더 잠금 해제 웹사이트로 이동(중국어 전용)
+flash-bootloader-tablet-serial = 일련 번호
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = 해당 없음
+flash-bootloader-tablet-legion = 부트로더 잠금 해제를 요청하려면 Legion Y700 5th Gen 섹션을 사용하십시오.
+flash-bootloader-tablet-unlock-desc = 부트로더 잠금 해제를 요청한 후 아래 버튼을 클릭하여 잠금 해제 키를 받을 수 있습니다.
+flash-bootloader-tablet-not-generated = 기기의 잠금 해제 코드가 아직 생성되지 않았습니다. 먼저 생성하거나, 이미 생성한 경우 나중에 다시 시도하십시오.
+flash-bootloader-tablet-confirm-unlock = 태블릿을 확인하여 부트로더 잠금 해제를 승인하십시오.
+flash-bootloader-tablet-unknown-error = 알 수 없는 오류가 발생했습니다. { $error }

@@ -329,3 +329,15 @@ driver-password = 密碼
 driver-failed = 無法安裝驅動：{ $error }
 driver-error-password = 密碼不正確，請重試。
 driver-error-no-sudo = 找不到 sudo，無法安裝 udev 規則。
+
+flash-bootloader-tablet-desc = 若要申請解鎖引導程式，您需要取得平板電腦的序號以及 Bootloader_SN（如適用）。
+flash-bootloader-tablet-site-desc = 取得後，您可以將其輸入到 ZUI 引導程式解鎖網站。
+flash-bootloader-tablet-site-button = 前往聯想 ZUI 引導程式解鎖網站
+flash-bootloader-tablet-serial = 序號
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = 不適用
+flash-bootloader-tablet-legion = 請使用 拯救者Y700 第五代 區段申請解鎖引導程式。
+flash-bootloader-tablet-unlock-desc = 成功申請解鎖引導程式後，您可以點擊下方的按鈕取得引導程式解鎖金鑰。
+flash-bootloader-tablet-not-generated = 您裝置的解鎖代碼尚未產生。請先產生，若已產生請稍後再試。
+flash-bootloader-tablet-confirm-unlock = 請查看您的平板電腦以確認解鎖引導程式。
+flash-bootloader-tablet-unknown-error = 發生未知錯誤。{ $error }

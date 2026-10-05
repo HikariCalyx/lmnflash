@@ -329,3 +329,15 @@ driver-password = 密码
 driver-failed = 无法安装驱动：{ $error }
 driver-error-password = 密码不正确，请重试。
 driver-error-no-sudo = 未找到 sudo，无法安装 udev 规则。
+
+flash-bootloader-tablet-desc = 要申请解锁引导加载程序，您需要获取平板电脑的序列号以及 Bootloader_SN（如适用）。
+flash-bootloader-tablet-site-desc = 获取后，您可以将其输入到 ZUI 引导加载程序解锁网站。
+flash-bootloader-tablet-site-button = 前往联想 ZUI 引导加载程序解锁网站
+flash-bootloader-tablet-serial = 序列号
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = 不适用
+flash-bootloader-tablet-legion = 请使用 拯救者Y700 第五代 版块申请解锁引导加载程序。
+flash-bootloader-tablet-unlock-desc = 成功申请解锁引导加载程序后，您可以点击下面的按钮获取引导加载程序解锁密钥。
+flash-bootloader-tablet-not-generated = 您设备的解锁代码尚未生成。请先生成，若已生成请稍后再试。
+flash-bootloader-tablet-confirm-unlock = 请查看您的平板电脑以确认解锁引导加载程序。
+flash-bootloader-tablet-unknown-error = 发生未知错误。{ $error }

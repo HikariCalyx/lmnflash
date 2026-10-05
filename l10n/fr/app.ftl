@@ -329,3 +329,15 @@ driver-password = Mot de passe
 driver-failed = Impossible d'installer le pilote : { $error }
 driver-error-password = Le mot de passe n'a pas été accepté. Veuillez réessayer.
 driver-error-no-sudo = sudo est introuvable, les règles udev ne peuvent donc pas être installées.
+
+flash-bootloader-tablet-desc = Pour demander le déverrouillage du bootloader, vous devez obtenir le numéro de série de la tablette ainsi que le Bootloader_SN (le cas échéant).
+flash-bootloader-tablet-site-desc = Une fois que vous les avez, vous pouvez les saisir sur le site Web de déverrouillage du bootloader ZUI.
+flash-bootloader-tablet-site-button = Accéder au site Web de déverrouillage du bootloader Lenovo ZUI (chinois uniquement)
+flash-bootloader-tablet-serial = Numéro de série
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Non applicable
+flash-bootloader-tablet-legion = Veuillez utiliser la section Legion Y700 5th Gen pour demander le déverrouillage du bootloader.
+flash-bootloader-tablet-unlock-desc = Une fois que vous avez demandé le déverrouillage du bootloader, vous pouvez cliquer sur le bouton suivant pour obtenir la clé de déverrouillage.
+flash-bootloader-tablet-not-generated = Le code de déverrouillage de votre appareil n'a pas encore été généré. Générez-le d'abord, ou réessayez plus tard si vous l'avez déjà fait.
+flash-bootloader-tablet-confirm-unlock = Regardez votre tablette pour confirmer le déverrouillage du bootloader.
+flash-bootloader-tablet-unknown-error = Une erreur inconnue s'est produite. { $error }

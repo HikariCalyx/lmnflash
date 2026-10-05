@@ -329,3 +329,15 @@ driver-password = Passord
 driver-failed = Kunne ikke installere driveren: { $error }
 driver-error-password = Passordet ble ikke godtatt. Prøv igjen.
 driver-error-no-sudo = Fant ikke sudo, så udev-reglene kan ikke installeres.
+
+flash-bootloader-tablet-desc = For å be om opplåsing av oppstartslasteren trenger du serienummeret til nettbrettet samt Bootloader_SN (hvis aktuelt).
+flash-bootloader-tablet-site-desc = Når du har dem, kan du legge dem inn på ZUI Bootloader Unlock-nettstedet.
+flash-bootloader-tablet-site-button = Gå til Lenovo ZUI Bootloader Unlock-nettstedet (kun kinesisk)
+flash-bootloader-tablet-serial = Serienummer
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Ikke aktuelt
+flash-bootloader-tablet-legion = Bruk Legion Y700 5th Gen-delen for å be om opplåsing av oppstartslasteren.
+flash-bootloader-tablet-unlock-desc = Når du har bedt om opplåsing av oppstartslasteren, kan du klikke på knappen nedenfor for å hente opplåsingsnøkkelen.
+flash-bootloader-tablet-not-generated = Opplåsingskoden for enheten din er ikke generert ennå. Generer den først, eller prøv igjen senere hvis du allerede har gjort det.
+flash-bootloader-tablet-confirm-unlock = Se på nettbrettet for å bekrefte opplåsing av oppstartslasteren.
+flash-bootloader-tablet-unknown-error = Det har oppstått en ukjent feil. { $error }

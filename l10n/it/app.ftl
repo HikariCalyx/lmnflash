@@ -329,3 +329,15 @@ driver-password = Password
 driver-failed = Impossibile installare il driver: { $error }
 driver-error-password = La password non è stata accettata. Riprova.
 driver-error-no-sudo = sudo non è stato trovato, quindi le regole udev non possono essere installate.
+
+flash-bootloader-tablet-desc = Per richiedere lo sblocco del bootloader, devi ottenere il numero di serie del tablet e il Bootloader_SN (se applicabile).
+flash-bootloader-tablet-site-desc = Una volta ottenuti, puoi inserirli sul sito Web di sblocco del bootloader ZUI.
+flash-bootloader-tablet-site-button = Vai al sito Web di sblocco del bootloader Lenovo ZUI (solo cinese)
+flash-bootloader-tablet-serial = Numero di serie
+flash-bootloader-tablet-sn = Bootloader_SN
+flash-bootloader-tablet-sn-na = Non applicabile
+flash-bootloader-tablet-legion = Usa la sezione Legion Y700 5th Gen per richiedere lo sblocco del bootloader.
+flash-bootloader-tablet-unlock-desc = Dopo aver richiesto con successo lo sblocco del bootloader, puoi fare clic sul pulsante seguente per ottenere la chiave di sblocco.
+flash-bootloader-tablet-not-generated = Il codice di sblocco per il tuo dispositivo non è ancora stato generato. Generalo prima, o riprova più tardi se lo hai già fatto.
+flash-bootloader-tablet-confirm-unlock = Dai un'occhiata al tuo tablet per confermare lo sblocco del bootloader.
+flash-bootloader-tablet-unknown-error = Si è verificato un errore sconosciuto. { $error }
