@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = Firmware Lookup
-mode-2 = Smartphone Flash
+mode-2 = Smart Device Flashing
 mode-3 = Firmware Decrypt
 
 flash-bootloader-title = Bootloader Unlock

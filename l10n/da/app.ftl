@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = Firmwareopslag
-mode-2 = Flash af smartphone
+mode-2 = Flash af smartenheder
 mode-3 = Firmware-dekryptering
 
 flash-bootloader-title = Oplåsning af bootloader

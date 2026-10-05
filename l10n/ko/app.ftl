@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = 펌웨어 조회
-mode-2 = 스마트폰 플래시
+mode-2 = 스마트 기기 플래시
 mode-3 = 펌웨어 복호화
 
 flash-bootloader-title = 부트로더 잠금 해제

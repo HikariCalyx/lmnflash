@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = Recherche de firmware
-mode-2 = Flash du smartphone
+mode-2 = Flash des appareils intelligents
 mode-3 = Déchiffrement du firmware
 
 flash-bootloader-title = Déverrouillage du bootloader

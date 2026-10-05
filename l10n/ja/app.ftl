@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = ファームウェア検索
-mode-2 = スマホ書き換え
+mode-2 = スマートデバイス書き換え
 mode-3 = ファームウェア復号
 
 flash-bootloader-title = ブートローダーのロック解除

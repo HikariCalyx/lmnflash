@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = 固件查询
-mode-2 = 智能手机刷写
+mode-2 = 智能设备刷写
 mode-3 = 固件解密
 
 flash-bootloader-title = Bootloader 解锁

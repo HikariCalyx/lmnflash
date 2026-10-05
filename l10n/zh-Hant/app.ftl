@@ -2,7 +2,7 @@
 app-title = LMN Flash
 
 mode-1 = 韌體查詢
-mode-2 = 智慧型手機刷寫
+mode-2 = 智慧型裝置刷寫
 mode-3 = 韌體解密
 
 flash-bootloader-title = Bootloader 解鎖
