@@ -284,6 +284,48 @@ mod tests {
         }
     }
 
+    /// The About dialog is built from several pieces: the heading, the intro,
+    /// the thanks heading and list, the Android heading and the two link
+    /// targets. The thanks list is one multi-line value, so a locale that lost
+    /// its line breaks would run the three credits together.
+    #[test]
+    fn the_about_dialog_renders_in_every_locale() {
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in [
+                "about-title",
+                "about-version",
+                "about-intro",
+                "about-thanks-heading",
+                "about-android-heading",
+                "about-source-code",
+                "about-link-lenovobl",
+                "about-link-android",
+                "about-link-source",
+            ] {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+                assert!(!text.contains('\u{2069}'), "{language:?}: {id}");
+            }
+
+            let list = bundle.tr("about-thanks-list");
+
+            assert!(list.lines().count() >= 3, "{language:?}: {list:?}");
+            assert!(!list.contains('\u{2068}'), "{language:?}: {list:?}");
+
+            // Both link targets have to be openable as they are.
+            for id in ["about-link-lenovobl", "about-link-android", "about-link-source"] {
+                assert!(
+                    bundle.tr(id).starts_with("https://"),
+                    "{language:?}: {id}"
+                );
+            }
+        }
+    }
+
     /// Interpolated values must not be wrapped in bidi isolation marks —
     /// they have no glyphs in common UI fonts and render as boxes (□).
     #[test]

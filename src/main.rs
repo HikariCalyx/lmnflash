@@ -2,8 +2,10 @@
 // `eprintln!` diagnostics remain visible with `cargo run`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod anim;
 mod bootloader;
+mod bulk;
 mod carrier;
 mod config;
 mod decrypt;
@@ -20,19 +22,23 @@ mod guided;
 mod instance;
 mod l10n;
 mod login;
+mod lookup;
 mod platform_tools;
 mod protocol;
+mod smartphone;
 mod tablet_bootloader;
 mod tablet_unlock;
 mod telemetry;
 mod webview;
 
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, pick_list,
-    row, scrollable, stack, text_editor, text_input, Space,
+    button, column, container, horizontal_rule, mouse_area, pick_list, row, stack, text_editor,
+    Space,
 };
 use iced::widget::text::Shaping;
-use iced::{Alignment, Element, Fill, Font, Length, Size, Task};
+use iced::{Alignment, Element, Fill, Font, Size, Task};
+
+use smartphone::SmartphoneFeature;
 
 /// A `text` label rendered with advanced text shaping.
 ///
@@ -216,92 +222,6 @@ impl Mode {
             Self::Mode1 => "mode-1",
             Self::Mode2 => "mode-2",
             Self::Mode3 => "mode-3",
-        }
-    }
-}
-
-/// A feature tile offered by the smartphone-firmware-flash mode (Mode 2).
-///
-/// Each variant maps to a localized title and action button; new flashing
-/// features are added here as they are implemented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SmartphoneFeature {
-    BootloaderUnlock,
-    FactoryReset,
-    FirmwareFlash,
-    InstallDriver,
-}
-
-impl SmartphoneFeature {
-    const ALL: [Self; 4] = [
-        Self::BootloaderUnlock,
-        Self::FactoryReset,
-        Self::FirmwareFlash,
-        Self::InstallDriver,
-    ];
-
-    fn title_id(self) -> &'static str {
-        match self {
-            Self::BootloaderUnlock => "flash-bootloader-title",
-            Self::FactoryReset => "flash-factory-reset-title",
-            Self::FirmwareFlash => "flash-firmware-title",
-            Self::InstallDriver => "flash-driver-title",
-        }
-    }
-
-    /// Whether this system has a use for the feature.
-    ///
-    /// "Install Driver" is left out where there is nothing to install:
-    /// macOS ships the drivers it needs, and Motorola has no installer for
-    /// Windows on ARM. The tile is not rendered at all there — an unavailable
-    /// feature is not advertised with a dead button.
-    fn available(self) -> bool {
-        match self {
-            Self::InstallDriver => driver_install::target().is_some(),
-            _ => true,
-        }
-    }
-
-    /// The action buttons of the tile, paired with the FTL id of their label
-    /// and the message they send.
-    ///
-    /// `None` marks an action that is not implemented yet: its button is
-    /// rendered disabled (a button without `on_press`), so the tile already
-    /// shows what is coming without pretending to work.
-    fn actions(self) -> Vec<(&'static str, Option<Message>)> {
-        let pressed = || Some(Message::SmartphoneFeaturePressed(self));
-
-        match self {
-            // The bootloader unlock procedure differs between phones and
-            // tablets.
-            Self::BootloaderUnlock => vec![
-                ("flash-bootloader-smartphone-button", pressed()),
-                (
-                    "flash-bootloader-tablet-button",
-                    Some(Message::TabletUnlockSelected),
-                ),
-            ],
-            Self::FactoryReset => vec![("flash-factory-reset-button", pressed())],
-            // Firmware flashing is offered per device type; tablet firmware
-            // flashing is not implemented yet.
-            Self::FirmwareFlash => vec![
-                ("flash-firmware-smartphone-button", pressed()),
-                ("flash-firmware-tablet-button", None),
-            ],
-            // Windows installs a driver per device type: phones take
-            // Motorola's Mobile Drivers, tablets are flashed with Lenovo's
-            // "Software Fix", which is a download page of its own. Linux has a
-            // single installation for both: the udev rules.
-            Self::InstallDriver => match driver_install::target() {
-                Some(driver_install::Target::Windows(_)) => vec![
-                    ("driver-smartphone-button", Some(Message::DriverInstallRequested)),
-                    ("driver-tablet-button", Some(Message::DriverTabletSite)),
-                ],
-                _ => vec![(
-                    "driver-install-button",
-                    Some(Message::DriverInstallRequested),
-                )],
-            },
         }
     }
 }
@@ -1133,6 +1053,9 @@ struct State {
     lookup: LookupState,
     decrypt: DecryptState,
     flash: SmartphoneFlashState,
+    /// Whether the About dialog (the round "i" button next to the language
+    /// selector on the Firmware Lookup page) is open.
+    about_open: bool,
     /// Monotonic UI animation tick, advanced by a time subscription while a
     /// busy indicator (spinner) is visible.
     anim_tick: u64,
@@ -1162,6 +1085,7 @@ impl Default for State {
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
             flash: SmartphoneFlashState::default(),
+            about_open: false,
             anim_tick: 0,
             content_transition: None,
             overlay_transition: None,
@@ -1242,6 +1166,12 @@ fn default_language() -> l10n::Language {
 #[derive(Debug, Clone)]
 enum Message {
     ModeSelected(Mode),
+    /// The round "i" button beside the language selector was pressed.
+    AboutPressed,
+    /// The About dialog was dismissed (its button or the backdrop).
+    AboutClosed,
+    /// A URL shown in the About dialog was clicked.
+    AboutOpenUrl(String),
     LanguageSelected(l10n::Language),
     LoginRequested(Click),
     LoginUrlFetched(Result<String, String>),
@@ -1622,6 +1552,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::FactoryResetCancel
             | Message::FirmwareFlashCancel
             | Message::DriverCancel
+            | Message::AboutClosed
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -1663,6 +1594,8 @@ const OVERLAY_TABLET_CHOOSER: u8 = 0x70;
 const OVERLAY_TABLET_MANUAL: u8 = 0x71;
 const OVERLAY_TABLET_PICKER: u8 = 0x72;
 const OVERLAY_FIRMWARE_FLASH: u8 = 0x80;
+/// The About dialog opened from the Firmware Lookup page.
+const OVERLAY_ABOUT: u8 = 0x90;
 const OVERLAY_DRIVER: u8 = 0xA0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
 
@@ -1750,6 +1683,10 @@ fn overlay_key(state: &State) -> u8 {
         return OVERLAY_DRIVER;
     }
 
+    if state.about_open {
+        return OVERLAY_ABOUT;
+    }
+
     if matches!(state.lookup.retcn.device_picker, DevicePicker::Open(_)) {
         return OVERLAY_RETCN_PICKER;
     }
@@ -1818,6 +1755,15 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OverlayLeavingPressed => Task::none(),
+        Message::AboutPressed => {
+            state.about_open = true;
+            Task::none()
+        }
+        Message::AboutClosed => {
+            state.about_open = false;
+            Task::none()
+        }
+        Message::AboutOpenUrl(url) => open_browser(&url),
         Message::SmartphoneFeaturePressed(feature) => match feature {
             SmartphoneFeature::BootloaderUnlock => {
                 let bootloader = &mut state.flash.bootloader;
@@ -3160,7 +3106,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::BulkEdit(action) => {
-            if let Some(action) = bulk_digits_only(action) {
+            if let Some(action) = bulk::bulk_digits_only(action) {
                 state.lookup.bulk.content.perform(action);
             }
             Task::none()
@@ -3366,12 +3312,12 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::CopyCnPassword(password) => iced::clipboard::write::<Message>(password),
-        Message::BulkLookupRequested => start_bulk_lookup(state),
+        Message::BulkLookupRequested => bulk::start_bulk_lookup(state),
         Message::BulkStepFinished(imei, result) => match result {
             Ok(info) => {
                 state.lookup.bulk.rows.push(BulkRow::found(&imei, &info));
                 state.lookup.bulk.index += 1;
-                bulk_next(state)
+                bulk::bulk_next(state)
             }
             Err(firmware::FirmwareError::AuthExpired(message)) => {
                 // Token expired mid-batch: stop, but keep the rows collected
@@ -3388,10 +3334,10 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 };
                 state.lookup.bulk.rows.push(BulkRow::skipped(&imei, status));
                 state.lookup.bulk.index += 1;
-                bulk_next(state)
+                bulk::bulk_next(state)
             }
         },
-        Message::BulkSaveRequested => start_bulk_save(state),
+        Message::BulkSaveRequested => bulk::start_bulk_save(state),
         Message::BulkSaveFinished(result) => {
             state.lookup.bulk.save_note = match result {
                 Ok(Some(path)) => Some(Ok(path.display().to_string())),
@@ -3655,240 +3601,6 @@ fn request_lookup(state: &mut State) -> Task<Message> {
                 })
         },
         Message::LookupFinished,
-    )
-}
-
-/// The header of the bulk-IMEI lookup CSV report.
-const BULK_CSV_HEADER: &str =
-    "imei,status,xtCode,carrier,build_fingerprint,download_link,lolinet_filename,assumed_directory";
-
-/// The non-empty, trimmed lines of the bulk IMEI box.
-fn bulk_lines(content: &text_editor::Content) -> Vec<String> {
-    content
-        .text()
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// Restricts the bulk IMEI box to digits and line breaks.
-///
-/// A typed character that is not a digit is dropped, and a pasted block is
-/// reduced to its digits and line breaks (everything else disappears).
-/// `None` means the action would change nothing and is not performed at all;
-/// everything that is not an insertion (movement, selection, Backspace, …)
-/// passes through untouched.
-fn bulk_digits_only(action: text_editor::Action) -> Option<text_editor::Action> {
-    use text_editor::{Action, Edit};
-
-    match action {
-        Action::Edit(Edit::Insert(character)) => {
-            character
-                .is_ascii_digit()
-                .then_some(Action::Edit(Edit::Insert(character)))
-        }
-        Action::Edit(Edit::Paste(text)) => {
-            let filtered: String = text
-                .chars()
-                .filter(|character| character.is_ascii_digit() || *character == '\n')
-                .collect();
-
-            (!filtered.is_empty())
-                .then(|| Action::Edit(Edit::Paste(std::sync::Arc::new(filtered))))
-        }
-        action => Some(action),
-    }
-}
-
-/// Validates the bulk IMEI box and queues every line for lookup.
-fn start_bulk_lookup(state: &mut State) -> Task<Message> {
-    if !matches!(state.login, LoginStatus::LoggedIn { .. }) {
-        return Task::none();
-    }
-
-    let lines = bulk_lines(&state.lookup.bulk.content);
-    if lines.is_empty() {
-        state.lookup.bulk.status = BulkStatus::Error(state.l10n.tr("bulk-error-empty"));
-        state.lookup.bulk.save_note = None;
-        return Task::none();
-    }
-
-    let total = lines.len();
-    {
-        let bulk = &mut state.lookup.bulk;
-        bulk.queue = lines;
-        bulk.index = 0;
-        bulk.rows.clear();
-        bulk.save_note = None;
-        bulk.status = BulkStatus::Running { current: 0, total };
-    }
-
-    bulk_next(state)
-}
-
-/// Looks up the next queued IMEI, skipping invalid lines, or finishes the
-/// batch (and asks where to save the CSV).
-///
-/// One IMEI is looked up per task so the UI can show real progress; the loop
-/// below only spins over invalid lines, which never reach the server.
-fn bulk_next(state: &mut State) -> Task<Message> {
-    let token = match &state.login {
-        LoginStatus::LoggedIn { token, .. } => token.clone(),
-        _ => return Task::none(),
-    };
-
-    let uuid = state.client_uuid.clone();
-
-    loop {
-        let index = state.lookup.bulk.index;
-        let total = state.lookup.bulk.queue.len();
-
-        if index >= total {
-            state.lookup.bulk.status = BulkStatus::Done;
-            return start_bulk_save(state);
-        }
-
-        let line = state.lookup.bulk.queue[index].clone();
-
-        match firmware::validate_imei(&line) {
-            Ok(imei) => {
-                state.lookup.bulk.status = BulkStatus::Running {
-                    current: index + 1,
-                    total,
-                };
-
-                let token = token.clone();
-                let uuid = uuid.clone();
-
-                return Task::perform(
-                    async move {
-                        let request_imei = imei.clone();
-                        let result = tokio::task::spawn_blocking(move || {
-                            firmware::fetch_firmware(&request_imei, &token, &uuid)
-                        })
-                        .await
-                        .unwrap_or_else(|error| {
-                            Err(firmware::FirmwareError::Other(format!(
-                                "background task failed: {error}"
-                            )))
-                        });
-
-                        (imei, result)
-                    },
-                    |(imei, result)| Message::BulkStepFinished(imei, result),
-                );
-            }
-            Err(_) => {
-                // An invalid line never reaches the server: it is reported as
-                // "invalid imei" and the batch moves on.
-                state
-                    .lookup
-                    .bulk
-                    .rows
-                    .push(BulkRow::skipped(&line, BULK_STATUS_INVALID));
-                state.lookup.bulk.index += 1;
-            }
-        }
-    }
-}
-
-/// Asks for a file name and writes the collected rows there as CSV.
-fn start_bulk_save(state: &mut State) -> Task<Message> {
-    if state.lookup.bulk.rows.is_empty() {
-        return Task::none();
-    }
-
-    let csv = bulk_csv(&state.lookup.bulk.rows);
-    state.lookup.bulk.save_note = None;
-
-    // The save dialog blocks, so it runs on a worker thread (like the flash
-    // script export); the file is written there too.
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || {
-                let Some(path) = rfd::FileDialog::new()
-                    .set_file_name("imei_lookup.csv")
-                    .add_filter("CSV", &["csv"])
-                    .save_file()
-                else {
-                    return Ok(None);
-                };
-
-                std::fs::write(&path, csv)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
-
-                Ok(Some(path))
-            })
-            .await
-            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
-        },
-        Message::BulkSaveFinished,
-    )
-}
-
-/// Renders the bulk-lookup rows as a CSV document (RFC 4180 line endings).
-fn bulk_csv(rows: &[BulkRow]) -> String {
-    let mut csv = String::from(BULK_CSV_HEADER);
-    csv.push_str("\r\n");
-
-    for row in rows {
-        let fields = [
-            row.imei.as_str(),
-            row.status,
-            row.xt_code.as_str(),
-            row.carrier.as_str(),
-            row.build_fingerprint.as_str(),
-            row.download_link.as_str(),
-            row.lolinet_filename.as_str(),
-            row.assumed_directory.as_str(),
-        ];
-
-        for (index, field) in fields.iter().enumerate() {
-            if index > 0 {
-                csv.push(',');
-            }
-            csv.push_str(&csv_field(field));
-        }
-
-        csv.push_str("\r\n");
-    }
-
-    csv
-}
-
-/// Quotes a CSV field when it holds a comma, a quote or a line break.
-fn csv_field(value: &str) -> String {
-    if value
-        .chars()
-        .any(|character| matches!(character, ',' | '"' | '\n' | '\r'))
-    {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_string()
-    }
-}
-
-/// The "N IMEIs looked up: …" line of a finished batch.
-fn bulk_summary(l10n: &l10n::Bundle, rows: &[BulkRow]) -> String {
-    let count = |status: &str| rows.iter().filter(|row| row.status == status).count();
-
-    let total = rows.len();
-    let found = count(BULK_STATUS_OK);
-    let invalid = count(BULK_STATUS_INVALID);
-    // Everything that is neither found nor invalid produced no firmware
-    // (the server had none, or the request failed).
-    let failed = total - found - invalid;
-
-    l10n.tr_with_args(
-        "bulk-summary",
-        &[
-            ("total", total.to_string()),
-            ("found", found.to_string()),
-            ("invalid", invalid.to_string()),
-            ("failed", failed.to_string()),
-        ],
     )
 }
 
@@ -5435,9 +5147,9 @@ fn finish_tablet_unlock(
 
 fn view(state: &State) -> Element<'_, Message> {
     let content = match state.mode {
-        Mode::Mode1 => firmware_lookup_view(state),
-        Mode::Mode2 => smartphone_flash_view(state),
-        Mode::Mode3 => decrypt_view(state),
+        Mode::Mode1 => lookup::firmware_lookup_view(state),
+        Mode::Mode2 => smartphone::smartphone_flash_view(state),
+        Mode::Mode3 => decrypt::view(state),
     };
     let language_options: Vec<Labeled<l10n::Language>> = l10n::Language::ALL
         .iter()
@@ -5468,10 +5180,20 @@ fn view(state: &State) -> Element<'_, Message> {
         None => vec![content],
     };
 
-    // Language selector overlay in the top-right corner. It stays above the
-    // transition's veil, so it does not flicker along with the content.
+    // The language selector sits in the top-right corner; on the Firmware
+    // Lookup page a round "About" button is drawn to its left. They stay above
+    // the transition's veil, so they do not flicker along with the content.
+    let corner: Element<'_, Message> = if state.mode == Mode::Mode1 {
+        row![about::about_button(), language_dropdown]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+    } else {
+        language_dropdown.into()
+    };
+
     content_layers.push(
-        container(language_dropdown)
+        container(corner)
             .padding(8)
             .align_top(Fill)
             .align_right(Fill)
@@ -5530,52 +5252,16 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // About dialog (opened from the Firmware Lookup page) drawn over the whole
+    // window while it is open.
+    if let Some(overlay) = about::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // Device picker modal: shown when more than one fastboot device is
     // connected. Clicks on the dimmed backdrop cancel the selection.
-    if let DevicePicker::Open(devices) = &state.lookup.retcn.device_picker {
-        let device_buttons = iced::widget::Column::with_children(
-            devices.iter().map(|device| {
-                button(text(device.label()))
-                    .width(Fill)
-                    .on_press(Message::FastbootDeviceSelected(device.serial.clone()))
-                    .into()
-            }),
-        )
-        .spacing(8);
-
-        let card = container(
-            column![
-                text(state.l10n.tr("retcn-pick-device-title")).size(18.0),
-                device_buttons,
-                button(text(state.l10n.tr("login-cancel")))
-                    .on_press(Message::FastbootDevicePickerCancelled),
-            ]
-            .spacing(12)
-            .align_x(Alignment::Center),
-        )
-        .padding(16)
-        .width(340)
-        .style(container::rounded_box);
-
-        let backdrop = mouse_area(Space::new(Fill, Fill))
-            .on_press(Message::FastbootDevicePickerCancelled);
-
-        return stack![
-            base,
-            animated_overlay(
-                state,
-                stack![
-                    backdrop,
-                    container(card)
-                        .width(Fill)
-                        .height(Fill)
-                        .center_x(Fill)
-                        .center_y(Fill),
-                ]
-                .into(),
-            ),
-        ]
-        .into();
+    if let Some(overlay) = lookup::device_picker(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
     }
 
     base.into()
@@ -5613,958 +5299,7 @@ fn animated_overlay<'a>(
     iced::widget::Stack::with_children(children).into()
 }
 
-/// The smartphone-firmware-flash UI (Mode 2): a grid of feature tiles, each
-/// carrying an action button. Features are added to the grid incrementally.
-fn smartphone_flash_view(state: &State) -> Element<'_, Message> {
-    let tiles: Vec<Element<'_, Message>> = SmartphoneFeature::ALL
-        .iter()
-        // A feature this system has no use for is left out completely (see
-        // `SmartphoneFeature::available`).
-        .filter(|feature| feature.available())
-        .map(|&feature| smartphone_feature_tile(state, feature))
-        .collect();
-
-    let grid = container(
-        iced::widget::Row::with_children(tiles)
-            .spacing(12)
-            .align_y(Alignment::Start)
-            .wrap(),
-    )
-    .width(Fill)
-    .padding(8);
-
-    container(scrollable(grid).width(Fill).height(Fill))
-        .width(Fill)
-        .height(Fill)
-        .padding(16)
-        .into()
-}
-
-/// A single feature tile in the smartphone-flash grid.
-fn smartphone_feature_tile(state: &State, feature: SmartphoneFeature) -> Element<'_, Message> {
-    let l10n = &state.l10n;
-
-    let actions: Vec<Element<'_, Message>> = feature
-        .actions()
-        .into_iter()
-        .map(|(label_id, message)| -> Element<'_, Message> {
-            let action = button(text(l10n.tr(label_id))).width(Fill);
-
-            match message {
-                Some(message) => action.on_press(message).into(),
-                // Not available yet: iced greys out a button without `on_press`
-                // and ignores clicks on it.
-                None => action.into(),
-            }
-        })
-        .collect();
-
-    container(
-        column![
-            text(l10n.tr(feature.title_id())).size(16.0),
-            iced::widget::Row::with_children(actions).spacing(8),
-        ]
-        .spacing(12)
-        .align_x(Alignment::Start),
-    )
-    .width(320)
-    .padding(16)
-    .style(container::rounded_box)
-    .into()
-}
-
-/// The firmware-decrypt UI (Mode 3): pick a directory, optionally provide a
-/// custom password, then decrypt every `*.x`/`*.t` file found in it.
-fn decrypt_view(state: &State) -> Element<'_, Message> {
-    let l10n = &state.l10n;
-    let decrypt_state = &state.decrypt;
-
-    let busy = matches!(
-        decrypt_state.status,
-        DecryptStatus::PickingDir | DecryptStatus::Working
-    );
-
-    let pick_button = if busy {
-        button(text(l10n.tr("decrypt-select-dir")))
-    } else {
-        button(text(l10n.tr("decrypt-select-dir"))).on_press(Message::DecryptPickDirRequested)
-    };
-
-    let path_text = match &decrypt_state.directory {
-        Some(path) => path.display().to_string(),
-        None => l10n.tr("decrypt-no-dir"),
-    };
-
-    let mut content = column![
-        text(l10n.tr("decrypt-description")).size(14.0),
-        row![
-            pick_button,
-            container(
-                text(path_text)
-                    .size(13.0)
-                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-                    .width(420),
-            )
-            .padding(8)
-            .style(container::rounded_box),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        checkbox(
-            l10n.tr("decrypt-custom-password"),
-            decrypt_state.custom_password,
-        )
-        .text_shaping(Shaping::Advanced)
-        .on_toggle(Message::DecryptCustomPasswordToggled),
-    ]
-    .spacing(8)
-    .align_x(Alignment::Center);
-
-    if decrypt_state.custom_password {
-        content = content.push(
-            row![
-                text(l10n.tr("decrypt-password-label")).size(14.0),
-                text_input("", &decrypt_state.password)
-                    .secure(true)
-                    .on_input(Message::DecryptPasswordChanged)
-                    .on_submit(Message::DecryptRequested)
-                    .width(240),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        );
-    }
-
-    let decrypt_button = if busy || decrypt_state.directory.is_none() {
-        button(text(l10n.tr("decrypt-button")))
-    } else {
-        button(text(l10n.tr("decrypt-button"))).on_press(Message::DecryptRequested)
-    };
-    content = content.push(decrypt_button);
-
-    match &decrypt_state.status {
-        DecryptStatus::Idle | DecryptStatus::PickingDir => {}
-        DecryptStatus::Working => {
-            content = content.push(text(l10n.tr("decrypt-working")).size(14.0));
-        }
-        DecryptStatus::Error(error) => {
-            content = content.push(
-                text(error.clone())
-                    .size(14.0)
-                    .style(iced::widget::text::danger),
-            );
-        }
-        DecryptStatus::Done(summary) => {
-            if summary.total == 0 {
-                content = content.push(text(l10n.tr("decrypt-no-files")).size(14.0));
-            } else {
-                let message = l10n.tr_with_args(
-                    "decrypt-done",
-                    &[
-                        ("ok", summary.succeeded.to_string()),
-                        ("fail", summary.failed.len().to_string()),
-                    ],
-                );
-
-                let style = if summary.failed.is_empty() {
-                    iced::widget::text::success
-                } else {
-                    iced::widget::text::danger
-                };
-                content = content.push(text(message).size(14.0).style(style));
-
-                if !summary.failed.is_empty() {
-                    content = content.push(text(l10n.tr("decrypt-failed-files")).size(13.0));
-
-                    let rows = iced::widget::Column::with_children(
-                        summary.failed.iter().map(|(path, error)| {
-                            text(format!("{}: {}", path.display(), error))
-                                .size(12.0)
-                                .into()
-                        }),
-                    )
-                    .spacing(4)
-                    .align_x(Alignment::Start);
-
-                    content = content.push(scrollable(rows).height(120).width(520));
-                }
-            }
-        }
-    }
-
-    container(content)
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill)
-        .into()
-}
-
-/// The `softwarefix://` handler row of the Manual Login page.
-///
-/// Returns `None` on platforms without registry-based protocol handling, so
-/// the whole section disappears there.
-fn protocol_section(state: &State) -> Option<Element<'_, Message>> {
-    let l10n = &state.l10n;
-
-    let (status, action) = match &state.protocol {
-        protocol::Handler::Unsupported => return None,
-        protocol::Handler::None => (
-            l10n.tr("login-protocol-none"),
-            l10n.tr("login-protocol-switch"),
-        ),
-        protocol::Handler::Ours => (
-            l10n.tr("login-protocol-ours"),
-            l10n.tr("login-protocol-restore"),
-        ),
-        protocol::Handler::Other(_) => (
-            l10n.tr_with_args(
-                "login-protocol-current",
-                &[("program", state.protocol.program().unwrap_or_default())],
-            ),
-            l10n.tr("login-protocol-switch"),
-        ),
-    };
-
-    let mut block = column![
-        text(l10n.tr("login-protocol-title")).size(14.0),
-        text(status)
-            .size(13.0)
-            .width(460)
-            .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-        button(text(action)).on_press(Message::ProtocolToggled),
-    ]
-    .spacing(8)
-    .align_x(Alignment::Center);
-
-    if let Some(error) = &state.protocol_error {
-        let message =
-            l10n.tr_with_args("login-protocol-failed", &[("error", error.clone())]);
-
-        block = block.push(
-            text(message)
-                .size(12.0)
-                .width(460)
-                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-                .style(iced::widget::text::danger),
-        );
-    }
-
-    Some(block.into())
-}
-
-fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
-    let l10n = &state.l10n;
-
-    let inner: Element<'_, Message> = match &state.login {
-        LoginStatus::LoggedOut => {
-            // With the scheme in our hands the left-click login runs in the
-            // system browser and comes back through the protocol callback.
-            let hint = if browser_login_available(state) {
-                l10n.tr("login-button-hint-browser")
-            } else {
-                l10n.tr("login-button-hint")
-            };
-
-            column![
-                text(l10n.tr("login-prompt")).size(24.0),
-                mouse_area(
-                    button(text(l10n.tr("login-button")).size(20.0))
-                        .padding([12, 24])
-                        .on_press(Message::LoginRequested(Click::Left)),
-                )
-                .on_right_press(Message::LoginRequested(Click::Right)),
-                text(hint).size(14.0),
-            ]
-            .spacing(16)
-            .align_x(Alignment::Center)
-            .into()
-        }
-        LoginStatus::Fetching { .. } => {
-            text(l10n.tr("login-fetching")).size(20.0).into()
-        }
-        LoginStatus::WebViewOpen { .. } => column![
-            text(l10n.tr("login-webview-open")).size(20.0),
-            button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
-        ]
-        .spacing(12)
-        .align_x(Alignment::Center)
-        .into(),
-        LoginStatus::WaitingForBrowser { .. } => column![
-            text(l10n.tr("login-browser-waiting"))
-                .size(18.0)
-                .width(460)
-                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-            row![
-                button(text(l10n.tr("login-open-browser"))).on_press(Message::OpenBrowser),
-                button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
-            ]
-            .spacing(8),
-        ]
-        .spacing(12)
-        .align_x(Alignment::Center)
-        .into(),
-        LoginStatus::Manual { url, input, notice, .. } => {
-            let placeholder = l10n.tr("login-manual-placeholder");
-
-            let url_box = container(
-                text(url.clone())
-                    .size(12.0)
-                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-                    .width(460),
-            )
-            .padding(8)
-            .style(container::rounded_box);
-
-            let mut content = column![
-                text(l10n.tr("login-manual-prompt")).size(20.0),
-                text(l10n.tr("login-url-label")).size(14.0),
-                url_box,
-                row![
-                    button(text(l10n.tr("login-copy-url"))).on_press(Message::CopyUrl),
-                    button(text(l10n.tr("login-open-browser"))).on_press(Message::OpenBrowser),
-                ]
-                .spacing(8),
-                text_input(&placeholder, input)
-                    .on_input(Message::ManualInputChanged)
-                    .on_submit(Message::SubmitManual)
-                    .padding(10)
-                    .width(480),
-                row![
-                    button(text(l10n.tr("login-submit"))).on_press(Message::SubmitManual),
-                    button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
-                ]
-                .spacing(8),
-            ]
-            .spacing(12)
-            .align_x(Alignment::Center);
-
-            if let Some(reason) = notice {
-                content = content
-                    .push(
-                        text(l10n.tr("login-webview-fallback"))
-                            .size(14.0)
-                            .style(iced::widget::text::danger),
-                    )
-                    .push(text(reason.clone()).size(12.0));
-            }
-
-            if let Some(section) = protocol_section(state) {
-                content = content.push(section);
-            }
-
-            content.into()
-        }
-        LoginStatus::Error(error) => {
-            let message = l10n.tr_with_args("login-error", &[("error", error.clone())]);
-
-            column![
-                text(message).size(18.0).style(iced::widget::text::danger),
-                button(text(l10n.tr("login-back"))).on_press(Message::CancelLogin),
-            ]
-            .spacing(12)
-            .align_x(Alignment::Center)
-            .into()
-        }
-        LoginStatus::LoggedIn { token, full_name } => {
-            let mut content = column![lookup_view(state)]
-                .spacing(12)
-                .align_x(Alignment::Center);
-
-            if cfg!(debug_assertions) {
-                let debug = container(
-                    column![
-                        text(l10n.tr("debug-info")).size(16.0),
-                        text(format!(
-                            "{}: {}",
-                            l10n.tr("debug-account"),
-                            full_name.as_deref().unwrap_or("—")
-                        )),
-                        text(format!("{}: Bearer {}", l10n.tr("debug-token"), token)),
-                        text(format!("{}: {}", l10n.tr("debug-uuid"), state.client_uuid)),
-                    ]
-                    .spacing(4)
-                    .align_x(Alignment::Start),
-                )
-                .padding(12)
-                .style(container::rounded_box);
-
-                content = content.push(debug);
-            }
-
-            content.into()
-        }
-    };
-
-    container(inner)
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill)
-        .into()
-}
-
 /// The firmware lookup UI shown after a successful login.
-fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
-    let l10n = &state.l10n;
-
-    let options: Vec<Labeled<LookupMode>> = LookupMode::ALL
-        .iter()
-        .map(|&mode| Labeled {
-            value: mode,
-            label: l10n.tr(mode.message_id()),
-        })
-        .collect();
-
-    let selected = Labeled {
-        value: state.lookup.mode,
-        label: l10n.tr(state.lookup.mode.message_id()),
-    };
-
-    let dropdown = pick_list(options, Some(selected), |option| {
-        Message::LookupModeSelected(option.value)
-    })
-    .text_shaping(Shaping::Advanced);
-
-    let mode_content: Element<'_, Message> = match state.lookup.mode {
-        LookupMode::RowSmartphone => {
-            let placeholder = l10n.tr("lookup-imei-placeholder");
-            let fetching = matches!(state.lookup.status, LookupStatus::Fetching);
-
-            let lookup_button = if fetching {
-                button(text(l10n.tr("lookup-button")))
-            } else {
-                button(text(l10n.tr("lookup-button"))).on_press(Message::LookupRequested)
-            };
-
-            let content = column![
-                row![
-                    text(l10n.tr("lookup-imei-label")).size(16.0),
-                    text_input(&placeholder, &state.lookup.imei_input)
-                        .on_input(Message::ImeiInputChanged)
-                        .on_submit(Message::LookupRequested)
-                        .width(220),
-                    lookup_button,
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-            ]
-            .spacing(8)
-            .align_x(Alignment::Center);
-
-            push_lookup_status(state, l10n, content).into()
-        }
-        LookupMode::RetcnSmartphone => {
-            let placeholder = l10n.tr("lookup-imei-placeholder");
-            let fetching = matches!(state.lookup.status, LookupStatus::Fetching);
-
-            let lookup_button = if fetching {
-                button(text(l10n.tr("lookup-button")))
-            } else {
-                button(text(l10n.tr("lookup-button"))).on_press(Message::RetcnLookupRequested)
-            };
-
-            let fastboot_fetching = matches!(
-                state.lookup.retcn.fastboot_status,
-                Some(FastbootStatus::Fetching)
-            );
-            let fill_button = if fastboot_fetching {
-                button(text(l10n.tr("retcn-fill-fastboot-fetching")))
-            } else {
-                button(text(l10n.tr("retcn-fill-fastboot")))
-                    .on_press(Message::FastbootFillRequested)
-            };
-
-            let platform_options: Vec<Labeled<firmware::Platform>> = firmware::Platform::ALL
-                .iter()
-                .map(|&platform| Labeled {
-                    value: platform,
-                    label: l10n.tr(platform.message_id()),
-                })
-                .collect();
-            let selected_platform = Labeled {
-                value: state.lookup.retcn.platform,
-                label: l10n.tr(state.lookup.retcn.platform.message_id()),
-            };
-            let platform_dropdown: iced::widget::PickList<
-                '_,
-                Labeled<firmware::Platform>,
-                Vec<Labeled<firmware::Platform>>,
-                Labeled<firmware::Platform>,
-                Message,
-            > = pick_list(platform_options, Some(selected_platform), |option| {
-                Message::RetcnPlatformSelected(option.value)
-            })
-            .text_shaping(Shaping::Advanced);
-
-            let sim_options: Vec<Labeled<SimCount>> = SimCount::ALL
-                .iter()
-                .map(|&sim_count| Labeled {
-                    value: sim_count,
-                    label: l10n.tr(sim_count.message_id()),
-                })
-                .collect();
-            let selected_sim = Labeled {
-                value: state.lookup.retcn.sim_count,
-                label: l10n.tr(state.lookup.retcn.sim_count.message_id()),
-            };
-            let sim_dropdown: iced::widget::PickList<
-                '_,
-                Labeled<SimCount>,
-                Vec<Labeled<SimCount>>,
-                Labeled<SimCount>,
-                Message,
-            > = pick_list(sim_options, Some(selected_sim), |option| {
-                Message::RetcnSimCountSelected(option.value)
-            })
-            .text_shaping(Shaping::Advanced);
-
-            let platform_extra: Element<'_, Message> = match state.lookup.retcn.platform {
-                firmware::Platform::Qualcomm => row![
-                    text(l10n.tr("retcn-fsg-label")).size(14.0),
-                    text_input("", &state.lookup.retcn.fsg_version)
-                        .on_input(|value| {
-                            Message::RetcnFieldChanged(RetcnField::FsgVersion, value)
-                        })
-                        .width(240),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .into(),
-                firmware::Platform::MediaTek => row![
-                    text(l10n.tr("retcn-sim-label")).size(14.0),
-                    sim_dropdown,
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .into(),
-            };
-
-            let content = column![
-                row![
-                    text(l10n.tr("lookup-imei-label")).size(14.0),
-                    text_input(&placeholder, &state.lookup.imei_input)
-                        .on_input(Message::ImeiInputChanged)
-                        .width(160),
-                    text(l10n.tr("retcn-sn-label")).size(14.0),
-                    text_input("", &state.lookup.retcn.serial_number)
-                        .on_input(|value| {
-                            Message::RetcnFieldChanged(RetcnField::SerialNumber, value)
-                        })
-                        .width(160),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text(l10n.tr("retcn-model-label")).size(14.0),
-                    text_input("", &state.lookup.retcn.model)
-                        .on_input(|value| Message::RetcnFieldChanged(RetcnField::Model, value))
-                        .width(120),
-                    text(l10n.tr("retcn-carrier-label")).size(14.0),
-                    text_input("", &state.lookup.retcn.carrier)
-                        .on_input(|value| Message::RetcnFieldChanged(RetcnField::Carrier, value))
-                        .width(120),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text(l10n.tr("retcn-fingerprint-label")).size(14.0),
-                    text_input("", &state.lookup.retcn.fingerprint)
-                        .on_input(|value| {
-                            Message::RetcnFieldChanged(RetcnField::Fingerprint, value)
-                        })
-                        .width(300),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text(l10n.tr("retcn-platform-label")).size(14.0),
-                    platform_dropdown,
-                    platform_extra,
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![fill_button, lookup_button]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-            ]
-            .spacing(8)
-            .align_x(Alignment::Center);
-
-            let mut content = content;
-
-            match &state.lookup.retcn.fastboot_status {
-                Some(FastbootStatus::Filled(serial)) => {
-                    content = content.push(
-                        text(l10n.tr_with_args(
-                            "retcn-fill-fastboot-filled",
-                            &[("serial", serial.clone())],
-                        ))
-                        .size(13.0)
-                        .style(iced::widget::text::success),
-                    );
-                }
-                Some(FastbootStatus::Error(error)) => {
-                    content = content.push(
-                        text(error.clone()).size(13.0).style(iced::widget::text::danger),
-                    );
-                }
-                _ => {}
-            }
-
-            push_lookup_status(state, l10n, content).into()
-        }
-        LookupMode::Tablet => {
-            let fetching = matches!(state.lookup.status, LookupStatus::Fetching);
-
-            let lookup_button = if fetching {
-                button(text(l10n.tr("lookup-button")))
-            } else {
-                button(text(l10n.tr("lookup-button"))).on_press(Message::TabletLookupRequested)
-            };
-
-            let content = column![
-                row![
-                    text(l10n.tr("tablet-sn-label")).size(16.0),
-                    text_input("", &state.lookup.tablet.serial_number)
-                        .on_input(Message::TabletSnChanged)
-                        .on_submit(Message::TabletLookupRequested)
-                        .width(220),
-                    lookup_button,
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-            ]
-            .spacing(8)
-            .align_x(Alignment::Center);
-
-            push_lookup_status(state, l10n, content).into()
-        }
-        LookupMode::ByModel => {
-            let fetching = matches!(state.lookup.status, LookupStatus::Fetching);
-
-            let lookup_button = if fetching {
-                button(text(l10n.tr("lookup-button")))
-            } else {
-                button(text(l10n.tr("lookup-button"))).on_press(Message::ModelLookupRequested)
-            };
-
-            let category_options: Vec<Labeled<firmware::Category>> = firmware::Category::ALL
-                .iter()
-                .map(|&category| Labeled {
-                    value: category,
-                    label: l10n.tr(category.message_id()),
-                })
-                .collect();
-            let selected_category = Labeled {
-                value: state.lookup.by_model.category,
-                label: l10n.tr(state.lookup.by_model.category.message_id()),
-            };
-            let category_picker: iced::widget::PickList<
-                '_,
-                Labeled<firmware::Category>,
-                Vec<Labeled<firmware::Category>>,
-                Labeled<firmware::Category>,
-                Message,
-            > = pick_list(category_options, Some(selected_category), |option| {
-                Message::ModelCategorySelected(option.value)
-            })
-            .text_shaping(Shaping::Advanced);
-
-            let mut content = column![
-                row![
-                    text(l10n.tr("fw-model-name")).size(16.0),
-                    text_input("", &state.lookup.by_model.model)
-                        .on_input(Message::ModelInputChanged)
-                        .on_submit(Message::ModelLookupRequested)
-                        .width(220),
-                    lookup_button,
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text(l10n.tr("by-model-category-label")).size(14.0),
-                    category_picker,
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-            ]
-            .spacing(8)
-            .align_x(Alignment::Center);
-
-            // Country code only matters for tablets/smart devices
-            // (phones omit it, matching `_seed_params` in motofw.py).
-            if state.lookup.by_model.category != firmware::Category::Phone {
-                content = content.push(
-                    row![
-                        text(l10n.tr("by-model-country-label")).size(14.0),
-                        text_input("", &state.lookup.by_model.country_code)
-                            .on_input(Message::ModelCountryChanged)
-                            .width(100),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                );
-            }
-
-            // Discriminator fields the server needs for this model (shown
-            // after the first request resolves `getRomMatchParams`).
-            let params_ready =
-                state.lookup.by_model.loaded_model == state.lookup.by_model.model.trim();
-            if params_ready {
-                for (index, key) in state.lookup.by_model.required.iter().enumerate() {
-                    let label_id = match key.as_str() {
-                        "fingerPrint" => Some("retcn-fingerprint-label"),
-                        "roCarrier" => Some("retcn-carrier-label"),
-                        "fsgVersion.qcom" => Some("retcn-fsg-label"),
-                        "simCount" => Some("retcn-sim-label"),
-                        _ => None,
-                    };
-                    let label = match label_id {
-                        Some(id) => l10n.tr(id),
-                        None => key.clone(),
-                    };
-                    let value = state
-                        .lookup
-                        .by_model
-                        .values
-                        .get(index)
-                        .cloned()
-                        .unwrap_or_default();
-
-                    content = content.push(
-                        row![
-                            text(label).size(14.0),
-                            text_input("", &value)
-                                .on_input(move |input| Message::ModelParamChanged(index, input))
-                                .width(220),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    );
-                }
-            }
-
-            push_lookup_status(state, l10n, content).into()
-        }
-        LookupMode::BulkImei => {
-            let fetching = matches!(state.lookup.bulk.status, BulkStatus::Running { .. });
-
-            let lookup_button = if fetching {
-                button(text(l10n.tr("lookup-button")))
-            } else {
-                button(text(l10n.tr("lookup-button"))).on_press(Message::BulkLookupRequested)
-            };
-
-            let save_button = if state.lookup.bulk.rows.is_empty() {
-                button(text(l10n.tr("bulk-save")))
-            } else {
-                button(text(l10n.tr("bulk-save"))).on_press(Message::BulkSaveRequested)
-            };
-
-            let editor = text_editor(&state.lookup.bulk.content)
-                .placeholder(l10n.tr("bulk-imei-placeholder"))
-                .on_action(Message::BulkEdit)
-                .height(Length::Fixed(140.0))
-                .width(420.0);
-
-            let mut content = column![
-                text(l10n.tr("bulk-imei-label")).size(14.0),
-                editor,
-                row![lookup_button, save_button]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-            ]
-            .spacing(8)
-            .align_x(Alignment::Center);
-
-            match &state.lookup.bulk.status {
-                BulkStatus::Running { current, total } => {
-                    content = content.push(
-                        text(l10n.tr_with_args(
-                            "bulk-progress",
-                            &[
-                                ("current", current.to_string()),
-                                ("total", total.to_string()),
-                            ],
-                        ))
-                        .size(14.0),
-                    );
-                }
-                BulkStatus::Error(error) => {
-                    content = content.push(
-                        text(error.clone()).size(14.0).style(iced::widget::text::danger),
-                    );
-                }
-                BulkStatus::Done => {
-                    content = content
-                        .push(text(bulk_summary(l10n, &state.lookup.bulk.rows)).size(14.0));
-                }
-                BulkStatus::Idle => {}
-            }
-
-            if let Some(note) = &state.lookup.bulk.save_note {
-                content = content.push(match note {
-                    Ok(path) => text(l10n.tr_with_args(
-                        "bulk-saved",
-                        &[("path", path.clone())],
-                    ))
-                    .size(13.0)
-                    .style(iced::widget::text::success),
-                    Err(error) => text(l10n.tr_with_args(
-                        "bulk-save-failed",
-                        &[("error", error.clone())],
-                    ))
-                    .size(13.0)
-                    .style(iced::widget::text::danger),
-                });
-            }
-
-            content.into()
-        }
-    };
-
-    column![dropdown, mode_content]
-        .spacing(12)
-        .align_x(Alignment::Center)
-        .into()
-}
-
-/// Appends the lookup status (progress, error, or result) to a column.
-fn push_lookup_status<'a>(
-    state: &'a State,
-    l10n: &'a l10n::Bundle,
-    mut content: iced::widget::Column<'a, Message>,
-) -> iced::widget::Column<'a, Message> {
-    match &state.lookup.status {
-        LookupStatus::Idle => {}
-        LookupStatus::Fetching => {
-            content = content.push(text(l10n.tr("lookup-fetching")).size(14.0));
-        }
-        LookupStatus::Error(error) => {
-            content = content.push(text(error.clone()).size(14.0).style(iced::widget::text::danger));
-        }
-        LookupStatus::Done(result) => {
-            let view = match result {
-                LookupResult::Standard(info) => firmware_info_view(l10n, info),
-                LookupResult::CnTablet(info) => cn_tablet_info_view(l10n, info),
-            };
-            content = content.push(view);
-        }
-    }
-
-    content
-}
-
-/// Displays a CN tablet lookup result, including the extraction password.
-fn cn_tablet_info_view<'a>(
-    l10n: &'a l10n::Bundle,
-    info: &firmware::CnTabletInfo,
-) -> Element<'a, Message> {
-    let fields: [(&str, &str); 9] = [
-        ("cn-product-name", &info.product_name),
-        ("cn-product-model", &info.product_model),
-        ("cn-market-name", &info.market_name),
-        ("cn-mtm-compat", &info.mtm_compat),
-        ("cn-latest-version", &info.latest_version),
-        ("cn-id", &info.id),
-        ("fw-publish-date", &info.publish_date),
-        ("fw-file-name", &info.file_name),
-        ("fw-file-size", &info.file_size),
-    ];
-
-    let copy_uri_button = if info.download_url.is_empty() {
-        button(text(l10n.tr("fw-copy-uri")))
-    } else {
-        button(text(l10n.tr("fw-copy-uri")))
-            .on_press(Message::CopyDownloadUri(info.download_url.clone()))
-    };
-
-    let copy_password_button = button(text(l10n.tr("tablet-copy-password")))
-        .on_press(Message::CopyCnPassword(info.unzip_password.clone()));
-
-    let buttons = row![copy_uri_button, copy_password_button].spacing(8);
-
-    container(
-        column!(
-            column(fields.iter().map(|(id, value)| {
-                let label = l10n.tr(id);
-                let value = if value.is_empty() { "—" } else { value };
-
-                text(format!("{label}: {value}")).size(13.0).into()
-            }))
-            .spacing(4)
-            .align_x(Alignment::Start),
-            buttons,
-        )
-        .spacing(8)
-        .align_x(Alignment::Start),
-    )
-    .padding(12)
-    .width(520)
-    .style(container::rounded_box)
-    .into()
-}
-
-/// Displays the fields of a firmware lookup result.
-fn firmware_info_view<'a>(
-    l10n: &'a l10n::Bundle,
-    info: &firmware::FirmwareInfo,
-) -> Element<'a, Message> {
-    let fields: [(&str, &str); 11] = [
-        ("fw-market-name", &info.market_name),
-        ("fw-model-name", &info.model_name),
-        ("fw-sale-model", &info.sale_model),
-        ("fw-carrier", &info.carrier),
-        ("fw-publish-date", &info.publish_date),
-        ("fw-file-name", &info.file_name),
-        ("fw-file-size", &info.file_size),
-        ("fw-rom-id", &info.rom_id),
-        ("fw-rom-match-id", &info.rom_match_id),
-        ("fw-fingerprint", &info.fingerprint),
-        ("fw-comments", &info.comments),
-    ];
-
-    let copy_uri_button = if info.rom_uri.is_empty() {
-        button(text(l10n.tr("fw-copy-uri")))
-    } else {
-        button(text(l10n.tr("fw-copy-uri")))
-            .on_press(Message::CopyDownloadUri(info.rom_uri.clone()))
-    };
-
-    let copy_tool_button = if info.tool_uri.is_empty() {
-        button(text(l10n.tr("fw-copy-tool")))
-    } else {
-        button(text(l10n.tr("fw-copy-tool")))
-            .on_press(Message::CopyToolUri(info.tool_uri.clone()))
-    };
-
-    let copy_raw_button = button(text(l10n.tr("fw-copy-raw")))
-        .on_press(Message::CopyRawJson(info.raw_json.clone()));
-
-    let buttons = row![copy_uri_button, copy_tool_button, copy_raw_button].spacing(8);
-
-    container(
-        column!(
-            column(fields.iter().map(|(id, value)| {
-                let label = l10n.tr(id);
-                let value = if value.is_empty() { "—" } else { value };
-
-                text(format!("{label}: {value}")).size(13.0).into()
-            }))
-            .spacing(4)
-            .align_x(Alignment::Start),
-            buttons,
-        )
-        .spacing(8)
-        .align_x(Alignment::Start),
-    )
-    .padding(12)
-    .width(520)
-    .style(container::rounded_box)
-    .into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6608,89 +5343,4 @@ mod tests {
         assert_eq!(detect_category("XYZ123"), None);
     }
 
-    #[test]
-    fn bulk_lines_skips_blank_lines() {
-        let content = text_editor::Content::with_text("  350000000000001  \n\n350000000000002\n");
-
-        assert_eq!(
-            bulk_lines(&content),
-            vec!["350000000000001".to_string(), "350000000000002".to_string()]
-        );
-    }
-
-    /// The bulk IMEI box only accepts digits and line breaks: a typed
-    /// non-digit is dropped, a paste is reduced to what is usable and a paste
-    /// with nothing usable is not performed at all.
-    #[test]
-    fn bulk_editor_keeps_only_digits_and_line_breaks() {
-        use iced::widget::text_editor::{Action, Edit};
-        use std::sync::Arc;
-
-        assert!(bulk_digits_only(Action::Edit(Edit::Insert('5'))).is_some());
-        assert!(bulk_digits_only(Action::Edit(Edit::Insert('a'))).is_none());
-        assert!(bulk_digits_only(Action::Edit(Edit::Insert(' '))).is_none());
-
-        assert!(matches!(
-            bulk_digits_only(Action::Edit(Edit::Enter)),
-            Some(Action::Edit(Edit::Enter))
-        ));
-        assert!(bulk_digits_only(Action::Move(text_editor::Motion::Right)).is_some());
-
-        match bulk_digits_only(Action::Edit(Edit::Paste(Arc::new("12a-3\n45 x".to_string())))) {
-            Some(Action::Edit(Edit::Paste(text))) => assert_eq!(text.as_str(), "123\n45"),
-            other => panic!("expected a filtered paste, got {other:?}"),
-        }
-
-        assert!(
-            bulk_digits_only(Action::Edit(Edit::Paste(Arc::new("abc".to_string())))).is_none()
-        );
-    }
-
-    #[test]
-    fn bulk_csv_writes_the_header_and_rows() {
-        let rows = vec![
-            BulkRow {
-                imei: "350000000000001".to_string(),
-                status: BULK_STATUS_OK,
-                xt_code: "XT2507-4".to_string(),
-                carrier: "retin".to_string(),
-                build_fingerprint: "motorola/cybert/cybert:17/U1TQS34.28-11".to_string(),
-                download_link: "https://example.com/a.zip?x=1".to_string(),
-                lolinet_filename: "XT2507-4_CYBERT_RETIN_17_A.zip".to_string(),
-                assumed_directory: "2025/cybert/official/RETIN".to_string(),
-            },
-            BulkRow::skipped("not-a-number", BULK_STATUS_INVALID),
-        ];
-
-        assert_eq!(
-            bulk_csv(&rows),
-            "imei,status,xtCode,carrier,build_fingerprint,download_link,lolinet_filename,assumed_directory\r\n\
-             350000000000001,ok,XT2507-4,retin,motorola/cybert/cybert:17/U1TQS34.28-11,https://example.com/a.zip?x=1,XT2507-4_CYBERT_RETIN_17_A.zip,2025/cybert/official/RETIN\r\n\
-             not-a-number,invalid imei,,,,,,\r\n"
-        );
-    }
-
-    #[test]
-    fn csv_fields_are_quoted_when_needed() {
-        assert_eq!(csv_field("plain"), "plain");
-        assert_eq!(csv_field("a,b"), "\"a,b\"");
-        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
-        assert_eq!(csv_field("line\nbreak"), "\"line\nbreak\"");
-    }
-
-    #[test]
-    fn bulk_summary_counts_each_status() {
-        let bundle = l10n::bundle_for(l10n::Language::EnUs);
-        let rows = [
-            BulkRow::skipped("a", BULK_STATUS_OK),
-            BulkRow::skipped("b", BULK_STATUS_MISSING),
-            BulkRow::skipped("c", BULK_STATUS_INVALID),
-            BulkRow::skipped("d", BULK_STATUS_FAILED),
-        ];
-
-        assert_eq!(
-            bulk_summary(&bundle, &rows),
-            "4 IMEIs looked up: 1 found, 1 invalid, 2 failed"
-        );
-    }
 }

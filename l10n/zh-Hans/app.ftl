@@ -1,6 +1,22 @@
 # Localization strings for LMN Flash (zh-Hans).
 app-title = LMN Flash
 
+# "About" dialog (the round "i" button on the Firmware Lookup page).
+about-title = 关于
+about-version = 版本
+about-intro = LMNFlash wouldn't be a reality without communities' contribution.
+about-thanks-heading = Specially thanks to following developers:
+about-thanks-list =
+    AlphaEva, for Tiny Fastboot Script and Firmware Lookup feature
+    Ethan, for providing macOS build Notarization
+    Littlenine Ennea, for exploit discoveries
+    MlgmXyysd, for Lenovo Tablet Bootloader Unlock File generator on
+about-android-heading = You can also get Android app of LMN Flash from here:
+about-link-lenovobl = https://lenovobl.neko.ink/
+about-link-android = https://github.com/HikariCalyx/lmnflash_android/releases/latest
+about-source-code = The source code of LMNFlash PC can be found here:
+about-link-source = https://github.com/HikariCalyx/lmnflash
+
 mode-1 = 固件查询
 mode-2 = 智能设备刷写
 mode-3 = 固件解密

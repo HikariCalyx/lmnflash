@@ -18,9 +18,15 @@
 use aes::Aes256;
 use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 use cbc::Decryptor;
+use iced::widget::text::Shaping;
+use iced::widget::{button, checkbox, column, container, row, scrollable, text_input};
+use iced::{Alignment, Element, Fill};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::text;
+use crate::{DecryptStatus, Message, State};
 
 /// Password used when the user does not provide a custom one.
 pub const DEFAULT_PASSWORD: &str = "OSD";
@@ -242,6 +248,133 @@ pub fn decrypt_directory(directory: &Path, password: &str) -> Result<DecryptSumm
         succeeded,
         failed,
     })
+}
+
+/// The firmware-decrypt UI (Mode 3): pick a directory, optionally provide a
+/// custom password, then decrypt every `*.x`/`*.t` file found in it.
+pub(crate) fn view(state: &State) -> Element<'_, Message> {
+    let l10n = &state.l10n;
+    let decrypt_state = &state.decrypt;
+
+    let busy = matches!(
+        decrypt_state.status,
+        DecryptStatus::PickingDir | DecryptStatus::Working
+    );
+
+    let pick_button = if busy {
+        button(text(l10n.tr("decrypt-select-dir")))
+    } else {
+        button(text(l10n.tr("decrypt-select-dir"))).on_press(Message::DecryptPickDirRequested)
+    };
+
+    let path_text = match &decrypt_state.directory {
+        Some(path) => path.display().to_string(),
+        None => l10n.tr("decrypt-no-dir"),
+    };
+
+    let mut content = column![
+        text(l10n.tr("decrypt-description")).size(14.0),
+        row![
+            pick_button,
+            container(
+                text(path_text)
+                    .size(13.0)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                    .width(420),
+            )
+            .padding(8)
+            .style(container::rounded_box),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        checkbox(
+            l10n.tr("decrypt-custom-password"),
+            decrypt_state.custom_password,
+        )
+        .text_shaping(Shaping::Advanced)
+        .on_toggle(Message::DecryptCustomPasswordToggled),
+    ]
+    .spacing(8)
+    .align_x(Alignment::Center);
+
+    if decrypt_state.custom_password {
+        content = content.push(
+            row![
+                text(l10n.tr("decrypt-password-label")).size(14.0),
+                text_input("", &decrypt_state.password)
+                    .secure(true)
+                    .on_input(Message::DecryptPasswordChanged)
+                    .on_submit(Message::DecryptRequested)
+                    .width(240),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+    }
+
+    let decrypt_button = if busy || decrypt_state.directory.is_none() {
+        button(text(l10n.tr("decrypt-button")))
+    } else {
+        button(text(l10n.tr("decrypt-button"))).on_press(Message::DecryptRequested)
+    };
+    content = content.push(decrypt_button);
+
+    match &decrypt_state.status {
+        DecryptStatus::Idle | DecryptStatus::PickingDir => {}
+        DecryptStatus::Working => {
+            content = content.push(text(l10n.tr("decrypt-working")).size(14.0));
+        }
+        DecryptStatus::Error(error) => {
+            content = content.push(
+                text(error.clone())
+                    .size(14.0)
+                    .style(iced::widget::text::danger),
+            );
+        }
+        DecryptStatus::Done(summary) => {
+            if summary.total == 0 {
+                content = content.push(text(l10n.tr("decrypt-no-files")).size(14.0));
+            } else {
+                let message = l10n.tr_with_args(
+                    "decrypt-done",
+                    &[
+                        ("ok", summary.succeeded.to_string()),
+                        ("fail", summary.failed.len().to_string()),
+                    ],
+                );
+
+                let style = if summary.failed.is_empty() {
+                    iced::widget::text::success
+                } else {
+                    iced::widget::text::danger
+                };
+                content = content.push(text(message).size(14.0).style(style));
+
+                if !summary.failed.is_empty() {
+                    content = content.push(text(l10n.tr("decrypt-failed-files")).size(13.0));
+
+                    let rows = iced::widget::Column::with_children(
+                        summary.failed.iter().map(|(path, error)| {
+                            text(format!("{}: {}", path.display(), error))
+                                .size(12.0)
+                                .into()
+                        }),
+                    )
+                    .spacing(4)
+                    .align_x(Alignment::Start);
+
+                    content = content.push(scrollable(rows).height(120).width(520));
+                }
+            }
+        }
+    }
+
+    container(content)
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill)
+        .into()
 }
 
 #[cfg(test)]
