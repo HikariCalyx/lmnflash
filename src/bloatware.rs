@@ -76,16 +76,24 @@ fn card(state: &State) -> Element<'_, Message> {
     .spacing(10)
     .width(Fill);
 
-    // Footer: the modal is left via Cancel, but never while a job runs (the
-    // phone is talking to `adb` then).
+    // Footer: the way back this step offers (if any) and Cancel side by side,
+    // Cancel to the right of it. A running job keeps the dialog open, so
+    // Cancel is greyed out then.
     content = content.push(horizontal_rule(1));
 
     let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
-    content = content.push(if busy {
+    let cancel = if busy {
         cancel
     } else {
         cancel.on_press(Message::BloatwareCancel)
-    });
+    };
+
+    let footer: Element<'_, Message> = match return_element(state) {
+        Some(back) => row![back, cancel].spacing(8).width(Fill).into(),
+        None => cancel.into(),
+    };
+
+    content = content.push(footer);
 
     // The padding sits inside the scrollable, so the card's border is the
     // viewport: the scrollbar rides on the right border instead of floating
@@ -124,13 +132,8 @@ fn body(state: &State) -> Element<'_, Message> {
     }
 
     if let Some(error) = &bloatware.check_error {
-        return column![
-            danger(error),
-            button(text(format!("< {}", l10n.tr("flash-bootloader-return"))))
-                .on_press(Message::BloatwareBackToDevices),
-        ]
-        .spacing(10)
-        .into();
+        // The way back to the device list sits in the footer.
+        return danger(error);
     }
 
     device_section(state)
@@ -210,7 +213,6 @@ fn checklist(state: &State) -> Element<'_, Message> {
 
     if found.is_empty() {
         content = content.push(notice(l10n.tr("bloatware-none-found")));
-        content = content.push(back_to_devices(state));
         return content.into();
     }
 
@@ -291,8 +293,6 @@ fn checklist(state: &State) -> Element<'_, Message> {
         content = content.push(notice(l10n.tr("bloatware-remove-none")));
     }
 
-    content = content.push(back_to_devices(state));
-
     content.into()
 }
 
@@ -346,21 +346,42 @@ fn results_view<'a>(
             .width(Fill)
             .wrapping(Wrapping::WordOrGlyph),
     );
-    content = content.push(
-        button(text(l10n.tr("flash-bootloader-return"))).on_press(Message::BloatwareDone),
-    );
 
     content.into()
 }
 
-/// "< Return" — back to the device list.
-fn back_to_devices(state: &State) -> Element<'_, Message> {
-    button(text(format!(
-        "< {}",
-        state.l10n.tr("flash-bootloader-return")
-    )))
-    .on_press(Message::BloatwareBackToDevices)
-    .into()
+/// The way back the current step offers, or `None` when it has none.
+///
+/// It is drawn in the footer next to Cancel, so the card does not have to know
+/// which step the body is showing.
+fn return_element(state: &State) -> Option<Element<'_, Message>> {
+    let l10n = &state.l10n;
+    let bloatware = &state.flash.bloatware;
+
+    // Nothing to go back to while the apps are being removed.
+    if bloatware.removing {
+        return None;
+    }
+
+    // The result goes back to the (now shorter) checklist, not to the device
+    // list.
+    if bloatware.results.is_some() {
+        return Some(
+            button(text(l10n.tr("flash-bootloader-return")))
+                .on_press(Message::BloatwareDone)
+                .into(),
+        );
+    }
+
+    if bloatware.found.is_some() || bloatware.check_error.is_some() {
+        return Some(
+            button(text(format!("< {}", l10n.tr("flash-bootloader-return"))))
+                .on_press(Message::BloatwareBackToDevices)
+                .into(),
+        );
+    }
+
+    None
 }
 
 /// A spinner plus its status text.
