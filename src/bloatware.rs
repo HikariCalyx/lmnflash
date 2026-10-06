@@ -77,8 +77,10 @@ fn card(state: &State) -> Element<'_, Message> {
     .width(Fill);
 
     // Footer: the way back this step offers (if any) and Cancel side by side,
-    // Cancel to the right of it. A running job keeps the dialog open, so
-    // Cancel is greyed out then.
+    // Cancel to the right of it. Both take the same share of the row (see
+    // `return_element`), so neither of them stretches into a button far wider
+    // than its label. A running job keeps the dialog open, so Cancel is
+    // greyed out then.
     content = content.push(horizontal_rule(1));
 
     let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
@@ -89,7 +91,13 @@ fn card(state: &State) -> Element<'_, Message> {
     };
 
     let footer: Element<'_, Message> = match return_element(state) {
-        Some(back) => row![back, cancel].spacing(8).width(Fill).into(),
+        Some(back) => {
+            row![back, cancel]
+                .spacing(8)
+                .width(Fill)
+                .align_y(Alignment::Center)
+                .into()
+        }
         None => cancel.into(),
     };
 
@@ -353,7 +361,9 @@ fn results_view<'a>(
 /// The way back the current step offers, or `None` when it has none.
 ///
 /// It is drawn in the footer next to Cancel, so the card does not have to know
-/// which step the body is showing.
+/// which step the body is showing. Both buttons fill their half of the footer
+/// (the layout is a `row!` of two `Fill`s), so a short label like "Return"
+/// does not end up beside a Cancel button several times its width.
 fn return_element(state: &State) -> Option<Element<'_, Message>> {
     let l10n = &state.l10n;
     let bloatware = &state.flash.bloatware;
@@ -368,6 +378,7 @@ fn return_element(state: &State) -> Option<Element<'_, Message>> {
     if bloatware.results.is_some() {
         return Some(
             button(text(l10n.tr("flash-bootloader-return")))
+                .width(Fill)
                 .on_press(Message::BloatwareDone)
                 .into(),
         );
@@ -376,6 +387,7 @@ fn return_element(state: &State) -> Option<Element<'_, Message>> {
     if bloatware.found.is_some() || bloatware.check_error.is_some() {
         return Some(
             button(text(format!("< {}", l10n.tr("flash-bootloader-return"))))
+                .width(Fill)
                 .on_press(Message::BloatwareBackToDevices)
                 .into(),
         );
