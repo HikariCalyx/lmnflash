@@ -192,37 +192,76 @@ pub fn read_device_info(serial: &str) -> Result<DeviceInfo, String> {
     })
 }
 
+/// Variables a bootloader names its chipset in, most telling first.
+const PLATFORM_VARIABLES: &[&str] = &[
+    "cpu",
+    "soc",
+    "chipset",
+    "platform",
+    "ro.board.platform",
+    "ro.hardware",
+    "ro.boot.hardware",
+    "ro.boot.hardware.platform",
+];
+
+/// Parts a Qualcomm chipset is reported under.
+const QUALCOMM_NAMES: &[&str] = &[
+    "qcom",
+    "qualcomm",
+    "snapdragon",
+    "sm_",
+    "msm",
+    "apq",
+    "sdm",
+    "qcm",
+    "qsc",
+    "sc7",
+];
+
+/// Parts a MediaTek chipset is reported under.
+const MEDIATEK_NAMES: &[&str] = &["mediatek", "dimensity", "mtk"];
+
+/// True when a chipset name looks like a Qualcomm part.
+fn is_qualcomm_name(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+
+    QUALCOMM_NAMES.iter().any(|name| value.contains(name))
+}
+
+/// True when a chipset name looks like a MediaTek part (`MT6833`, `MTK6789`,
+/// `Dimensity 9000`, `MediaTek MT6789`).
+fn is_mediatek_name(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+
+    MEDIATEK_NAMES.iter().any(|name| value.contains(name))
+        || (value.starts_with("mt") && value.chars().nth(2).is_some_and(|c| c.is_ascii_digit()))
+}
+
 /// Detects the chipset platform from the device variables.
 fn detect_platform(variables: &HashMap<String, String>) -> Option<Platform> {
     let qualcomm = variables
         .keys()
         .any(|key| key.starts_with("ro.build.version.qcom"))
-        || variables.get("cpu").is_some_and(|cpu| {
-            let cpu = cpu.to_ascii_lowercase();
-
-            ["sm_", "msm", "apq", "sdm", "qcm", "sc7", "qsc", "snapdragon"]
-                .iter()
-                .any(|needle| cpu.starts_with(needle) || cpu.contains(needle))
-        });
+        || chipset_names(variables).any(is_qualcomm_name);
 
     let mediatek = variables
         .keys()
         .any(|key| key.to_ascii_lowercase().contains("mediatek"))
-        || variables.get("cpu").is_some_and(|cpu| {
-            let cpu = cpu.to_ascii_lowercase();
-
-            cpu.contains("mediatek")
-                || cpu.contains("dimensity")
-                || cpu.contains("mtk")
-                || (cpu.starts_with("mt")
-                    && cpu.chars().nth(2).is_some_and(|c| c.is_ascii_digit()))
-        });
+        || chipset_names(variables).any(is_mediatek_name);
 
     match (qualcomm, mediatek) {
         (true, false) => Some(Platform::Qualcomm),
         (false, true) => Some(Platform::MediaTek),
         _ => None,
     }
+}
+
+/// The values of the variables a bootloader may name its chipset in.
+fn chipset_names(variables: &HashMap<String, String>) -> impl Iterator<Item = &str> {
+    PLATFORM_VARIABLES
+        .iter()
+        .filter_map(|name| variables.get(*name))
+        .map(String::as_str)
 }
 
 /// Parses `getvar all` output lines like `(bootloader) key: value`.
@@ -976,6 +1015,80 @@ pub(crate) fn getvar_value(
     Ok(parse_getvar_value(name, &lines))
 }
 
+/// Whether a `getvar all` dump lists MediaTek's `lk` (Little Kernel)
+/// bootloader partition.
+///
+/// Every MediaTek device has it (as `lk`, or `lk_a`/`lk_b` with A/B slots)
+/// and no other platform uses that name, so it identifies a chipset the
+/// variable checks could not.
+fn has_mtk_bootloader_partition(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        let line = line.strip_prefix("(bootloader)").unwrap_or(line).trim();
+
+        let Some((key, value)) = line.split_once(':') else {
+            return false;
+        };
+
+        if !matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "partition-type" | "partition-size"
+        ) {
+            return false;
+        }
+
+        // `partition-type:lk_a: raw` / `partition-size:lk: 0x40000`
+        let name = value
+            .trim()
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let name = name
+            .strip_suffix("_a")
+            .or_else(|| name.strip_suffix("_b"))
+            .unwrap_or(name.as_str());
+
+        name == "lk"
+    })
+}
+
+/// The chipset a connected device reports, inferred from its variables.
+///
+/// The guided tablet unlock uses this to tell Qualcomm and MediaTek tablets
+/// apart, because their on-device unlock confirmations differ.
+///
+/// `getvar all` is tried first: the chipset variables it carries are the most
+/// telling, and a MediaTek `lk` partition names the chipset when they do not.
+/// A bootloader that does not implement `getvar all` at all is asked for the
+/// chipset variables themselves instead, stopping at the first that names a
+/// chipset.
+pub(crate) fn platform_from_device(device: &fastboot::FastbootDevice<'_>) -> Option<Platform> {
+    if let Ok(lines) = device.getvar_all() {
+        // The dump holds every variable the bootloader knows, so the single
+        // variables below would only repeat what it already reported.
+        if let Some(platform) = detect_platform(&parse_getvar_all(&lines)) {
+            return Some(platform);
+        }
+
+        return has_mtk_bootloader_partition(&lines).then_some(Platform::MediaTek);
+    }
+
+    for name in PLATFORM_VARIABLES {
+        let Ok(value) = getvar_value(device, name) else {
+            continue;
+        };
+
+        let variables = HashMap::from([((*name).to_string(), value)]);
+
+        if let Some(platform) = detect_platform(&variables) {
+            return Some(platform);
+        }
+    }
+
+    None
+}
+
 /// Extracts a variable's value from the lines of a `getvar:<name>` reply,
 /// dropping an optional `(bootloader)` prefix and the echoed `<name>:`
 /// label (e.g. `(bootloader) securestate: flashing_unlocked`).
@@ -1342,6 +1455,63 @@ mod tests {
         let variables = parse_getvar_all(&["(bootloader) cpu: UNKNOWN 1.0".to_string()]);
 
         assert_eq!(detect_platform(&variables), None);
+    }
+
+    #[test]
+    fn detects_the_platform_from_any_chipset_variable() {
+        // Bootloaders name the chipset in different variables; every one of
+        // them is a hint (a tablet that reports no `cpu` still answers with
+        // its hardware).
+        for line in [
+            "(bootloader) ro.hardware: mt6789",
+            "(bootloader) ro.board.platform: mt6833",
+            "(bootloader) chipset: MediaTek MT6833",
+            "(bootloader) soc: MTK6789",
+        ] {
+            let variables = parse_getvar_all(&[line.to_string()]);
+            assert_eq!(
+                detect_platform(&variables),
+                Some(Platform::MediaTek),
+                "{line}"
+            );
+        }
+
+        for line in [
+            "(bootloader) ro.hardware: qcom",
+            "(bootloader) ro.boot.hardware: Qualcomm Snapdragon 8 Gen 2",
+            "(bootloader) platform: msm8996",
+        ] {
+            let variables = parse_getvar_all(&[line.to_string()]);
+            assert_eq!(
+                detect_platform(&variables),
+                Some(Platform::Qualcomm),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_lk_partition_identifies_a_mediatek_device() {
+        // MediaTek's Little Kernel partition is listed in `getvar all` even on
+        // a bootloader that names no chipset variable at all.
+        for line in [
+            "(bootloader) partition-type:lk: raw",
+            "(bootloader) partition-type:lk_a: raw",
+            "(bootloader) partition-size:lk_b: 0x40000",
+            "(bootloader) partition-type:LK: raw",
+        ] {
+            assert!(has_mtk_bootloader_partition(&[line.to_string()]), "{line}");
+        }
+
+        for line in [
+            "(bootloader) partition-type:boot_a: raw",
+            "(bootloader) partition-size:super: 0x40000000",
+            "(bootloader) partition-type:lkbackup: raw",
+            "(bootloader) partition-type:lk2: raw",
+            "(bootloader) cpu: SM_PALAWAN 1.0",
+        ] {
+            assert!(!has_mtk_bootloader_partition(&[line.to_string()]), "{line}");
+        }
     }
 
     #[test]

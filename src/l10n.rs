@@ -525,6 +525,13 @@ mod tests {
             "flash-bootloader-tablet-unlock-desc",
             "flash-bootloader-tablet-not-generated",
             "flash-bootloader-tablet-confirm-unlock",
+            "flash-bootloader-tablet-guided-connect",
+            "flash-bootloader-tablet-guided-working",
+            "flash-bootloader-tablet-guided-manual",
+            "flash-bootloader-tablet-confirm-mediatek",
+            "flash-bootloader-tablet-confirm-qualcomm",
+            "flash-bootloader-tablet-cancel-restart",
+            "flash-bootloader-tablet-cancelling",
         ];
 
         for language in Language::ALL {
@@ -543,6 +550,13 @@ mod tests {
                 "{language:?}: {failure}"
             );
             assert!(!failure.contains('\u{2068}'), "{language:?}: {failure}");
+
+            let guided = bundle.tr_with_args(
+                "flash-bootloader-tablet-guided-failed",
+                &[("error", "device offline".to_owned())],
+            );
+            assert!(guided.contains("device offline"), "{language:?}: {guided}");
+            assert!(!guided.contains('\u{2068}'), "{language:?}: {guided}");
         }
     }
 

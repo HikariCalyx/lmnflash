@@ -190,7 +190,15 @@ impl<'a> FastbootDevice<'a> {
     /// the FAIL payload plus those INFO lines, so callers can tell the
     /// failure reason apart.
     pub fn oem_info_with_fail_details(&self, command: &str) -> Result<Vec<String>, String> {
-        self.write(format!("oem {}", command).as_bytes())?;
+        self.command_info_with_fail_details(&format!("oem {}", command))
+    }
+
+    /// Runs a raw fastboot command (e.g. `flashing unlock`,
+    /// `flashing get_unlock_ability`) and returns the INFO/OKAY lines,
+    /// preserving the INFO text sent *before* a FAILED packet (see
+    /// [`Self::oem_info_with_fail_details`]).
+    pub fn command_info_with_fail_details(&self, command: &str) -> Result<Vec<String>, String> {
+        self.write(command.as_bytes())?;
 
         let mut lines = Vec::new();
         loop {

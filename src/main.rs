@@ -23,6 +23,7 @@ mod flashfile;
 mod guided;
 mod instance;
 mod l10n;
+mod lenovoubl;
 mod login;
 mod lookup;
 mod platform_tools;
@@ -41,6 +42,8 @@ use iced::widget::text::Shaping;
 use iced::{Alignment, Element, Fill, Font, Size, Task};
 
 use smartphone::SmartphoneFeature;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A `text` label rendered with advanced text shaping.
 ///
@@ -766,11 +769,12 @@ struct BootloaderState {
 enum TabletUnlockDialog {
     #[default]
     Closed,
-    /// Guided-vs-Manual chooser (the guided wizard is not implemented for
-    /// tablets, so its button is disabled).
+    /// Guided-vs-Manual chooser.
     Choosing,
     /// The manual (ZUI) unlock flow.
     Manual,
+    /// The guided (automatic) unlock flow.
+    Guided,
 }
 
 /// Fastboot devices offered by the tablet flow when several are connected.
@@ -778,6 +782,42 @@ enum TabletUnlockDialog {
 struct TabletPicker {
     /// USB serials, in discovery order.
     devices: Vec<String>,
+}
+
+/// The card the guided tablet unlock shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TabletGuidedStep {
+    /// Pick the connected tablet.
+    #[default]
+    Devices,
+    /// The unlock attempts are running (and then their result).
+    Working,
+}
+
+/// State of the guided (automatic) tablet unlock.
+#[derive(Default)]
+struct TabletGuidedState {
+    /// Monotonic run counter, so a stopped job's events and report are ignored.
+    job: u64,
+    step: TabletGuidedStep,
+    /// `true` while the connected devices are listed.
+    listing: bool,
+    devices: Vec<tablet_unlock::TabletDevice>,
+    list_error: Option<String>,
+    /// `true` while the unlock attempts run.
+    unlocking: bool,
+    /// The chipset the running job reported, so the card can show how to accept
+    /// the tablet's on-device confirmation.
+    platform: Option<crate::firmware::Platform>,
+    /// `true` once an unlock command is waiting for the user to accept the
+    /// confirmation the tablet shows.
+    confirming: bool,
+    /// `true` while "Cancel & Restart" was pressed and the job is stopping.
+    cancelling: bool,
+    /// Flags the running job to stop at its next checkpoint.
+    cancel: Option<Arc<AtomicBool>>,
+    /// The outcome, once the attempts are over.
+    result: Option<tablet_unlock::GuidedOutcome>,
 }
 
 /// State of the tablet "Bootloader Unlock" feature (Mode 2).
@@ -792,6 +832,9 @@ struct TabletUnlockState {
     /// `Bootloader_SN_Part1` / `_Part2`, as read from the bootloader.
     bootloader_sn_part1: String,
     bootloader_sn_part2: String,
+    /// The chipset the read reported, which decides how the tablet's on-device
+    /// unlock confirmation has to be accepted.
+    platform: Option<crate::firmware::Platform>,
     /// The two parts concatenated, i.e. what the UI shows; empty when the
     /// bootloader does not report it.
     bootloader_sn: String,
@@ -803,8 +846,14 @@ struct TabletUnlockState {
     /// Orange notice shown after a read (e.g. which ZUI section to use).
     read_notice: Option<String>,
     unlocking: bool,
+    /// `true` while "Cancel & Restart" was pressed and the unlock is stopping.
+    cancelling: bool,
+    /// Flags the running unlock to stop at its next checkpoint.
+    cancel: Option<Arc<AtomicBool>>,
     unlock_error: Option<String>,
     unlock_info: Option<String>,
+    /// Guided (automatic) flow state.
+    guided: TabletGuidedState,
 }
 
 impl TabletUnlockState {
@@ -814,6 +863,7 @@ impl TabletUnlockState {
             serial: self.serial.clone(),
             bootloader_sn_part1: self.bootloader_sn_part1.clone(),
             bootloader_sn_part2: self.bootloader_sn_part2.clone(),
+            platform: self.platform,
         }
     }
 }
@@ -1356,8 +1406,24 @@ enum Message {
     TabletUnlockInfoRead(String, Result<tablet_unlock::TabletUnlockInfo, String>),
     /// Tablet Bootloader Unlock: the user asked to unlock.
     TabletUnlockRequested,
+    /// Tablet Bootloader Unlock: stop the unlock job and start over.
+    TabletUnlockCancelRestart,
     /// Tablet Bootloader Unlock: the unlock job finished.
     TabletUnlockFinished(tablet_unlock::UnlockOutcome),
+    /// Tablet Bootloader Unlock: the guided (automatic) flow was chosen.
+    TabletGuidedSelected,
+    /// Tablet Bootloader Unlock (guided): re-scan for connected devices.
+    TabletGuidedRefresh,
+    /// Tablet Bootloader Unlock (guided): the connected devices were listed.
+    TabletGuidedDevicesFetched(Result<Vec<tablet_unlock::TabletDevice>, String>),
+    /// Tablet Bootloader Unlock (guided): the device to unlock was picked.
+    TabletGuidedDeviceSelected(String),
+    /// Tablet Bootloader Unlock (guided): the running job reported progress.
+    TabletGuidedEvent(u64, tablet_unlock::GuidedEvent),
+    /// Tablet Bootloader Unlock (guided): the automatic unlock finished.
+    TabletGuidedFinished(u64, tablet_unlock::GuidedReport),
+    /// Tablet Bootloader Unlock (guided): stop the job and start over.
+    TabletGuidedCancelRestart,
     GuidedLogin,
     GuidedLoginFinished(Result<webview::PortalLogin, String>),
     GuidedLogoutFinished(Result<(), String>),
@@ -1563,6 +1629,8 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || reset.resetting
         || tablet.reading
         || tablet.unlocking
+        || tablet.guided.listing
+        || tablet.guided.unlocking
         || firmware.listing
         || firmware.loading
         || firmware.running
@@ -1724,11 +1792,13 @@ const OVERLAY_GUIDED: u8 = 0x30;
 const OVERLAY_BOOTLOADER_PICKER: u8 = 0x40;
 const OVERLAY_GUIDED_CONFIRM: u8 = 0x50;
 const OVERLAY_FACTORY_RESET: u8 = 0x60;
-/// The tablet unlock chooser and the manual (ZUI) flow, then its device
-/// picker stacked on top.
+/// The tablet unlock chooser, the manual (ZUI) flow, its device picker and the
+/// guided (automatic) flow.
 const OVERLAY_TABLET_CHOOSER: u8 = 0x70;
 const OVERLAY_TABLET_MANUAL: u8 = 0x71;
 const OVERLAY_TABLET_PICKER: u8 = 0x72;
+const OVERLAY_TABLET_GUIDED_DEVICES: u8 = 0x73;
+const OVERLAY_TABLET_GUIDED_WORKING: u8 = 0x74;
 const OVERLAY_FIRMWARE_FLASH: u8 = 0x80;
 /// The About dialog opened from the Firmware Lookup page.
 const OVERLAY_ABOUT: u8 = 0x90;
@@ -1776,6 +1846,10 @@ fn overlay_key(state: &State) -> u8 {
             TabletUnlockDialog::Closed => OVERLAY_NONE,
             TabletUnlockDialog::Choosing => OVERLAY_TABLET_CHOOSER,
             TabletUnlockDialog::Manual => OVERLAY_TABLET_MANUAL,
+            TabletUnlockDialog::Guided => match tablet.guided.step {
+                TabletGuidedStep::Devices => OVERLAY_TABLET_GUIDED_DEVICES,
+                TabletGuidedStep::Working => OVERLAY_TABLET_GUIDED_WORKING,
+            },
         };
     }
 
@@ -2976,10 +3050,14 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::BootloaderUnlockFinished(result) => finish_bootloader_unlock(state, result),
         Message::TabletUnlockSelected => {
+            // Keep the (monotonic) guided job counter so a still-running job's
+            // events and report stay stale.
+            let job = state.flash.tablet_unlock.guided.job;
             state.flash.tablet_unlock = TabletUnlockState {
                 dialog: TabletUnlockDialog::Choosing,
                 ..TabletUnlockState::default()
             };
+            state.flash.tablet_unlock.guided.job = job;
             Task::none()
         }
         Message::TabletUnlockManualSelected => {
@@ -2990,6 +3068,10 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             let tablet = &mut state.flash.tablet_unlock;
             tablet.dialog = TabletUnlockDialog::Choosing;
             tablet.picker = None;
+            tablet.guided.listing = false;
+            tablet.guided.unlocking = false;
+            stop_tablet_unlock(tablet);
+            stop_tablet_guided(&mut tablet.guided);
             Task::none()
         }
         Message::TabletUnlockCancel => {
@@ -2997,7 +3079,10 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             tablet.dialog = TabletUnlockDialog::Closed;
             tablet.picker = None;
             tablet.reading = false;
-            tablet.unlocking = false;
+            tablet.guided.listing = false;
+            tablet.guided.unlocking = false;
+            stop_tablet_unlock(tablet);
+            stop_tablet_guided(&mut tablet.guided);
             Task::none()
         }
         // Clicks on empty modal space are swallowed here so they neither
@@ -3031,7 +3116,40 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             finish_tablet_read(state, device, result)
         }
         Message::TabletUnlockRequested => start_tablet_unlock(state),
+        Message::TabletUnlockCancelRestart => cancel_tablet_unlock(state),
         Message::TabletUnlockFinished(outcome) => finish_tablet_unlock(state, outcome),
+        Message::TabletGuidedSelected => {
+            let tablet = &mut state.flash.tablet_unlock;
+            let job = tablet.guided.job;
+            tablet.dialog = TabletUnlockDialog::Guided;
+            tablet.picker = None;
+            tablet.guided = TabletGuidedState {
+                job,
+                step: TabletGuidedStep::Devices,
+                listing: true,
+                ..TabletGuidedState::default()
+            };
+            start_tablet_guided_listing()
+        }
+        Message::TabletGuidedRefresh => {
+            let guided = &mut state.flash.tablet_unlock.guided;
+            if guided.listing || guided.unlocking {
+                return Task::none();
+            }
+            guided.step = TabletGuidedStep::Devices;
+            guided.listing = true;
+            guided.list_error = None;
+            guided.devices.clear();
+            start_tablet_guided_listing()
+        }
+        Message::TabletGuidedDevicesFetched(result) => finish_tablet_guided_list(state, result),
+        Message::TabletGuidedDeviceSelected(serial) => start_tablet_guided_unlock(state, serial),
+        Message::TabletGuidedEvent(job, event) => {
+            handle_tablet_guided_event(state, job, event);
+            Task::none()
+        }
+        Message::TabletGuidedFinished(job, report) => finish_tablet_guided(state, job, report),
+        Message::TabletGuidedCancelRestart => cancel_tablet_guided(state),
         Message::GuidedLogin => {
             let guided = &mut state.flash.bootloader.guided;
             // Only one portal window (or logout) at a time. When already
@@ -5475,12 +5593,14 @@ fn finish_tablet_read(
             tablet.bootloader_sn_part1 = info.bootloader_sn_part1;
             tablet.bootloader_sn_part2 = info.bootloader_sn_part2;
             tablet.serial = info.serial;
+            tablet.platform = info.platform;
             tablet.read_done = true;
         }
         Err(error) => {
             let tablet = &mut state.flash.tablet_unlock;
             tablet.reading = false;
             tablet.read_error = Some(error);
+            tablet.platform = None;
         }
     }
 
@@ -5504,20 +5624,57 @@ fn start_tablet_unlock(state: &mut State) -> Task<Message> {
 
     let tablet = &mut state.flash.tablet_unlock;
     tablet.unlocking = true;
+    tablet.cancelling = false;
     tablet.unlock_error = None;
     tablet.unlock_info = None;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    tablet.cancel = Some(cancel.clone());
 
     let token = tablet_unlock::token_path();
     Task::perform(
         async move {
-            tokio::task::spawn_blocking(move || tablet_unlock::unlock(&device, &info, &token))
-                .await
-                .unwrap_or_else(|e| {
-                    tablet_unlock::UnlockOutcome::Failed(format!("background task failed: {e}"))
-                })
+            tokio::task::spawn_blocking(move || {
+                tablet_unlock::unlock(&device, &info, &token, &cancel)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                tablet_unlock::UnlockOutcome::Failed(format!("background task failed: {e}"))
+            })
         },
         Message::TabletUnlockFinished,
     )
+}
+
+/// "Cancel & Restart": asks the running unlock to stop at its next checkpoint.
+///
+/// The card stays on the unlocking state until the job acknowledges the
+/// request, so no second job can touch the device while the first one is still
+/// finishing.
+fn cancel_tablet_unlock(state: &mut State) -> Task<Message> {
+    let tablet = &mut state.flash.tablet_unlock;
+    if !tablet.unlocking || tablet.cancelling {
+        return Task::none();
+    }
+
+    if let Some(cancel) = &tablet.cancel {
+        cancel.store(true, Ordering::Relaxed);
+    }
+    tablet.cancelling = true;
+
+    Task::none()
+}
+
+/// Asks the unlock the manual card still runs to stop (used when the dialog is
+/// left); the job clears itself when its outcome arrives.
+fn stop_tablet_unlock(tablet: &mut TabletUnlockState) {
+    if let Some(cancel) = &tablet.cancel {
+        cancel.store(true, Ordering::Relaxed);
+    }
+
+    tablet.unlocking = false;
+    tablet.cancelling = false;
+    tablet.cancel = None;
 }
 
 /// Shows the result of the ZUI unlock.
@@ -5551,12 +5708,206 @@ fn finish_tablet_unlock(
             Some(l10n.tr("flash-bootloader-oem-unlocking-required")),
         ),
         tablet_unlock::UnlockOutcome::Failed(message) => (None, Some(message)),
+        // "Cancel & Restart": the card goes back to the idle state it was in
+        // before the unlock, keeping the values that were read (they are the
+        // ones the user submitted on ZUI's website).
+        tablet_unlock::UnlockOutcome::Cancelled => (None, None),
     };
 
     let tablet = &mut state.flash.tablet_unlock;
     tablet.unlocking = false;
+    tablet.cancelling = false;
+    tablet.cancel = None;
     tablet.unlock_info = info;
     tablet.unlock_error = error;
+    Task::none()
+}
+
+/// Lists the connected fastboot devices for the guided tablet flow.
+fn start_tablet_guided_listing() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(tablet_unlock::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::TabletGuidedDevicesFetched,
+    )
+}
+
+/// Stores the guided device listing, or the error the scan hit.
+fn finish_tablet_guided_list(
+    state: &mut State,
+    result: Result<Vec<tablet_unlock::TabletDevice>, String>,
+) -> Task<Message> {
+    let guided = &mut state.flash.tablet_unlock.guided;
+    if !guided.listing {
+        return Task::none();
+    }
+
+    guided.listing = false;
+    match result {
+        Ok(devices) => {
+            guided.devices = devices;
+            guided.list_error = None;
+        }
+        Err(error) => {
+            guided.devices.clear();
+            guided.list_error = Some(error);
+        }
+    }
+
+    Task::none()
+}
+
+/// Starts the guided (automatic) unlock on the chosen device.
+fn start_tablet_guided_unlock(state: &mut State, serial: String) -> Task<Message> {
+    let guided = &mut state.flash.tablet_unlock.guided;
+    if guided.unlocking {
+        return Task::none();
+    }
+
+    guided.job = guided.job.wrapping_add(1);
+    let job = guided.job;
+    guided.step = TabletGuidedStep::Working;
+    guided.unlocking = true;
+    guided.cancelling = false;
+    guided.platform = None;
+    guided.confirming = false;
+    guided.result = None;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    guided.cancel = Some(cancel.clone());
+
+    let token = tablet_unlock::token_path();
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            match tokio::task::spawn_blocking(move || {
+                tablet_unlock::guided_unlock(&serial, &token, &emit, &cancel)
+            })
+            .await
+            {
+                Ok(report) => report,
+                Err(error) => tablet_unlock::GuidedReport {
+                    device: String::new(),
+                    info: tablet_unlock::TabletUnlockInfo::default(),
+                    outcome: tablet_unlock::GuidedOutcome::Failed(format!(
+                        "background task failed: {error}"
+                    )),
+                },
+            }
+        },
+        move |report| Message::TabletGuidedFinished(job, report),
+    );
+
+    let consumer = Task::run(receiver, move |event| Message::TabletGuidedEvent(job, event));
+
+    Task::batch([producer, consumer])
+}
+
+/// Records a progress event from the running guided unlock.
+fn handle_tablet_guided_event(state: &mut State, job: u64, event: tablet_unlock::GuidedEvent) {
+    let guided = &mut state.flash.tablet_unlock.guided;
+    if job != guided.job || !guided.unlocking {
+        return;
+    }
+
+    match event {
+        tablet_unlock::GuidedEvent::Platform(platform) => guided.platform = platform,
+        tablet_unlock::GuidedEvent::AwaitingConfirm => guided.confirming = true,
+    }
+}
+
+/// "Cancel & Restart": asks the running job to stop at its next checkpoint.
+///
+/// The card stays on the working step (showing that it is cancelling) until the
+/// job acknowledges the request, so no second job can touch the device while
+/// the first one is still finishing.
+fn cancel_tablet_guided(state: &mut State) -> Task<Message> {
+    let guided = &mut state.flash.tablet_unlock.guided;
+    if !guided.unlocking || guided.cancelling {
+        return Task::none();
+    }
+
+    if let Some(cancel) = &guided.cancel {
+        cancel.store(true, Ordering::Relaxed);
+    }
+    guided.cancelling = true;
+
+    Task::none()
+}
+
+/// Asks any job the guided flow still runs to stop (used when the dialog is
+/// left); the job clears itself when its report arrives.
+fn stop_tablet_guided(guided: &mut TabletGuidedState) {
+    if let Some(cancel) = &guided.cancel {
+        cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Shows the guided outcome, or hands the flow over to the manual card.
+fn finish_tablet_guided(
+    state: &mut State,
+    job: u64,
+    report: tablet_unlock::GuidedReport,
+) -> Task<Message> {
+    if job != state.flash.tablet_unlock.guided.job || !state.flash.tablet_unlock.guided.unlocking {
+        return Task::none();
+    }
+
+    if report.outcome == tablet_unlock::GuidedOutcome::Cancelled {
+        // "Cancel & Restart": back to the device list.
+        let guided = &mut state.flash.tablet_unlock.guided;
+        guided.unlocking = false;
+        guided.cancelling = false;
+        guided.cancel = None;
+        guided.platform = None;
+        guided.confirming = false;
+        guided.result = None;
+        guided.step = TabletGuidedStep::Devices;
+        guided.listing = true;
+        guided.list_error = None;
+        guided.devices.clear();
+
+        return start_tablet_guided_listing();
+    }
+
+    if report.outcome == tablet_unlock::GuidedOutcome::ManualRequired {
+        // Nothing could be obtained automatically: pre-fill the manual flow
+        // with what was read and let the user continue from there.
+        let notice = state.l10n.tr("flash-bootloader-tablet-guided-manual");
+        let bootloader_sn = report.info.bootloader_sn();
+
+        let tablet = &mut state.flash.tablet_unlock;
+        tablet.dialog = TabletUnlockDialog::Manual;
+        tablet.guided.unlocking = false;
+        tablet.guided.cancelling = false;
+        tablet.guided.cancel = None;
+        tablet.guided.confirming = false;
+        tablet.device = Some(report.device);
+        tablet.serial = report.info.serial;
+        tablet.bootloader_sn = bootloader_sn;
+        tablet.bootloader_sn_part1 = report.info.bootloader_sn_part1;
+        tablet.bootloader_sn_part2 = report.info.bootloader_sn_part2;
+        tablet.platform = report.info.platform;
+        tablet.read_done = true;
+        tablet.read_error = None;
+        tablet.read_notice = Some(notice);
+
+        return Task::none();
+    }
+
+    let guided = &mut state.flash.tablet_unlock.guided;
+    guided.unlocking = false;
+    guided.cancelling = false;
+    guided.cancel = None;
+    guided.confirming = false;
+    guided.result = Some(report.outcome);
     Task::none()
 }
 
