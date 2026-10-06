@@ -1647,6 +1647,17 @@ fn start_overlay_transition(state: &mut State, before: u8, after: u8) {
         return;
     }
 
+    // A card that is still moving is picked up wherever it is. A step that
+    // resolves into the next one before the previous change has settled — the
+    // bloatware dialog goes device list → checking → checklist as soon as ADB
+    // answers — then carries that movement on instead of jumping back to the
+    // start of the slide and playing it a second time. The close does the same
+    // (see `update`).
+    let running = state
+        .overlay_transition
+        .as_ref()
+        .map(|transition| transition.pose());
+
     state.overlay_transition = match (before, after) {
         (_, OVERLAY_NONE) => None,
         (OVERLAY_NONE, _) => Some(anim::Transition::settle(
@@ -1656,10 +1667,13 @@ fn start_overlay_transition(state: &mut State, before: u8, after: u8) {
         // A card stacked on top of this one is dismissed: the card below was
         // never gone, so it is revealed rather than played in again.
         _ if is_stacked(before) && !is_stacked(after) => None,
-        _ => Some(anim::Transition::settle(
-            anim::dialog_switch(switch_forward(before, after)),
-            anim::dialog_rest(),
-        )),
+        _ => Some(match running {
+            Some(pose) => anim::Transition::settle(pose, anim::dialog_rest()),
+            None => anim::Transition::settle(
+                anim::dialog_switch(switch_forward(before, after)),
+                anim::dialog_rest(),
+            ),
+        }),
     };
 }
 
@@ -5750,4 +5764,52 @@ mod tests {
         assert_eq!(detect_category("XYZ123"), None);
     }
 
+    /// A card that is still moving when the next one takes its place has to be
+    /// picked up wherever it is.
+    ///
+    /// The bloatware dialog changes its card twice in quick succession as soon
+    /// as ADB answers (device list → checking → checklist), which used to
+    /// restart the entrance from the beginning — it looked like the dialog
+    /// animated in twice.
+    #[test]
+    fn a_card_change_continues_an_animation_that_is_still_running() {
+        let mut state = State::default();
+
+        // The dialog eases in …
+        start_overlay_transition(&mut state, OVERLAY_NONE, OVERLAY_BLOATWARE);
+        assert!(state.overlay_transition.is_some());
+
+        // … and is still on its way when the device list resolves into the
+        // next card.
+        anim::tick(&mut state.overlay_transition);
+        let midway = state
+            .overlay_transition
+            .as_ref()
+            .expect("the entrance is still running")
+            .pose();
+
+        start_overlay_transition(&mut state, OVERLAY_BLOATWARE, OVERLAY_BLOATWARE + 1);
+
+        let continued = state
+            .overlay_transition
+            .as_ref()
+            .expect("the new card animates")
+            .pose();
+
+        assert_eq!(continued.slide.y, midway.slide.y);
+        assert_eq!(continued.slide.x, midway.slide.x);
+        assert_eq!(continued.scale, midway.scale);
+
+        // A change with nothing running still slides the new card in.
+        state.overlay_transition = None;
+        start_overlay_transition(&mut state, OVERLAY_BLOATWARE, OVERLAY_BLOATWARE + 1);
+        let fresh = state
+            .overlay_transition
+            .as_ref()
+            .expect("the new card animates")
+            .pose();
+
+        assert_eq!(fresh.scale, 1.0);
+        assert_ne!(fresh.slide.x, 0.0);
+    }
 }
