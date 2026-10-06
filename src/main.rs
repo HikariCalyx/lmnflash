@@ -4,10 +4,12 @@
 
 mod about;
 mod anim;
+mod bloatware;
 mod bootloader;
 mod bulk;
 mod carrier;
 mod config;
+mod debloat;
 mod decrypt;
 mod driver;
 mod driver_install;
@@ -538,6 +540,92 @@ struct SmartphoneFlashState {
     factory_reset: FactoryResetState,
     firmware: FirmwareFlashState,
     driver: DriverState,
+    bloatware: BloatwareState,
+}
+
+/// Which "Remove System Bloatware" dialog is currently on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum BloatwareDialog {
+    #[default]
+    Closed,
+    /// The whole flow (device selection, app checklist, removal, result) is
+    /// presented by this one modal.
+    Open,
+}
+
+/// State of the "Remove System Bloatware" feature (Mode 2).
+#[derive(Default)]
+struct BloatwareState {
+    dialog: BloatwareDialog,
+    /// `true` while the platform-tools are prepared and `adb devices` runs.
+    preparing: bool,
+    /// Failure of that step (its download, or `adb` itself).
+    prepare_error: Option<String>,
+    /// Devices `adb devices` reported.
+    devices: Vec<debloat::AdbDevice>,
+    /// Serial of the device the dialog works on.
+    selected: Option<String>,
+    /// `true` while `pm list packages` runs on the selected device.
+    checking: bool,
+    /// Failure of that read (the phone may have been unplugged).
+    check_error: Option<String>,
+    /// The known bloatware found on the device; `None` until it was read.
+    found: Option<Vec<debloat::Bloatware>>,
+    /// One flag per entry of `found` (parallel): the apps to remove.
+    checked: Vec<bool>,
+    /// What the search box above the checklist contains; only the rows whose
+    /// name or package contains it are shown.
+    filter: String,
+    /// `true` while the selected apps are removed.
+    removing: bool,
+    /// What the removal did, per app, once it finished.
+    results: Option<Vec<debloat::RemovalOutcome>>,
+}
+
+impl BloatwareState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.preparing || self.checking || self.removing
+    }
+
+    /// Label of the selected device (serial and model), so the dialog can
+    /// show which phone it is working on.
+    fn selected_label(&self) -> Option<String> {
+        let serial = self.selected.as_ref()?;
+
+        Some(
+            self.devices
+                .iter()
+                .find(|device| &device.serial == serial)
+                .map_or_else(|| serial.clone(), debloat::AdbDevice::label),
+        )
+    }
+
+    /// The bloatware the user left checked, in the checklist's order.
+    fn chosen_apps(&self) -> Vec<debloat::Bloatware> {
+        let Some(found) = &self.found else {
+            return Vec::new();
+        };
+
+        found
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.checked.get(*index).copied().unwrap_or(false))
+            .map(|(_, app)| *app)
+            .collect()
+    }
+
+    /// Whether at least one app is still checked (the view asks this on every
+    /// frame, so it does not build the list above).
+    fn has_chosen_apps(&self) -> bool {
+        match &self.found {
+            Some(found) => found
+                .iter()
+                .enumerate()
+                .any(|(index, _)| self.checked.get(index).copied().unwrap_or(false)),
+            None => false,
+        }
+    }
 }
 
 /// Which "Install Driver" dialog is currently on screen.
@@ -1413,6 +1501,35 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     DriverBackdropPressed,
+    /// Remove System Bloatware: the connected devices were listed
+    /// (`adb devices -l`), which also prepared ADB itself.
+    BloatwareDevicesFetched(Result<Vec<debloat::AdbDevice>, String>),
+    /// Remove System Bloatware: the user picked the device to work on.
+    BloatwareDeviceSelected(String),
+    /// Remove System Bloatware: re-scan for connected devices.
+    BloatwareRescan,
+    /// Remove System Bloatware: the device's installed bloatware was read.
+    BloatwarePackagesFetched(Result<Vec<debloat::Bloatware>, String>),
+    /// Remove System Bloatware: one app of the checklist was (de)selected.
+    BloatwareAppToggled(usize, bool),
+    /// Remove System Bloatware: the search box above the checklist changed.
+    BloatwareFilterChanged(String),
+    /// Remove System Bloatware: check or uncheck every app.
+    BloatwareSelectAll(bool),
+    /// Remove System Bloatware: remove the checked apps.
+    BloatwareRemove,
+    /// Remove System Bloatware: the removal finished, one outcome per app.
+    BloatwareRemoved(Vec<debloat::RemovalOutcome>),
+    /// Remove System Bloatware: leave the result and go back to the (now
+    /// shorter) checklist.
+    BloatwareDone,
+    /// Remove System Bloatware: go back to the device list.
+    BloatwareBackToDevices,
+    /// Remove System Bloatware: close the dialog.
+    BloatwareCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    BloatwareBackdropPressed,
     /// The best-effort telemetry POST finished (only logged; telemetry must
     /// never affect the app).
     TelemetrySent(Result<(), String>),
@@ -1436,6 +1553,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let firmware = &state.flash.firmware;
     let driver = &state.flash.driver;
     let tablet = &state.flash.tablet_unlock;
+    let bloatware = &state.flash.bloatware;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
@@ -1454,7 +1572,10 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.installing_tools
         || firmware.terminal_busy
         || firmware.reading_version
-        || driver.busy;
+        || driver.busy
+        || bloatware.preparing
+        || bloatware.checking
+        || bloatware.removing;
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
@@ -1552,6 +1673,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::FactoryResetCancel
             | Message::FirmwareFlashCancel
             | Message::DriverCancel
+            | Message::BloatwareCancel
             | Message::AboutClosed
             | Message::FastbootDevicePickerCancelled
     )
@@ -1597,6 +1719,9 @@ const OVERLAY_FIRMWARE_FLASH: u8 = 0x80;
 /// The About dialog opened from the Firmware Lookup page.
 const OVERLAY_ABOUT: u8 = 0x90;
 const OVERLAY_DRIVER: u8 = 0xA0;
+/// The "Remove System Bloatware" dialog; its low nibble is the step it shows
+/// (device list, package check, checklist, removal).
+const OVERLAY_BLOATWARE: u8 = 0xB0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
 
 /// Identifies the dialog card that is on screen (or [`OVERLAY_NONE`]), so that
@@ -1681,6 +1806,24 @@ fn overlay_key(state: &State) -> u8 {
 
     if driver::is_open(state) {
         return OVERLAY_DRIVER;
+    }
+
+    if bloatware::is_open(state) {
+        // The one modal shows the removal, its result, the checklist, the
+        // package check, or the device list: in that order of precedence,
+        // numbered the way the flow reaches them.
+        let bloatware = &state.flash.bloatware;
+        let step = if bloatware.removing || bloatware.results.is_some() {
+            3
+        } else if bloatware.found.is_some() {
+            2
+        } else if bloatware.checking || bloatware.check_error.is_some() {
+            1
+        } else {
+            0
+        };
+
+        return OVERLAY_BLOATWARE + step;
     }
 
     if state.about_open {
@@ -1785,6 +1928,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
+            SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
         },
         Message::FactoryResetDevicesFetched(result) => {
             let reset = &mut state.flash.factory_reset;
@@ -2466,6 +2610,173 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::DriverWorkerDone => Task::none(),
         Message::DriverBackdropPressed => Task::none(),
+        Message::BloatwareDevicesFetched(result) => {
+            let bloatware = &mut state.flash.bloatware;
+            bloatware.preparing = false;
+
+            match result {
+                Ok(devices) => {
+                    bloatware.prepare_error = None;
+                    bloatware.devices = devices;
+                }
+                Err(error) => {
+                    bloatware.devices.clear();
+                    bloatware.prepare_error = Some(error);
+                }
+            }
+
+            // One ready device is the one the user means; with none (or
+            // several) the dialog waits for a pick or the next scan.
+            let single = match bloatware
+                .devices
+                .iter()
+                .filter(|device| device.state == debloat::AdbDeviceState::Ready)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                [device] => Some(device.serial.clone()),
+                _ => None,
+            };
+
+            match single {
+                Some(serial) => start_bloatware_check(state, serial),
+                None => Task::none(),
+            }
+        }
+        Message::BloatwareDeviceSelected(serial) => start_bloatware_check(state, serial),
+        Message::BloatwareRescan => {
+            if state.flash.bloatware.busy() {
+                return Task::none();
+            }
+
+            reset_bloatware(&mut state.flash.bloatware);
+            state.flash.bloatware.preparing = true;
+
+            start_bloatware_devices()
+        }
+        Message::BloatwarePackagesFetched(result) => {
+            let bloatware = &mut state.flash.bloatware;
+            if !bloatware.checking {
+                return Task::none();
+            }
+
+            bloatware.checking = false;
+
+            match result {
+                Ok(apps) => {
+                    // Everything found is offered for removal; the user
+                    // unchecks what should stay.
+                    bloatware.checked = vec![true; apps.len()];
+                    bloatware.found = Some(apps);
+                }
+                Err(error) => bloatware.check_error = Some(error),
+            }
+
+            Task::none()
+        }
+        Message::BloatwareAppToggled(index, checked) => {
+            if let Some(flag) = state.flash.bloatware.checked.get_mut(index) {
+                *flag = checked;
+            }
+
+            Task::none()
+        }
+        Message::BloatwareSelectAll(checked) => {
+            let l10n = &state.l10n;
+            let bloatware = &mut state.flash.bloatware;
+
+            // While a search filters the list, these buttons act on the rows
+            // that are on screen; without one, on all of them.
+            let targets: Vec<usize> = match &bloatware.found {
+                Some(found) if !bloatware.filter.trim().is_empty() => found
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, app)| {
+                        debloat::matches(&app.label(l10n), app.package, &bloatware.filter)
+                    })
+                    .map(|(index, _)| index)
+                    .collect(),
+                _ => (0..bloatware.checked.len()).collect(),
+            };
+
+            for index in targets {
+                if let Some(flag) = bloatware.checked.get_mut(index) {
+                    *flag = checked;
+                }
+            }
+
+            Task::none()
+        }
+        Message::BloatwareFilterChanged(filter) => {
+            state.flash.bloatware.filter = filter;
+            Task::none()
+        }
+        Message::BloatwareRemove => start_bloatware_remove(state),
+        Message::BloatwareRemoved(outcomes) => {
+            let bloatware = &mut state.flash.bloatware;
+            if !bloatware.removing {
+                return Task::none();
+            }
+
+            bloatware.removing = false;
+            bloatware.results = Some(outcomes);
+
+            Task::none()
+        }
+        Message::BloatwareDone => {
+            let bloatware = &mut state.flash.bloatware;
+
+            // Drop what was removed from the checklist, so it matches the
+            // device again without asking it a second time.
+            if let Some(results) = bloatware.results.take() {
+                if let Some(found) = bloatware.found.take() {
+                    let removed: Vec<&str> = results
+                        .iter()
+                        .filter(|outcome| outcome.removed())
+                        .map(|outcome| outcome.app.package)
+                        .collect();
+
+                    let mut kept = Vec::new();
+                    let mut flags = Vec::new();
+
+                    for (index, app) in found.into_iter().enumerate() {
+                        if !removed.contains(&app.package) {
+                            flags.push(bloatware.checked.get(index).copied().unwrap_or(true));
+                            kept.push(app);
+                        }
+                    }
+
+                    bloatware.checked = flags;
+                    bloatware.found = Some(kept);
+                }
+            }
+
+            Task::none()
+        }
+        Message::BloatwareBackToDevices => {
+            let bloatware = &mut state.flash.bloatware;
+            if bloatware.busy() {
+                return Task::none();
+            }
+
+            bloatware.selected = None;
+            bloatware.check_error = None;
+            bloatware.found = None;
+            bloatware.checked.clear();
+            bloatware.results = None;
+            Task::none()
+        }
+        Message::BloatwareCancel => {
+            // Never close the dialog while it is working, so the phone is not
+            // left with a job nobody is watching.
+            if state.flash.bloatware.busy() {
+                return Task::none();
+            }
+
+            state.flash.bloatware = BloatwareState::default();
+            Task::none()
+        }
+        Message::BloatwareBackdropPressed => Task::none(),
         Message::FirmwareFlashExport => start_firmware_flash_export(state),
         Message::FirmwareFlashExported(result) => {
             let flash = &mut state.flash.firmware;
@@ -4426,6 +4737,96 @@ fn start_firmware_flash_reboot(
     Task::batch([producer, consumer])
 }
 
+/// Clears every working field of the bloatware dialog, keeping only its open
+/// state (the caller sets what the new step needs).
+fn reset_bloatware(bloatware: &mut BloatwareState) {
+    bloatware.preparing = false;
+    bloatware.prepare_error = None;
+    bloatware.devices.clear();
+    bloatware.selected = None;
+    bloatware.checking = false;
+    bloatware.check_error = None;
+    bloatware.found = None;
+    bloatware.checked.clear();
+    bloatware.filter.clear();
+    bloatware.removing = false;
+    bloatware.results = None;
+}
+
+/// Opens the "Remove System Bloatware" dialog and looks for a device.
+fn start_bloatware_dialog(state: &mut State) -> Task<Message> {
+    state.flash.bloatware = BloatwareState {
+        dialog: BloatwareDialog::Open,
+        preparing: true,
+        ..BloatwareState::default()
+    };
+
+    start_bloatware_devices()
+}
+
+/// Lists the devices `adb devices` reports (downloading `adb` on first use).
+fn start_bloatware_devices() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(debloat::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::BloatwareDevicesFetched,
+    )
+}
+
+/// Reads which of the known bloatware apps are installed on `serial`.
+fn start_bloatware_check(state: &mut State, serial: String) -> Task<Message> {
+    let bloatware = &mut state.flash.bloatware;
+    if bloatware.checking || bloatware.removing {
+        return Task::none();
+    }
+
+    bloatware.selected = Some(serial.clone());
+    bloatware.checking = true;
+    bloatware.check_error = None;
+    bloatware.found = None;
+    bloatware.checked.clear();
+    bloatware.filter.clear();
+    bloatware.results = None;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || debloat::list_installed(&serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::BloatwarePackagesFetched,
+    )
+}
+
+/// Removes the checked apps from the selected device, one after another.
+fn start_bloatware_remove(state: &mut State) -> Task<Message> {
+    let bloatware = &mut state.flash.bloatware;
+
+    let Some(serial) = bloatware.selected.clone() else {
+        return Task::none();
+    };
+    let apps = bloatware.chosen_apps();
+
+    if apps.is_empty() || bloatware.removing {
+        return Task::none();
+    }
+
+    bloatware.removing = true;
+    bloatware.results = None;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || debloat::remove(&serial, &apps))
+                .await
+                .unwrap_or_default()
+        },
+        Message::BloatwareRemoved,
+    )
+}
+
 /// Opens the "Install Driver" dialog. Nothing is downloaded or installed yet:
 /// the dialog explains what will happen and starts the job from its Install
 /// button (on Linux only once it has the password `sudo` needs).
@@ -5249,6 +5650,12 @@ fn view(state: &State) -> Element<'_, Message> {
     // Install Driver dialog (download progress / sudo password) drawn over
     // the whole window while it is open.
     if let Some(overlay) = driver::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Remove System Bloatware dialog (device selection, app checklist,
+    // removal) drawn over the whole window while it is open.
+    if let Some(overlay) = bloatware::overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 

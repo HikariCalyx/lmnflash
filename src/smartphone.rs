@@ -20,14 +20,16 @@ pub(crate) enum SmartphoneFeature {
     FactoryReset,
     FirmwareFlash,
     InstallDriver,
+    RemoveBloatware,
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
         Self::InstallDriver,
+        Self::RemoveBloatware,
     ];
 
     fn title_id(self) -> &'static str {
@@ -36,6 +38,7 @@ impl SmartphoneFeature {
             Self::FactoryReset => "flash-factory-reset-title",
             Self::FirmwareFlash => "flash-firmware-title",
             Self::InstallDriver => "flash-driver-title",
+            Self::RemoveBloatware => "flash-bloatware-title",
         }
     }
 
@@ -92,6 +95,9 @@ impl SmartphoneFeature {
                     Some(Message::DriverInstallRequested),
                 )],
             },
+            // Removing preinstalled apps works on any Android device that has
+            // USB debugging on, phones and tablets alike.
+            Self::RemoveBloatware => vec![("flash-bloatware-button", pressed())],
         }
     }
 }

@@ -545,5 +545,83 @@ mod tests {
             assert!(!failure.contains('\u{2068}'), "{language:?}: {failure}");
         }
     }
+
+    /// Every "Remove System Bloatware" string must exist and interpolate in
+    /// every locale: the result lines carry the app name and the raw device
+    /// error, and a translation that names an argument differently would leave
+    /// a hole in the line (or reach `tr` with a missing id, which is fatal in
+    /// a release build).
+    #[test]
+    fn the_bloatware_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-bloatware-title",
+            "flash-bloatware-button",
+            "bloatware-desc",
+            "bloatware-preparing",
+            "bloatware-refresh",
+            "bloatware-select-device",
+            "bloatware-no-device",
+            "bloatware-unauthorized",
+            "bloatware-checking",
+            "bloatware-found-heading",
+            "bloatware-search",
+            "bloatware-none-found",
+            "bloatware-select-all",
+            "bloatware-select-none",
+            "bloatware-remove",
+            "bloatware-remove-none",
+            "bloatware-removing",
+            "bloatware-done",
+            "bloatware-undo-note",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            // Every app whose name is a translated message must be named in
+            // the locale; a product name carries its own text.
+            for app in crate::debloat::BLOATWARE {
+                if let crate::debloat::Label::Message(id) = app.label {
+                    let name = bundle.tr(id);
+
+                    assert!(!name.trim().is_empty(), "{language:?}: {id}");
+                    assert!(!name.contains('\u{2068}'), "{language:?}: {id}");
+                }
+            }
+
+            let removed = bundle.tr_with_args(
+                "bloatware-result-removed",
+                &[("name", "SmartFeed".to_owned())],
+            );
+            assert!(removed.contains("SmartFeed"), "{language:?}: {removed}");
+            assert!(!removed.contains('\u{2068}'), "{language:?}: {removed}");
+
+            let failed = bundle.tr_with_args(
+                "bloatware-result-failed",
+                &[
+                    ("name", "SmartFeed".to_owned()),
+                    ("error", "Failure [DELETE_FAILED_INTERNAL_ERROR]".to_owned()),
+                ],
+            );
+            assert!(failed.contains("SmartFeed"), "{language:?}: {failed}");
+            assert!(
+                failed.contains("Failure [DELETE_FAILED_INTERNAL_ERROR]"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+
+            let no_match =
+                bundle.tr_with_args("bloatware-no-match", &[("query", "verizon".to_owned())]);
+            assert!(no_match.contains("verizon"), "{language:?}: {no_match}");
+            assert!(!no_match.contains('\u{2068}'), "{language:?}: {no_match}");
+        }
+    }
 }
 

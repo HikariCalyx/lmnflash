@@ -181,3 +181,43 @@ running instance over a loopback socket (advertised in `<config>/instance`) and
 exits, so the login completes in the window the user is already looking at
 instead of in a second one. Without the scheme in hand the callback would go to
 the other handler, so the built-in WebView is still used then.
+
+## Remove System Bloatware
+
+The **Remove System Bloatware** tile removes apps that Lenovo and Motorola
+preinstall on their phones and tablets. It works on any Android device with
+**USB debugging** enabled — fastboot is not involved.
+
+The known apps are the Lenovo/ZUI and Motorola system apps (Browser, Tianxi
+Agent, the push service, the Moto AI apps, SmartFeed, the app store, QuickApp,
+…), the Chinese apps that are bundled with them (Toutiao, Douyin, Kuaishou,
+Baidu Search and Maps, Weibo, Xiaohongshu, Hongguo Short Drama, and the other
+vendors' QuickApp engines), the apps that come with operator builds — the ~200
+entries marked as safe to delete in the *Universal Android Debloater*
+[carriers list](https://github.com/MuntashirAkon/android-debloat-list) (AT&T,
+Verizon, Sprint, T-Mobile, Rogers, Bell, Orange, SFR, Bouygues, Telekom, EE,
+NTT Docomo, …) — and the store apps and games that get bundled with them (Temu,
+Genshin Impact, PUBG Mobile, Honor of Kings, Arena of Valor, Onmyoji, Delta
+Force, League of Legends: Wild Rift, …). A carrier app's name is a product name
+and is shown the way that list spells it; a game is named per region and
+language (Genshin Impact / 原神), so those names are translated.
+
+Pressing the tile's button opens a dialog that:
+
+1. Prepares ADB. The `adb` of Google's platform-tools is downloaded into the
+   configuration directory on first use (next to the `fastboot` the Firmware
+   Flash dialog uses) and is always the build that runs, so the feature does not
+   depend on whatever happens to be on the `PATH`.
+2. Lists the connected devices (`adb devices -l`) and, once a device is picked,
+   reads its installed packages (`pm list packages`).
+3. Shows every known bloatware app that is installed as a checklist in a
+   scrollable list, all checked by default. A search box above it filters the
+   list by app name or package id, and **Select all** / **Deselect all** act on
+   the rows the search leaves on screen. The checked apps are removed with
+   `pm uninstall --user 0 <package>`.
+
+The uninstall is per user: the system partition is not touched, and a removed
+app comes back with `pm install-existing --user 0 <package>` over ADB or a
+factory reset — the dialog says so afterwards. A device that has not accepted
+this computer's debugging key yet is reported as unauthorized until the "Allow
+USB debugging?" prompt is accepted on it; **Refresh** re-scans the USB bus.

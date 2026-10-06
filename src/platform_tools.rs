@@ -6,8 +6,10 @@
 //! kept in the configuration directory (`<config>/platform-tools/`): the release
 //! artifacts stay small, and the build is always the current one.
 //!
-//! Only the files `fastboot` needs at run time are unpacked — the archive also
-//! holds `adb` and its helpers, which would need tens of megabytes here.
+//! Only the files the tools need at run time are unpacked — the archive also
+//! holds the SDK's other files, which would need tens of megabytes here.
+//! `adb` is unpacked as well: the "Remove System Bloatware" feature talks to
+//! the phone over it.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,6 +24,8 @@ use crate::flash_engine::{Emulator, Mfastboot, Origin, intel_emulator};
 const NEEDED: &[&str] = &[
     "fastboot",
     "fastboot.exe",
+    "adb",
+    "adb.exe",
     "AdbWinApi.dll",
     "AdbWinUsbApi.dll",
 ];
@@ -50,13 +54,41 @@ fn url() -> Option<&'static str> {
     }
 }
 
+/// The executable with the given base name inside `directory`, including
+/// this platform's file extension.
+fn executable_in(directory: &Path, base: &str) -> PathBuf {
+    directory.join(if cfg!(target_os = "windows") {
+        format!("{base}.exe")
+    } else {
+        base.to_owned()
+    })
+}
+
 /// The `fastboot` executable of the unpacked archive.
 fn binary() -> PathBuf {
-    install_dir().join(if cfg!(target_os = "windows") {
-        "fastboot.exe"
-    } else {
-        "fastboot"
-    })
+    executable_in(&install_dir(), "fastboot")
+}
+
+/// The `adb` executable of the unpacked archive.
+///
+/// The "Remove System Bloatware" feature runs the phone commands through it,
+/// so `adb` is unpacked next to `fastboot` (see [`NEEDED`]).
+pub fn adb() -> PathBuf {
+    executable_in(&install_dir(), "adb")
+}
+
+/// Whether that `adb` is already on disk.
+///
+/// A platform-tools download from before `adb` was unpacked has only
+/// `fastboot`, so the caller has to download them again (see [`install`]).
+pub fn adb_present() -> bool {
+    adb().is_file()
+}
+
+/// A command that starts `adb`, through an emulator where one is needed (the
+/// Linux platform-tools are x86_64, exactly like the shipped `mfastboot`).
+pub fn adb_command() -> Command {
+    emulator().command(&adb())
 }
 
 /// The directory the archive is unpacked into.
@@ -92,8 +124,8 @@ pub fn engine() -> Option<Mfastboot> {
     })
 }
 
-/// Downloads the archive and unpacks `fastboot` out of it, returning the path
-/// of the executable.
+/// Downloads the archive and unpacks the tools out of it (`fastboot`, and the
+/// `adb` the bloatware feature uses), returning `fastboot`'s path.
 pub fn install() -> Result<PathBuf, String> {
     let url = url().ok_or_else(|| "no platform-tools build for this system".to_owned())?;
 
@@ -149,9 +181,9 @@ fn unpack(archive: &[u8], directory: &Path) -> Result<PathBuf, String> {
             .map_err(|error| format!("could not write {}: {error}", target.display()))?;
 
         // The executable bit is ours to set: the archive does not have it
-        // everywhere, and a `fastboot` that cannot be started is of no use.
+        // everywhere, and a program that cannot be started is of no use.
         #[cfg(unix)]
-        if name.eq_ignore_ascii_case("fastboot") {
+        if name.eq_ignore_ascii_case("fastboot") || name.eq_ignore_ascii_case("adb") {
             use std::os::unix::fs::PermissionsExt;
 
             std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
@@ -161,11 +193,7 @@ fn unpack(archive: &[u8], directory: &Path) -> Result<PathBuf, String> {
         }
     }
 
-    let binary = directory.join(if cfg!(target_os = "windows") {
-        "fastboot.exe"
-    } else {
-        "fastboot"
-    });
+    let binary = executable_in(directory, "fastboot");
 
     if !binary.is_file() {
         return Err("the archive did not contain fastboot".to_owned());
@@ -559,15 +587,16 @@ mod tests {
     }
 
     #[test]
-    fn unpacks_only_what_fastboot_needs() {
+    fn unpacks_the_tools_it_needs() {
         let directory = test_dir("needed");
 
         let archive = archive(&[
             ("platform-tools/fastboot", "binary"),
             ("platform-tools/fastboot.exe", "binary"),
+            ("platform-tools/adb", "binary"),
+            ("platform-tools/adb.exe", "binary"),
             ("platform-tools/AdbWinApi.dll", "helper"),
             ("platform-tools/AdbWinUsbApi.dll", "helper"),
-            ("platform-tools/adb.exe", "not needed"),
             ("platform-tools/NOTICE.txt", "not needed"),
         ]);
 
@@ -575,11 +604,13 @@ mod tests {
 
         assert_eq!(binary, directory.join(binary.file_name().unwrap()));
         assert!(binary.is_file());
-        // The two DLLs `fastboot.exe` loads next to itself on Windows.
+        // The two DLLs `fastboot.exe` (and `adb.exe`) load next to themselves
+        // on Windows.
         assert!(directory.join("AdbWinApi.dll").is_file());
         assert!(directory.join("AdbWinUsbApi.dll").is_file());
+        // `adb` is unpacked as well: the bloatware feature runs it.
+        assert!(directory.join("adb").is_file() || directory.join("adb.exe").is_file());
         // The rest of the platform-tools stays in the archive.
-        assert!(!directory.join("adb.exe").exists());
         assert!(!directory.join("NOTICE.txt").exists());
 
         let _ = std::fs::remove_dir_all(&directory);
@@ -606,7 +637,7 @@ mod tests {
     #[test]
     fn rejects_an_archive_without_fastboot() {
         let directory = test_dir("empty");
-        let archive = archive(&[("platform-tools/adb.exe", "not needed")]);
+        let archive = archive(&[("platform-tools/NOTICE.txt", "not a tool")]);
 
         assert!(unpack(&archive, &directory).is_err());
 
