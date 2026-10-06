@@ -642,9 +642,9 @@ enum DriverStage {
 
 /// State of the "Install Driver" feature (Mode 2).
 ///
-/// On Windows the download and the installer are one job that starts as soon
-/// as the dialog opens; on Linux the dialog waits for the password the
-/// installation needs and starts from its Install button.
+/// Opening the dialog only presents what is about to happen; the job itself is
+/// started by the dialog's Install button, which is also where Linux is asked
+/// for the password `sudo` needs.
 #[derive(Default)]
 struct DriverState {
     dialog: DriverDialog,
@@ -1462,15 +1462,17 @@ enum Message {
     /// A background firmware-flash job ended (only completes the task; the
     /// results arrive through the event messages above).
     FirmwareFlashWorkerDone,
-    /// Install Driver: the tile's button — opens the dialog and, on Windows,
-    /// starts the installation (Linux waits for the password first).
+    /// Install Driver: the tile's button — opens the dialog, where the
+    /// installation is started by pressing Install.
     DriverInstallRequested,
     /// Install Driver: open Lenovo's "Software Fix" page for tablet firmware.
     DriverTabletSite,
     /// Install Driver: the sudo password was edited.
     DriverPasswordChanged(String),
-    /// Install Driver: install with the password that was entered.
-    DriverPasswordSubmitted,
+    /// Install Driver: the dialog's Install button (or Enter in the password
+    /// field) — start the installation. Linux asks for the password before
+    /// this can do anything; Windows needs nothing but the click.
+    DriverInstallConfirmed,
     /// Install Driver: close the dialog.
     DriverCancel,
     /// Install Driver: progress of the running installation.
@@ -2455,12 +2457,12 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             state.flash.driver.password = password;
             Task::none()
         }
-        Message::DriverPasswordSubmitted => {
+        Message::DriverInstallConfirmed => {
             let driver = &state.flash.driver;
 
-            // Nothing to install with yet, or an installation is already
-            // running.
-            if driver.busy || driver.password.is_empty() {
+            // An installation is already running, or the password this system
+            // installs with is still missing.
+            if driver.busy || (driver_install::uses_password() && driver.password.is_empty()) {
                 return Task::none();
             }
 
@@ -4712,22 +4714,14 @@ fn start_firmware_flash_reboot(
     Task::batch([producer, consumer])
 }
 
-/// Opens the "Install Driver" dialog and, on Windows, starts the download
-/// right away: the tile's buttons mean "install this now". Linux waits for
-/// the password the installation needs, so nothing starts before it is
-/// entered.
+/// Opens the "Install Driver" dialog. Nothing is downloaded or installed yet:
+/// the dialog explains what will happen and starts the job from its Install
+/// button (on Linux only once it has the password `sudo` needs).
 fn start_driver_dialog(state: &mut State) -> Task<Message> {
     state.flash.driver = DriverState {
         dialog: DriverDialog::Open,
         ..DriverState::default()
     };
-
-    if matches!(
-        driver_install::target(),
-        Some(driver_install::Target::Windows(_))
-    ) {
-        return start_driver_job(state);
-    }
 
     Task::none()
 }
@@ -4763,8 +4757,10 @@ fn start_driver_job(state: &mut State) -> Task<Message> {
             let worker =
                 tokio::task::spawn_blocking(move || driver_install::run(target, &password, &emit));
 
-            // A panicked worker would otherwise leave the dialog waiting for
-            // an event that never comes (the sender it held is gone with it).
+            // `run` reports the outcome itself; only a worker that died
+            // without getting that far has to be turned into an event here,
+            // or the dialog would wait for one that never comes (the sender
+            // it held is gone with it).
             if let Err(error) = worker.await {
                 let _ = failure_sender.unbounded_send(driver_install::DriverEvent::Finished(
                     Err(driver_install::DriverError::Failed(format!(

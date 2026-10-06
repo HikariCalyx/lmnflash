@@ -1,12 +1,12 @@
 //! The "Install Driver" dialog (Mode 2, Smartphone Flash).
 //!
-//! Pressing the feature tile's button opens this modal. On Windows the
-//! download of Motorola's Mobile Drivers starts right away and the dialog
-//! shows how far it is; on Linux the dialog asks for the password that
-//! installs the udev rules, since writing to `/etc` needs root. Like the other
-//! dialogs, this module only *presents* the state and sends messages — the
-//! flow state and its update handlers live in `crate`
-//! (`State::flash.driver`).
+//! Pressing the feature tile's button opens this modal, which explains what is
+//! about to be installed and starts the job from its own Install button: on
+//! Windows that downloads Motorola's Mobile Drivers and hands them to the
+//! setup program, and on Linux it installs the udev rules as root, which is
+//! what the dialog asks for the password of. Like the other dialogs, this
+//! module only *presents* the state and sends messages — the flow state and
+//! its update handlers live in `crate` (`State::flash.driver`).
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
@@ -101,13 +101,12 @@ fn card(state: &State) -> Element<'_, Message> {
         }
     }
 
-    // On Linux the installation starts from here, so the password has to be
-    // entered first; Windows needs nothing and starts at once. The field stays
-    // on screen after a failure — a rejected password is what has to be tried
-    // again.
-    if linux && !driver.busy && driver.stage != DriverStage::Done {
-        content = content
-            .push(
+    // The installation starts from here, so this is where the password `sudo`
+    // needs is asked for; Windows needs none. Both stay on screen after a
+    // failure — a rejected password is what has to be tried again.
+    if !driver.busy && driver.stage != DriverStage::Done {
+        if linux {
+            content = content.push(
                 row![
                     text(l10n.tr("driver-password")).size(13.0),
                     // The password is never shown, and never leaves this
@@ -117,13 +116,19 @@ fn card(state: &State) -> Element<'_, Message> {
                         .padding(6)
                         .width(Fill)
                         .on_input(Message::DriverPasswordChanged)
-                        .on_submit(Message::DriverPasswordSubmitted),
+                        .on_submit(Message::DriverInstallConfirmed),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center)
                 .width(Fill),
-            )
-            .push(install_button(state, !driver.password.is_empty()));
+            );
+        }
+
+        // Nothing to install with until Linux has been given a password; on
+        // Windows the click is the whole confirmation.
+        let ready = !linux || !driver.password.is_empty();
+
+        content = content.push(install_button(state, ready));
     }
 
     // Footer: Cancel closes the dialog, but never while the installation is
@@ -152,13 +157,14 @@ fn card(state: &State) -> Element<'_, Message> {
     .into()
 }
 
-/// The button that starts the installation (Linux only; the Windows flow has
-/// nothing to confirm).
+/// The button that starts the installation. `ready` is what Linux has to be
+/// before it can install at all: without a password there is nothing to hand
+/// to `sudo`.
 fn install_button(state: &State, ready: bool) -> Element<'_, Message> {
     let install = button(text(state.l10n.tr("driver-install-button"))).width(Fill);
 
     if ready {
-        install.on_press(Message::DriverPasswordSubmitted).into()
+        install.on_press(Message::DriverInstallConfirmed).into()
     } else {
         // Nothing to install with: iced greys a button without `on_press` out
         // and ignores clicks on it.

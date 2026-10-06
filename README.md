@@ -116,7 +116,8 @@ ships the drivers it needs) and not on Windows on ARM (Motorola publishes no
 installer for it).
 
 * **Windows** — two buttons, because phones and tablets are served differently:
-  * **Smartphone** downloads Motorola's Mobile Drivers and starts the MSI. The
+  * **Smartphone** opens the Install Driver dialog; its **Install** button
+    downloads Motorola's Mobile Drivers and starts the MSI. The
     installer is picked by the architecture of the *system*, not of the
     application: `PROCESSOR_ARCHITEW6432` (which WOW64 reports to a 32-bit
     process on a 64-bit system) wins over `PROCESSOR_ARCHITECTURE`, so the
@@ -131,7 +132,7 @@ installer for it).
   `51-android.rules` into `/etc/udev/rules.d`, makes sure the `adbusers` group
   exists, adds the invoking user to it and restarts udev. The rules need root,
   so the dialog asks for the password and hands it to `sudo -S` through its
-  standard input.
+  standard input when its **Install** button is pressed.
 
   That project is a submodule at `vendor/android-udev-rules`, and the files
   `install.sh` reads are compiled into the binary, so installing needs neither

@@ -180,8 +180,33 @@ pub enum DriverEvent {
 }
 
 /// Runs the installation this system supports. Blocking — meant for a worker
-/// thread. Progress and the outcome reach the UI through `emit`.
+/// thread. Progress and the outcome reach the UI through `emit`, and the
+/// outcome is what [`DriverEvent::Finished`] carries.
+///
+/// The event is emitted here, around [`install`], so that *no* path can end
+/// without it: a download that does not come through is a failure like any
+/// other, and a caller that only watches the events may rely on the stream
+/// ending. The dialog leaves its busy state on that event alone, so a missing
+/// one would leave it spinning forever.
 pub fn run(
+    target: Option<Target>,
+    password: &str,
+    emit: &(dyn Fn(DriverEvent) + Send + Sync),
+) -> Result<(), DriverError> {
+    let result = install(target, password, emit);
+
+    emit(DriverEvent::Finished(result.clone()));
+
+    result
+}
+
+/// One installation: whatever the target needs to do, from the download to
+/// running the installer.
+///
+/// The result is returned rather than emitted so that every early exit —
+/// especially one out of the download — reaches [`run`], which reports it;
+/// a `?` out of `run` itself could skip that report.
+fn install(
     target: Option<Target>,
     password: &str,
     emit: &(dyn Fn(DriverEvent) + Send + Sync),
@@ -752,6 +777,28 @@ mod tests {
         assert!(!wrong_password(""));
         assert!(!wrong_password("udevadm: command not found"));
         assert!(!wrong_password("cp: cannot create regular file: Permission denied"));
+    }
+
+    /// Every run ends with its outcome, whatever it is: the dialog waits for
+    /// exactly that event to stop spinning and let its buttons work again, so
+    /// a run that reported nothing left it busy forever.
+    ///
+    /// The unsupported target is the one target that needs neither a network
+    /// nor `sudo` — and it is the shape every other failure takes.
+    #[test]
+    fn the_run_reports_its_outcome_as_the_last_event() {
+        let events: Mutex<Vec<DriverEvent>> = Mutex::new(Vec::new());
+        let emit = |event| lock(&events).push(event);
+
+        let result = run(None, "", &emit);
+        let events = lock(&events);
+
+        assert!(result.is_err());
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.first(),
+            Some(DriverEvent::Finished(Err(DriverError::Failed(_))))
+        ));
     }
 
     /// The installation is the upstream installer, embedded whole: the script
