@@ -21,6 +21,7 @@ mod flash_engine;
 mod flash_script;
 mod flashfile;
 mod guided;
+mod image_unpack;
 mod instance;
 mod l10n;
 mod lenovoubl;
@@ -32,6 +33,7 @@ mod smartphone;
 mod tablet_bootloader;
 mod tablet_unlock;
 mod telemetry;
+mod unpack;
 mod webview;
 
 use iced::widget::{
@@ -544,6 +546,42 @@ struct SmartphoneFlashState {
     firmware: FirmwareFlashState,
     driver: DriverState,
     bloatware: BloatwareState,
+    unpack: UnpackState,
+}
+
+/// State of the "Unpack Image" feature (Mode 2).
+#[derive(Default)]
+struct UnpackState {
+    /// Whether the modal is open.
+    open: bool,
+    /// The image file chosen by the user.
+    image: Option<std::path::PathBuf>,
+    /// Where the files are written.
+    output: Option<std::path::PathBuf>,
+    /// The files the selected image holds, once its header was read.
+    entries: Option<Vec<image_unpack::Entry>>,
+    /// `true` while the image header is being read.
+    listing: bool,
+    /// Why the image could not be read.
+    image_error: Option<image_unpack::UnpackError>,
+    /// Id of the running extraction, so events of an abandoned job are dropped.
+    job: u64,
+    /// `true` while the selected image is written out.
+    working: bool,
+    /// The file being written right now.
+    current: Option<String>,
+    /// Payload bytes written so far, and the payload size of the whole image.
+    done_bytes: u64,
+    total_bytes: u64,
+    /// How the run ended.
+    result: Option<Result<image_unpack::Summary, image_unpack::UnpackError>>,
+}
+
+impl UnpackState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.listing || self.working
+    }
 }
 
 /// Which "Remove System Bloatware" dialog is currently on screen.
@@ -1596,6 +1634,37 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     BloatwareBackdropPressed,
+    /// Unpack Image: ask for the image file to unpack.
+    UnpackPickImageRequested,
+    /// Unpack Image: the file picker closed (`None` = cancelled).
+    UnpackImagePicked(Option<std::path::PathBuf>),
+    /// Unpack Image: the picked image's directory was read (the carried path
+    /// tells a late answer for another file apart).
+    UnpackListed(
+        std::path::PathBuf,
+        Result<Vec<image_unpack::Entry>, image_unpack::UnpackError>,
+    ),
+    /// Unpack Image: ask for the folder the files are written to.
+    UnpackPickFolderRequested,
+    /// Unpack Image: the folder picker closed (`None` = cancelled).
+    UnpackFolderPicked(Option<std::path::PathBuf>),
+    /// Unpack Image: start extracting the selected image.
+    UnpackStart,
+    /// Unpack Image: show the output folder in the system's file manager.
+    UnpackLocate,
+    /// Unpack Image: the output folder was handed to the file manager (only
+    /// logs a failure).
+    UnpackFolderOpened,
+    /// Unpack Image: progress of the running extraction.
+    UnpackEvent(u64, image_unpack::UnpackEvent),
+    /// A background extraction ended (only completes the task; the outcome
+    /// arrives through the event message above).
+    UnpackWorkerDone,
+    /// Unpack Image: close the dialog.
+    UnpackCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    UnpackBackdropPressed,
     /// The best-effort telemetry POST finished (only logged; telemetry must
     /// never affect the app).
     TelemetrySent(Result<(), String>),
@@ -1620,6 +1689,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let driver = &state.flash.driver;
     let tablet = &state.flash.tablet_unlock;
     let bloatware = &state.flash.bloatware;
+    let unpack = &state.flash.unpack;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
@@ -1643,7 +1713,9 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || driver.busy
         || bloatware.preparing
         || bloatware.checking
-        || bloatware.removing;
+        || bloatware.removing
+        || unpack.listing
+        || unpack.working;
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
@@ -1756,6 +1828,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::FirmwareFlashCancel
             | Message::DriverCancel
             | Message::BloatwareCancel
+            | Message::UnpackCancel
             | Message::AboutClosed
             | Message::FastbootDevicePickerCancelled
     )
@@ -1806,6 +1879,9 @@ const OVERLAY_DRIVER: u8 = 0xA0;
 /// The "Remove System Bloatware" dialog; its low nibble is the step it shows
 /// (device list, package check, checklist, removal).
 const OVERLAY_BLOATWARE: u8 = 0xB0;
+/// The "Unpack Image" dialog; its low nibble is the step it shows (the setup
+/// form, or the running extraction and its result).
+const OVERLAY_UNPACK: u8 = 0xD0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
 
 /// Identifies the dialog card that is on screen (or [`OVERLAY_NONE`]), so that
@@ -1914,6 +1990,18 @@ fn overlay_key(state: &State) -> u8 {
         return OVERLAY_BLOATWARE + step;
     }
 
+    if unpack::is_open(state) {
+        // The setup form, and the running extraction with its result.
+        let unpack = &state.flash.unpack;
+        let step = if unpack.working || unpack.result.is_some() {
+            1
+        } else {
+            0
+        };
+
+        return OVERLAY_UNPACK + step;
+    }
+
     if state.about_open {
         return OVERLAY_ABOUT;
     }
@@ -2015,6 +2103,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
+            SmartphoneFeature::UnpackImage => start_unpack_dialog(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
         },
@@ -2865,6 +2954,179 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::BloatwareBackdropPressed => Task::none(),
+        Message::UnpackPickImageRequested => {
+            if state.flash.unpack.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("unpack-select-image");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("Image", &["img", "bin"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::UnpackImagePicked,
+            )
+        }
+        Message::UnpackImagePicked(path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            let unpack = &mut state.flash.unpack;
+            if unpack.busy() {
+                return Task::none();
+            }
+
+            // A new image starts over: the old table (and any result) belongs
+            // to another file.
+            unpack.image = Some(path.clone());
+            unpack.entries = None;
+            unpack.image_error = None;
+            unpack.result = None;
+            unpack.listing = true;
+
+            // The path guards the answer: a file picked while an earlier one
+            // is still being read must not be overwritten by its result.
+            Task::perform(
+                async move {
+                    let listing = path.clone();
+                    let result =
+                        tokio::task::spawn_blocking(move || image_unpack::list(&listing))
+                            .await
+                            .unwrap_or_else(|error| {
+                                Err(image_unpack::UnpackError::Read(format!(
+                                    "background task failed: {error}"
+                                )))
+                            });
+
+                    (path, result)
+                },
+                |(path, result)| Message::UnpackListed(path, result),
+            )
+        }
+        Message::UnpackListed(path, result) => {
+            let unpack = &mut state.flash.unpack;
+
+            if unpack.image.as_deref() != Some(path.as_path()) {
+                return Task::none();
+            }
+
+            unpack.listing = false;
+
+            match result {
+                Ok(entries) => {
+                    unpack.total_bytes = entries.iter().map(|entry| entry.size).sum();
+                    unpack.done_bytes = 0;
+                    unpack.entries = Some(entries);
+                    unpack.image_error = None;
+                }
+                Err(error) => {
+                    unpack.entries = None;
+                    unpack.total_bytes = 0;
+                    unpack.image_error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::UnpackPickFolderRequested => {
+            if state.flash.unpack.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("unpack-select-folder");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_folder()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::UnpackFolderPicked,
+            )
+        }
+        Message::UnpackFolderPicked(folder) => {
+            if let Some(folder) = folder {
+                state.flash.unpack.output = Some(folder);
+            }
+
+            Task::none()
+        }
+        Message::UnpackStart => start_unpack_job(state),
+        Message::UnpackLocate => {
+            // Only a finished run has files to find; the button is drawn in
+            // that state.
+            let Some(directory) = state.flash.unpack.output.clone() else {
+                return Task::none();
+            };
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || open::that(&directory))
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                error.to_string(),
+                            ))
+                        })
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the output folder: {error}");
+                    }
+
+                    Message::UnpackFolderOpened
+                },
+            )
+        }
+        Message::UnpackFolderOpened => Task::none(),
+        Message::UnpackEvent(job, event) => {
+            let unpack = &mut state.flash.unpack;
+
+            // Stale events (a job the user left behind) are dropped.
+            if job != unpack.job {
+                return Task::none();
+            }
+
+            match event {
+                image_unpack::UnpackEvent::File { name, .. } => {
+                    unpack.current = Some(name);
+                }
+                image_unpack::UnpackEvent::Progress { bytes, total } => {
+                    unpack.done_bytes = unpack.done_bytes.max(bytes);
+                    unpack.total_bytes = unpack.total_bytes.max(total);
+                }
+                image_unpack::UnpackEvent::Finished(result) => {
+                    unpack.working = false;
+                    unpack.current = None;
+                    unpack.result = Some(result);
+                }
+            }
+
+            Task::none()
+        }
+        Message::UnpackWorkerDone => Task::none(),
+        Message::UnpackCancel => {
+            // Never close the dialog while the image is being read or written.
+            if state.flash.unpack.busy() {
+                return Task::none();
+            }
+
+            state.flash.unpack = UnpackState::default();
+            Task::none()
+        }
+        Message::UnpackBackdropPressed => Task::none(),
         Message::FirmwareFlashExport => start_firmware_flash_export(state),
         Message::FirmwareFlashExported(result) => {
             let flash = &mut state.flash.firmware;
@@ -4959,6 +5221,70 @@ fn start_bloatware_remove(state: &mut State) -> Task<Message> {
     )
 }
 
+/// Opens the "Unpack Image" dialog. Nothing is read yet: the dialog asks for
+/// the image (whose directory is listed as soon as it is picked) and for the
+/// folder the files are written into.
+fn start_unpack_dialog(state: &mut State) -> Task<Message> {
+    state.flash.unpack = UnpackState {
+        open: true,
+        ..UnpackState::default()
+    };
+
+    Task::none()
+}
+
+/// Extracts the selected image on a worker thread, streaming its progress into
+/// the dialog.
+fn start_unpack_job(state: &mut State) -> Task<Message> {
+    let Some(image) = state.flash.unpack.image.clone() else {
+        return Task::none();
+    };
+    let Some(output) = state.flash.unpack.output.clone() else {
+        return Task::none();
+    };
+
+    let unpack = &mut state.flash.unpack;
+    if unpack.busy() {
+        return Task::none();
+    }
+
+    unpack.working = true;
+    unpack.job = unpack.job.wrapping_add(1);
+    unpack.current = None;
+    unpack.done_bytes = 0;
+    unpack.result = None;
+
+    let job_id = unpack.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker =
+                tokio::task::spawn_blocking(move || image_unpack::unpack(&image, &output, &emit));
+
+            // `unpack` reports the outcome itself; only a worker that died
+            // without getting that far has to be turned into an event here, or
+            // the dialog would wait for one that never comes (the sender it
+            // held is gone with it).
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(image_unpack::UnpackEvent::Finished(Err(
+                    image_unpack::UnpackError::Read(format!("background task failed: {error}")),
+                )));
+            }
+        },
+        |()| Message::UnpackWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| Message::UnpackEvent(job_id, event));
+
+    Task::batch([producer, consumer])
+}
+
 /// Opens the "Install Driver" dialog. Nothing is downloaded or installed yet:
 /// the dialog explains what will happen and starts the job from its Install
 /// button (on Linux only once it has the password `sudo` needs).
@@ -6021,6 +6347,12 @@ fn view(state: &State) -> Element<'_, Message> {
     // Remove System Bloatware dialog (device selection, app checklist,
     // removal) drawn over the whole window while it is open.
     if let Some(overlay) = bloatware::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Unpack Image dialog (image and output selection, contents, progress)
+    // drawn over the whole window while it is open.
+    if let Some(overlay) = unpack::overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 

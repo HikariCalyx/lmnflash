@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = 音量を上げるボタンを押し�
 flash-bootloader-tablet-confirm-qualcomm = 音量キーで「UNLOCK THE BOOTLOADER」を選択し、電源キーで確定してください。
 flash-bootloader-tablet-cancel-restart = キャンセルして再起動
 flash-bootloader-tablet-cancelling = キャンセルしています…
+
+# 「イメージを展開」ダイアログ（モード 2）。
+flash-unpack-title = イメージを展開
+flash-unpack-button = 展開
+unpack-description = ヘッダーのマジックが SINGLE_N_LONELY の モ-スマホのファームウェアイメージ（例: radio.img）に含まれるファイルを展開します。
+unpack-select-image = イメージを選択…
+unpack-select-folder = 出力フォルダーを選択…
+unpack-none-selected = 未選択
+unpack-contents = 内容（{ $count } 個のファイル、{ $size }）
+unpack-start = 展開
+unpack-listing = イメージを読み込み中…
+unpack-not-an-image = このファイルは モ スマートフォンのイメージではありません（SINGLE_N_LONELY ヘッダーがありません）。
+unpack-working = 展開中…
+unpack-done = { $count } 個のファイルを展開しました（{ $size }）。
+unpack-locate = 場所を開く
+unpack-failed = イメージを展開できませんでした: { $error }

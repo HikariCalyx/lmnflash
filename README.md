@@ -221,3 +221,27 @@ app comes back with `pm install-existing --user 0 <package>` over ADB or a
 factory reset — the dialog says so afterwards. A device that has not accepted
 this computer's debugging key yet is reported as unauthorized until the "Allow
 USB debugging?" prompt is accepted on it; **Refresh** re-scans the USB bus.
+
+## Unpack Image
+
+The **Unpack Image** tile extracts the files stored in one of Motorola's
+container images — the ones whose 256-byte header carries the magic
+`SINGLE_N_LONELY`, such as the `radio.img` / `bootloader.img` files of a
+firmware package. The picker accepts `.img` and `.bin` files. It is a host-side
+job; nothing has to be connected.
+
+Pressing the tile's button opens a dialog that:
+
+1. Asks for the image. Its directory table is read right away — only the
+   256-byte header and the entries are read, the payloads are skipped over — so
+   the dialog shows what the image holds (each file with its size) before
+   anything is written, and reports a file that is not this format.
+2. Asks for the output folder.
+3. Writes every file into that folder, next to nothing else, reporting the
+   progress and the file it is working on.
+
+The directory table holds at most 64 entries and ends with an entry named
+`LONELY_N_SINGLE`; payloads are padded so each entry starts on a 4096-byte
+boundary. An entry whose name would leave the chosen folder (a path separator,
+`.` or `..`) is refused instead of followed.
+

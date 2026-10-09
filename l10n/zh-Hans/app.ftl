@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = 请按音量加键确认解锁引导�
 flash-bootloader-tablet-confirm-qualcomm = 请使用音量键选择“UNLOCK THE BOOTLOADER”，然后按电源键确认。
 flash-bootloader-tablet-cancel-restart = 取消并重新启动
 flash-bootloader-tablet-cancelling = 正在取消…
+
+# “解包镜像”对话框（模式 2）。
+flash-unpack-title = 解包镜像
+flash-unpack-button = 解包
+unpack-description = 提取 M 品牌智能手机固件镜像中存储的文件，该镜像的文件头魔术为 SINGLE_N_LONELY，例如 radio.img。
+unpack-select-image = 选择镜像…
+unpack-select-folder = 选择输出文件夹…
+unpack-none-selected = 未选择
+unpack-contents = 内容（{ $count } 个文件，{ $size }）
+unpack-start = 解包
+unpack-listing = 正在读取镜像…
+unpack-not-an-image = 该文件不是 M 品牌智能手机镜像（缺少 SINGLE_N_LONELY 文件头）。
+unpack-working = 正在解包…
+unpack-done = 已解包 { $count } 个文件（{ $size }）。
+unpack-locate = 定位
+unpack-failed = 无法解包该镜像：{ $error }

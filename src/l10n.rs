@@ -637,5 +637,64 @@ mod tests {
             assert!(!no_match.contains('\u{2068}'), "{language:?}: {no_match}");
         }
     }
+
+    /// Every "Unpack Image" string must exist and interpolate in every locale:
+    /// the contents heading carries a count and a size, the done line the same
+    /// pair, and the failure line the raw error. A translation that names an
+    /// argument differently would leave a hole in the line (or reach `tr` with
+    /// a missing id, which is fatal in a release build).
+    #[test]
+    fn the_unpack_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-unpack-title",
+            "flash-unpack-button",
+            "unpack-description",
+            "unpack-select-image",
+            "unpack-select-folder",
+            "unpack-none-selected",
+            "unpack-locate",
+            "unpack-start",
+            "unpack-listing",
+            "unpack-not-an-image",
+            "unpack-working",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            let contents = bundle.tr_with_args(
+                "unpack-contents",
+                &[("count", "3".to_owned()), ("size", "1.5 MB".to_owned())],
+            );
+            assert!(contents.contains('3'), "{language:?}: {contents}");
+            assert!(contents.contains("1.5 MB"), "{language:?}: {contents}");
+            assert!(!contents.contains('\u{2068}'), "{language:?}: {contents}");
+
+            let done = bundle.tr_with_args(
+                "unpack-done",
+                &[("count", "3".to_owned()), ("size", "1.5 MB".to_owned())],
+            );
+            assert!(done.contains('3'), "{language:?}: {done}");
+            assert!(done.contains("1.5 MB"), "{language:?}: {done}");
+            assert!(!done.contains('\u{2068}'), "{language:?}: {done}");
+
+            let failed = bundle.tr_with_args(
+                "unpack-failed",
+                &[("error", "the image directory is truncated".to_owned())],
+            );
+            assert!(
+                failed.contains("the image directory is truncated"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+        }
+    }
 }
 

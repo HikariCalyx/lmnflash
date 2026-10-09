@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = Натисніть кнопку зб�
 flash-bootloader-tablet-confirm-qualcomm = Клавішами гучності виберіть «UNLOCK THE BOOTLOADER», а потім натисніть кнопку живлення для підтвердження.
 flash-bootloader-tablet-cancel-restart = Скасувати та перезапустити
 flash-bootloader-tablet-cancelling = Скасування…
+
+# Діалог «Розпакувати образ» (режим 2).
+flash-unpack-title = Розпакувати образ
+flash-unpack-button = Розпакувати
+unpack-description = Витягує файли з образу прошивки M-branded Smartphone, магія заголовка якого — SINGLE_N_LONELY, наприклад radio.img.
+unpack-select-image = Вибрати образ…
+unpack-select-folder = Вибрати папку призначення…
+unpack-none-selected = Не вибрано
+unpack-contents = Вміст ({ $count } файлів, { $size })
+unpack-start = Розпакувати
+unpack-listing = Читання образу…
+unpack-not-an-image = Цей файл не є образом M-branded Smartphone (немає заголовка SINGLE_N_LONELY).
+unpack-working = Розпакування…
+unpack-done = Розпаковано файлів: { $count } ({ $size }).
+unpack-locate = Показати
+unpack-failed = Не вдалося розпакувати образ: { $error }

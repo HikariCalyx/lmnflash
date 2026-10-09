@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = Trykk på volum opp-knappen for å be
 flash-bootloader-tablet-confirm-qualcomm = Bruk volumtasten til å velge "UNLOCK THE BOOTLOADER", og trykk på av/på-knappen for å bekrefte.
 flash-bootloader-tablet-cancel-restart = Avbryt og start på nytt
 flash-bootloader-tablet-cancelling = Avbryter…
+
+# «Unpack Image»-dialog (modus 2).
+flash-unpack-title = Pakk ut bilde
+flash-unpack-button = Pakk ut
+unpack-description = Pakker ut filene i et M-branded Smartphone-fastvarebilde med headermagien SINGLE_N_LONELY, for eksempel radio.img.
+unpack-select-image = Velg bilde…
+unpack-select-folder = Velg målmappe…
+unpack-none-selected = Ikke valgt
+unpack-contents = Innhold ({ $count } filer, { $size })
+unpack-start = Pakk ut
+unpack-listing = Leser bildet…
+unpack-not-an-image = Denne filen er ikke et M-branded Smartphone-bilde (SINGLE_N_LONELY-headeren mangler).
+unpack-working = Pakker ut…
+unpack-done = Pakket ut { $count } filer ({ $size }).
+unpack-locate = Vis
+unpack-failed = Kunne ikke pakke ut bildet: { $error }

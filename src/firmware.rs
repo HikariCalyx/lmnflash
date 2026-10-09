@@ -1093,7 +1093,7 @@ fn hex_value(byte: u8) -> Option<u8> {
 }
 
 /// Formats a byte count for display (e.g. `1.5 GB`).
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
 
     let mut value = bytes as f64;

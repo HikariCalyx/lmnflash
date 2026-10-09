@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = Premi il tasto Aumenta volume per con
 flash-bootloader-tablet-confirm-qualcomm = Usa il tasto del volume per selezionare "UNLOCK THE BOOTLOADER", poi il tasto di accensione per confermare.
 flash-bootloader-tablet-cancel-restart = Annulla e riavvia
 flash-bootloader-tablet-cancelling = Annullamento…
+
+# Finestra «Estrai immagine» (modalità 2).
+flash-unpack-title = Estrai immagine
+flash-unpack-button = Estrai
+unpack-description = Estrae i file contenuti in un'immagine firmware M-branded Smartphone con magic header SINGLE_N_LONELY, ad esempio radio.img.
+unpack-select-image = Seleziona immagine…
+unpack-select-folder = Seleziona cartella di destinazione…
+unpack-none-selected = Non selezionato
+unpack-contents = Contenuto ({ $count } file, { $size })
+unpack-start = Estrai
+unpack-listing = Lettura dell'immagine…
+unpack-not-an-image = Questo file non è un'immagine M-branded Smartphone (manca l'header SINGLE_N_LONELY).
+unpack-working = Estrazione…
+unpack-done = Estratti { $count } file ({ $size }).
+unpack-locate = Mostra
+unpack-failed = Impossibile estrarre l'immagine: { $error }

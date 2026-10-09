@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = 볼륨 업 버튼을 눌러 부트로
 flash-bootloader-tablet-confirm-qualcomm = 볼륨 키로 "UNLOCK THE BOOTLOADER"를 선택한 후 전원 키로 확인하십시오.
 flash-bootloader-tablet-cancel-restart = 취소 후 다시 시작
 flash-bootloader-tablet-cancelling = 취소하는 중…
+
+# “이미지 풀기” 대화 상자(모드 2).
+flash-unpack-title = 이미지 풀기
+flash-unpack-button = 풀기
+unpack-description = 헤더 매직이 SINGLE_N_LONELY인 모 스마트폰 펌웨어 이미지(예: radio.img)에 들어 있는 파일을 추출합니다.
+unpack-select-image = 이미지 선택…
+unpack-select-folder = 출력 폴더 선택…
+unpack-none-selected = 선택되지 않음
+unpack-contents = 내용({ $count }개 파일, { $size })
+unpack-start = 풀기
+unpack-listing = 이미지 읽는 중…
+unpack-not-an-image = 이 파일은 모 스마트폰 이미지가 아닙니다(SINGLE_N_LONELY 헤더 없음).
+unpack-working = 푸는 중…
+unpack-done = { $count }개 파일을 풀었습니다({ $size }).
+unpack-locate = 위치 열기
+unpack-failed = 이미지를 풀 수 없습니다: { $error }

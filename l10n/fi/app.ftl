@@ -457,3 +457,19 @@ flash-bootloader-tablet-confirm-mediatek = Vahvista bootloaderin avaus painamall
 flash-bootloader-tablet-confirm-qualcomm = Valitse äänenvoimakkuuspainikkeella "UNLOCK THE BOOTLOADER" ja vahvista virtapainikkeella.
 flash-bootloader-tablet-cancel-restart = Peruuta ja käynnistä uudelleen
 flash-bootloader-tablet-cancelling = Peruutetaan…
+
+# ”Unpack Image” -valintaikkuna (tila 2).
+flash-unpack-title = Pura kuva
+flash-unpack-button = Pura
+unpack-description = Purkaa M-branded Smartphone -laiteohjelmistokuvan tiedostot, jonka otsikkomaagia on SINGLE_N_LONELY, esimerkiksi radio.img.
+unpack-select-image = Valitse kuva…
+unpack-select-folder = Valitse tulostekansio…
+unpack-none-selected = Ei valittu
+unpack-contents = Sisältö ({ $count } tiedostoa, { $size })
+unpack-start = Pura
+unpack-listing = Luetaan kuvaa…
+unpack-not-an-image = Tämä tiedosto ei ole M-branded Smartphone -kuva (SINGLE_N_LONELY-otsikko puuttuu).
+unpack-working = Puretaan…
+unpack-done = Purettu { $count } tiedostoa ({ $size }).
+unpack-locate = Näytä
+unpack-failed = Kuvan purkaminen ei onnistunut: { $error }
