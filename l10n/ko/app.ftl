@@ -319,6 +319,7 @@ debug-token = Bearer 토큰
 debug-uuid = 클라이언트 UUID
 
 decrypt-select-dir = 폴더 선택
+decrypt-title = 태블릿 펌웨어 복호화
 decrypt-description = 이 기능은 L 브랜드 태블릿 펌웨어에 사용되는 t 및 x 파일을 복호화합니다.
 decrypt-no-dir = 선택한 폴더가 없습니다
 decrypt-custom-password = 사용자 지정 암호 사용
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = 취소 후 다시 시작
 flash-bootloader-tablet-cancelling = 취소하는 중…
 
 # “이미지 풀기” 대화 상자(모드 2).
-flash-unpack-title = 이미지 풀기
-flash-unpack-button = 풀기
+unpack-title = 이미지 풀기
+unpack-button = 풀기
 unpack-description = 헤더 매직이 SINGLE_N_LONELY인 모 스마트폰 펌웨어 이미지(예: radio.img)에 들어 있는 파일을 추출합니다.
 unpack-select-image = 이미지 선택…
 unpack-select-folder = 출력 폴더 선택…

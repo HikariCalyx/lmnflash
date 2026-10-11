@@ -319,6 +319,7 @@ debug-token = Token Bearer
 debug-uuid = UUID client
 
 decrypt-select-dir = Seleziona cartella
+decrypt-title = Decifra firmware del tablet
 decrypt-description = Questa funzione decifra i file t e x utilizzati nel firmware dei tablet del marchio L.
 decrypt-no-dir = Nessuna cartella selezionata
 decrypt-custom-password = Usa password personalizzata
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Annulla e riavvia
 flash-bootloader-tablet-cancelling = Annullamento…
 
 # Finestra «Estrai immagine» (modalità 2).
-flash-unpack-title = Estrai immagine
-flash-unpack-button = Estrai
+unpack-title = Estrai immagine
+unpack-button = Estrai
 unpack-description = Estrae i file contenuti in un'immagine firmware M-branded Smartphone con magic header SINGLE_N_LONELY, ad esempio radio.img.
 unpack-select-image = Seleziona immagine…
 unpack-select-folder = Seleziona cartella di destinazione…

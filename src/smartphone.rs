@@ -19,17 +19,15 @@ pub(crate) enum SmartphoneFeature {
     BootloaderUnlock,
     FactoryReset,
     FirmwareFlash,
-    UnpackImage,
     InstallDriver,
     RemoveBloatware,
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
-        Self::UnpackImage,
         Self::InstallDriver,
         Self::RemoveBloatware,
     ];
@@ -39,7 +37,6 @@ impl SmartphoneFeature {
             Self::BootloaderUnlock => "flash-bootloader-title",
             Self::FactoryReset => "flash-factory-reset-title",
             Self::FirmwareFlash => "flash-firmware-title",
-            Self::UnpackImage => "flash-unpack-title",
             Self::InstallDriver => "flash-driver-title",
             Self::RemoveBloatware => "flash-bloatware-title",
         }
@@ -84,9 +81,6 @@ impl SmartphoneFeature {
                 ("flash-firmware-smartphone-button", pressed()),
                 ("flash-firmware-tablet-button", None),
             ],
-            // Unpacking the container images (radio.img and the like) is a
-            // host-side job; nothing has to be connected for it.
-            Self::UnpackImage => vec![("flash-unpack-button", pressed())],
             // Windows installs a driver per device type: phones take
             // Motorola's Mobile Drivers, tablets are flashed with Lenovo's
             // "Software Fix", which is a download page of its own. Linux has a

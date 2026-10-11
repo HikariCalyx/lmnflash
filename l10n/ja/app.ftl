@@ -319,6 +319,7 @@ debug-token = Bearer トークン
 debug-uuid = クライアント UUID
 
 decrypt-select-dir = フォルダーを選択
+decrypt-title = タブレットファームウェアの復号
 decrypt-description = この機能は、L ブランドのタブレットのファームウェアに含まれる t ファイルと x ファイルを復号します。
 decrypt-no-dir = フォルダーが選択されていません
 decrypt-custom-password = カスタム パスワードを使用
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = キャンセルして再起動
 flash-bootloader-tablet-cancelling = キャンセルしています…
 
 # 「イメージを展開」ダイアログ（モード 2）。
-flash-unpack-title = イメージを展開
-flash-unpack-button = 展開
+unpack-title = イメージを展開
+unpack-button = 展開
 unpack-description = ヘッダーのマジックが SINGLE_N_LONELY の モ-スマホのファームウェアイメージ（例: radio.img）に含まれるファイルを展開します。
 unpack-select-image = イメージを選択…
 unpack-select-folder = 出力フォルダーを選択…

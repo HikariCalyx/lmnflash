@@ -319,6 +319,7 @@ debug-token = Токен Bearer
 debug-uuid = UUID клієнта
 
 decrypt-select-dir = Вибрати папку
+decrypt-title = Розшифрування прошивки планшета
 decrypt-description = Ця функція розшифровує файли t і x, які використовуються в прошивці планшетів марки L.
 decrypt-no-dir = Папку не вибрано
 decrypt-custom-password = Використати власний пароль
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Скасувати та перезап�
 flash-bootloader-tablet-cancelling = Скасування…
 
 # Діалог «Розпакувати образ» (режим 2).
-flash-unpack-title = Розпакувати образ
-flash-unpack-button = Розпакувати
+unpack-title = Розпакувати образ
+unpack-button = Розпакувати
 unpack-description = Витягує файли з образу прошивки M-branded Smartphone, магія заголовка якого — SINGLE_N_LONELY, наприклад radio.img.
 unpack-select-image = Вибрати образ…
 unpack-select-folder = Вибрати папку призначення…

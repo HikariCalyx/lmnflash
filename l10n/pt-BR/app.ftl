@@ -319,6 +319,7 @@ debug-token = Token Bearer
 debug-uuid = UUID do cliente
 
 decrypt-select-dir = Selecionar pasta
+decrypt-title = Descriptografar firmware do tablet
 decrypt-description = Este recurso descriptografa arquivos t e x usados no firmware de tablets da marca L.
 decrypt-no-dir = Nenhuma pasta selecionada
 decrypt-custom-password = Usar senha personalizada
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Cancelar e reiniciar
 flash-bootloader-tablet-cancelling = Cancelando…
 
 # Caixa de diálogo “Descompactar imagem” (modo 2).
-flash-unpack-title = Descompactar imagem
-flash-unpack-button = Descompactar
+unpack-title = Descompactar imagem
+unpack-button = Descompactar
 unpack-description = Extrai os arquivos de uma imagem de firmware M-branded Smartphone cuja magic de cabeçalho é SINGLE_N_LONELY, por exemplo radio.img.
 unpack-select-image = Selecionar imagem…
 unpack-select-folder = Selecionar pasta de saída…

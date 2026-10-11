@@ -222,15 +222,24 @@ factory reset — the dialog says so afterwards. A device that has not accepted
 this computer's debugging key yet is reported as unauthorized until the "Allow
 USB debugging?" prompt is accepted on it; **Refresh** re-scans the USB bus.
 
+## Tablet Firmware Decrypt
+
+The **Firmware Decrypt** tab offers the host-side firmware-file tools as a grid
+of cards, like the flashing tab. **Tablet Firmware Decrypt** decrypts the `*.x`
+and `*.t` files an L-branded tablet firmware dump is made of: a `*.x` file
+becomes a `*.xml` and a `*.t` file a `*.txt`, written next to the original. A
+custom password can be given; without one the standard password is used. The
+card reports how many files were decrypted and lists the ones that failed.
+
 ## Unpack Image
 
-The **Unpack Image** tile extracts the files stored in one of Motorola's
-container images — the ones whose 256-byte header carries the magic
+The **Unpack Image** card in the same tab extracts the files stored in one of
+Motorola's container images — the ones whose 256-byte header carries the magic
 `SINGLE_N_LONELY`, such as the `radio.img` / `bootloader.img` files of a
 firmware package. The picker accepts `.img` and `.bin` files. It is a host-side
 job; nothing has to be connected.
 
-Pressing the tile's button opens a dialog that:
+Pressing the card's button opens a dialog that:
 
 1. Asks for the image. Its directory table is read right away — only the
    256-byte header and the entries are read, the payloads are skipped over — so

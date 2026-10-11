@@ -638,6 +638,46 @@ mod tests {
         }
     }
 
+    /// The Tablet Firmware Decrypt dialog and the tile that opens it: the
+    /// heading, the directory/password controls and the two counter lines,
+    /// which carry the succeeded/failed numbers.
+    #[test]
+    fn the_decrypt_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "decrypt-title",
+            "decrypt-description",
+            "decrypt-select-dir",
+            "decrypt-no-dir",
+            "decrypt-custom-password",
+            "decrypt-password-label",
+            "decrypt-button",
+            "decrypt-working",
+            "decrypt-no-files",
+            "decrypt-password-required",
+            "decrypt-failed-files",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            // The done line carries the two numbers the summary reports.
+            let done = bundle.tr_with_args(
+                "decrypt-done",
+                &[("ok", "7".to_owned()), ("fail", "1".to_owned())],
+            );
+            assert!(done.contains('7'), "{language:?}: {done}");
+            assert!(done.contains('1'), "{language:?}: {done}");
+            assert!(!done.contains('\u{2068}'), "{language:?}: {done}");
+        }
+    }
+
     /// Every "Unpack Image" string must exist and interpolate in every locale:
     /// the contents heading carries a count and a size, the done line the same
     /// pair, and the failure line the raw error. A translation that names an
@@ -646,8 +686,8 @@ mod tests {
     #[test]
     fn the_unpack_dialog_renders_in_every_locale() {
         const PLAIN: &[&str] = &[
-            "flash-unpack-title",
-            "flash-unpack-button",
+            "unpack-title",
+            "unpack-button",
             "unpack-description",
             "unpack-select-image",
             "unpack-select-folder",

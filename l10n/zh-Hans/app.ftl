@@ -319,6 +319,7 @@ debug-token = Bearer 令牌
 debug-uuid = 客户端 UUID
 
 decrypt-select-dir = 选择文件夹
+decrypt-title = 平板固件解密
 decrypt-description = 此功能用于解密 L 品牌平板固件中的 t 和 x 文件。
 decrypt-no-dir = 未选择文件夹
 decrypt-custom-password = 使用自定义密码
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = 取消并重新启动
 flash-bootloader-tablet-cancelling = 正在取消…
 
 # “解包镜像”对话框（模式 2）。
-flash-unpack-title = 解包镜像
-flash-unpack-button = 解包
+unpack-title = 解包镜像
+unpack-button = 解包
 unpack-description = 提取 M 品牌智能手机固件镜像中存储的文件，该镜像的文件头魔术为 SINGLE_N_LONELY，例如 radio.img。
 unpack-select-image = 选择镜像…
 unpack-select-folder = 选择输出文件夹…

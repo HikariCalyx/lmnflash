@@ -319,6 +319,7 @@ debug-token = Bearer-Token
 debug-uuid = Client-UUID
 
 decrypt-select-dir = Ordner auswählen
+decrypt-title = Tablet-Firmware entschlüsseln
 decrypt-description = Diese Funktion entschlüsselt die t- und x-Dateien der Firmware von Tablets der Marke L.
 decrypt-no-dir = Kein Ordner ausgewählt
 decrypt-custom-password = Eigenes Passwort verwenden
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Abbrechen und neu starten
 flash-bootloader-tablet-cancelling = Wird abgebrochen…
 
 # „Unpack Image“-Dialog (Modus 2).
-flash-unpack-title = Image entpacken
-flash-unpack-button = Entpacken
+unpack-title = Image entpacken
+unpack-button = Entpacken
 unpack-description = Extrahiert die Dateien aus einem M-branded Smartphone-Firmware-Image mit der Header-Magic SINGLE_N_LONELY, z. B. radio.img.
 unpack-select-image = Image auswählen…
 unpack-select-folder = Zielordner auswählen…

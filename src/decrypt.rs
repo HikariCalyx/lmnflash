@@ -19,7 +19,11 @@ use aes::Aes256;
 use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 use cbc::Decryptor;
 use iced::widget::text::Shaping;
-use iced::widget::{button, checkbox, column, container, row, scrollable, text_input};
+use iced::widget::text::Wrapping;
+use iced::widget::{
+    button, checkbox, column, container, horizontal_rule, mouse_area, row, scrollable, text_input,
+    Space,
+};
 use iced::{Alignment, Element, Fill};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -252,7 +256,38 @@ pub fn decrypt_directory(directory: &Path, password: &str) -> Result<DecryptSumm
 
 /// The firmware-decrypt UI (Mode 3): pick a directory, optionally provide a
 /// custom password, then decrypt every `*.x`/`*.t` file found in it.
-pub(crate) fn view(state: &State) -> Element<'_, Message> {
+/// Whether the Tablet Firmware Decrypt dialog is open.
+pub(crate) fn is_open(state: &State) -> bool {
+    state.decrypt.open
+}
+
+/// Renders the "Tablet Firmware Decrypt" overlay over the app, or `None` when
+/// the dialog is closed. Clicks on empty space are swallowed (they neither
+/// dismiss the dialog nor reach the UI underneath); the modal is left only via
+/// its own buttons.
+pub(crate) fn overlay(state: &State) -> Option<Element<'_, Message>> {
+    if !state.decrypt.open {
+        return None;
+    }
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::DecryptBackdropPressed)
+            .into(),
+        container(card(state))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The modal card: pick a directory, optionally provide a custom password,
+/// then decrypt every `*.x`/`*.t` file found in it.
+fn card(state: &State) -> Element<'_, Message> {
     let l10n = &state.l10n;
     let decrypt_state = &state.decrypt;
 
@@ -273,20 +308,26 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     };
 
     let mut content = column![
-        text(l10n.tr("decrypt-description")).size(14.0),
+        text(l10n.tr("decrypt-title")).size(18.0),
+        text(l10n.tr("decrypt-description"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+        horizontal_rule(1),
         row![
             pick_button,
             container(
                 text(path_text)
                     .size(13.0)
-                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-                    .width(420),
+                    .wrapping(Wrapping::WordOrGlyph),
             )
+            .width(Fill)
             .padding(8)
             .style(container::rounded_box),
         ]
         .spacing(8)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .width(Fill),
         checkbox(
             l10n.tr("decrypt-custom-password"),
             decrypt_state.custom_password,
@@ -294,46 +335,39 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         .text_shaping(Shaping::Advanced)
         .on_toggle(Message::DecryptCustomPasswordToggled),
     ]
-    .spacing(8)
-    .align_x(Alignment::Center);
+    .spacing(10)
+    .width(Fill);
 
     if decrypt_state.custom_password {
         content = content.push(
             row![
-                text(l10n.tr("decrypt-password-label")).size(14.0),
+                text(l10n.tr("decrypt-password-label")).size(13.0),
                 text_input("", &decrypt_state.password)
                     .secure(true)
                     .on_input(Message::DecryptPasswordChanged)
                     .on_submit(Message::DecryptRequested)
-                    .width(240),
+                    .width(Fill),
             ]
             .spacing(8)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center)
+            .width(Fill),
         );
     }
 
-    let decrypt_button = if busy || decrypt_state.directory.is_none() {
-        button(text(l10n.tr("decrypt-button")))
-    } else {
-        button(text(l10n.tr("decrypt-button"))).on_press(Message::DecryptRequested)
-    };
-    content = content.push(decrypt_button);
-
     match &decrypt_state.status {
-        DecryptStatus::Idle | DecryptStatus::PickingDir => {}
-        DecryptStatus::Working => {
-            content = content.push(text(l10n.tr("decrypt-working")).size(14.0));
-        }
+        DecryptStatus::Working => content = content.push(busy_row(state, l10n.tr("decrypt-working"))),
         DecryptStatus::Error(error) => {
             content = content.push(
                 text(error.clone())
-                    .size(14.0)
+                    .size(13.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
                     .style(iced::widget::text::danger),
             );
         }
         DecryptStatus::Done(summary) => {
             if summary.total == 0 {
-                content = content.push(text(l10n.tr("decrypt-no-files")).size(14.0));
+                content = content.push(text(l10n.tr("decrypt-no-files")).size(13.0));
             } else {
                 let message = l10n.tr_with_args(
                     "decrypt-done",
@@ -348,10 +382,10 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
                 } else {
                     iced::widget::text::danger
                 };
-                content = content.push(text(message).size(14.0).style(style));
+                content = content.push(text(message).size(13.0).style(style));
 
                 if !summary.failed.is_empty() {
-                    content = content.push(text(l10n.tr("decrypt-failed-files")).size(13.0));
+                    content = content.push(text(l10n.tr("decrypt-failed-files")).size(12.0));
 
                     let rows = iced::widget::Column::with_children(
                         summary.failed.iter().map(|(path, error)| {
@@ -363,17 +397,54 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
                     .spacing(4)
                     .align_x(Alignment::Start);
 
-                    content = content.push(scrollable(rows).height(120).width(520));
+                    content = content.push(scrollable(rows).height(120).width(Fill));
                 }
             }
         }
+        DecryptStatus::Idle | DecryptStatus::PickingDir => {}
     }
 
-    container(content)
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill)
+    // Footer: without a directory there is nothing to decrypt, and the dialog
+    // is never closed while a batch runs — a button without `on_press` is
+    // greyed out and ignores clicks.
+    content = content.push(horizontal_rule(1));
+
+    let decrypt_button = button(text(l10n.tr("decrypt-button"))).width(Fill);
+    let decrypt_button: Element<'_, Message> =
+        if busy || decrypt_state.directory.is_none() {
+            decrypt_button.into()
+        } else {
+            decrypt_button.on_press(Message::DecryptRequested).into()
+        };
+
+    let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
+    let cancel: Element<'_, Message> = if busy {
+        cancel.into()
+    } else {
+        cancel.on_press(Message::DecryptCancel).into()
+    };
+
+    content = content.push(row![decrypt_button, cancel].spacing(8).width(Fill));
+
+    // The padding sits inside the scrollable, so the card's border is the
+    // viewport: the scrollbar rides on the right border instead of floating
+    // in the middle of the padding.
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(520)
+    .height(380)
+    .style(crate::bootloader::darker_card)
+    .into()
+}
+
+/// A spinner plus its status text.
+fn busy_row<'a>(state: &'a State, label: String) -> Element<'a, Message> {
+    row![crate::guided::spinner(state.anim_tick), text(label).size(13.0)]
+        .spacing(8)
+        .align_y(Alignment::Center)
         .into()
 }
 

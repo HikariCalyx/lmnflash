@@ -319,6 +319,7 @@ debug-token = Bearer-tunnus
 debug-uuid = Asiakkaan UUID
 
 decrypt-select-dir = Valitse kansio
+decrypt-title = Tabletin laiteohjelmiston salauksen purku
 decrypt-description = Tämä toiminto purkaa L-merkkisten tablettien firmwaren t- ja x-tiedostojen salauksen.
 decrypt-no-dir = Kansiota ei ole valittu
 decrypt-custom-password = Käytä mukautettua salasanaa
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Peruuta ja käynnistä uudelleen
 flash-bootloader-tablet-cancelling = Peruutetaan…
 
 # ”Unpack Image” -valintaikkuna (tila 2).
-flash-unpack-title = Pura kuva
-flash-unpack-button = Pura
+unpack-title = Pura kuva
+unpack-button = Pura
 unpack-description = Purkaa M-branded Smartphone -laiteohjelmistokuvan tiedostot, jonka otsikkomaagia on SINGLE_N_LONELY, esimerkiksi radio.img.
 unpack-select-image = Valitse kuva…
 unpack-select-folder = Valitse tulostekansio…

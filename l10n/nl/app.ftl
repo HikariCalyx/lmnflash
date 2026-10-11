@@ -319,6 +319,7 @@ debug-token = Bearer-token
 debug-uuid = Client-UUID
 
 decrypt-select-dir = Map selecteren
+decrypt-title = Tablet-firmware ontsleutelen
 decrypt-description = Deze functie ontsleutelt t- en x-bestanden die worden gebruikt in firmware van tablets van het merk L.
 decrypt-no-dir = Geen map geselecteerd
 decrypt-custom-password = Aangepast wachtwoord gebruiken
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Annuleren en opnieuw starten
 flash-bootloader-tablet-cancelling = Annuleren…
 
 # Dialoogvenster ‘Image uitpakken’ (modus 2).
-flash-unpack-title = Image uitpakken
-flash-unpack-button = Uitpakken
+unpack-title = Image uitpakken
+unpack-button = Uitpakken
 unpack-description = Pakt de bestanden uit een M-branded Smartphone-firmware-image met de header-magic SINGLE_N_LONELY, bijvoorbeeld radio.img.
 unpack-select-image = Image selecteren…
 unpack-select-folder = Uitvoermap selecteren…

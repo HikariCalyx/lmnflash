@@ -319,6 +319,7 @@ debug-token = Bearer-token
 debug-uuid = Klient-UUID
 
 decrypt-select-dir = Velg mappe
+decrypt-title = Dekrypter nettbrett-fastvare
 decrypt-description = Denne funksjonen dekrypterer t- og x-filer som brukes i fastvare for nettbrett av merket L.
 decrypt-no-dir = Ingen mappe valgt
 decrypt-custom-password = Bruk egendefinert passord
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Avbryt og start på nytt
 flash-bootloader-tablet-cancelling = Avbryter…
 
 # «Unpack Image»-dialog (modus 2).
-flash-unpack-title = Pakk ut bilde
-flash-unpack-button = Pakk ut
+unpack-title = Pakk ut bilde
+unpack-button = Pakk ut
 unpack-description = Pakker ut filene i et M-branded Smartphone-fastvarebilde med headermagien SINGLE_N_LONELY, for eksempel radio.img.
 unpack-select-image = Velg bilde…
 unpack-select-folder = Velg målmappe…

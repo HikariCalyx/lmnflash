@@ -319,6 +319,7 @@ debug-token = Bearer-token
 debug-uuid = Klient-UUID
 
 decrypt-select-dir = Välj mapp
+decrypt-title = Dekryptera surfplattans firmware
 decrypt-description = Den här funktionen dekrypterar t- och x-filer som används i firmware för surfplattor av märket L.
 decrypt-no-dir = Ingen mapp vald
 decrypt-custom-password = Använd anpassat lösenord
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Avbryt och starta om
 flash-bootloader-tablet-cancelling = Avbryter…
 
 # Dialogrutan ”Packa upp avbildning” (läge 2).
-flash-unpack-title = Packa upp avbildning
-flash-unpack-button = Packa upp
+unpack-title = Packa upp avbildning
+unpack-button = Packa upp
 unpack-description = Extraherar filerna i en M-branded Smartphone-fastvaruavbildning med headermagin SINGLE_N_LONELY, till exempel radio.img.
 unpack-select-image = Välj avbildning…
 unpack-select-folder = Välj utdatamapp…

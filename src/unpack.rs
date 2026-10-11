@@ -4,7 +4,7 @@
 //! selected image's directory table, shows what is inside, and writes the
 //! files into a folder the user picks. Like the other dialogs, this module
 //! only *presents* the state and sends messages — the flow state and its
-//! update handlers live in `crate` (`State::flash.unpack`).
+//! update handlers live in `crate` (`State::unpack`).
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
@@ -37,7 +37,7 @@ const LIST_ID: &str = "unpack-image-list";
 
 /// Whether the Unpack Image dialog is open.
 pub(crate) fn is_open(state: &State) -> bool {
-    state.flash.unpack.open
+    state.unpack.open
 }
 
 /// Renders the "Unpack Image" overlay over the app, or `None` when the dialog
@@ -45,7 +45,7 @@ pub(crate) fn is_open(state: &State) -> bool {
 /// dialog nor reach the UI underneath); the modal is left only via its own
 /// buttons.
 pub(crate) fn overlay(state: &State) -> Option<Element<'_, Message>> {
-    if !state.flash.unpack.open {
+    if !state.unpack.open {
         return None;
     }
 
@@ -68,7 +68,7 @@ pub(crate) fn overlay(state: &State) -> Option<Element<'_, Message>> {
 /// then unpack it.
 fn card(state: &State) -> Element<'_, Message> {
     let l10n = &state.l10n;
-    let unpack = &state.flash.unpack;
+    let unpack = &state.unpack;
     let busy = unpack.listing || unpack.working;
 
     // Nothing that talks to the file system runs while the image is read or
@@ -77,7 +77,7 @@ fn card(state: &State) -> Element<'_, Message> {
     let selectable = !busy;
 
     let mut content = column![
-        text(l10n.tr("flash-unpack-title")).size(18.0),
+        text(l10n.tr("unpack-title")).size(18.0),
         text(l10n.tr("unpack-description"))
             .size(13.0)
             .width(Fill)

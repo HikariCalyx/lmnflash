@@ -319,6 +319,7 @@ debug-token = Jeton Bearer
 debug-uuid = UUID du client
 
 decrypt-select-dir = Sélectionner un dossier
+decrypt-title = Déchiffrer le firmware de la tablette
 decrypt-description = Cette fonctionnalité déchiffre les fichiers t et x utilisés dans le firmware des tablettes de marque L.
 decrypt-no-dir = Aucun dossier sélectionné
 decrypt-custom-password = Utiliser un mot de passe personnalisé
@@ -459,8 +460,8 @@ flash-bootloader-tablet-cancel-restart = Annuler et redémarrer
 flash-bootloader-tablet-cancelling = Annulation…
 
 # Boîte de dialogue « Décompresser une image » (mode 2).
-flash-unpack-title = Décompresser une image
-flash-unpack-button = Décompresser
+unpack-title = Décompresser une image
+unpack-button = Décompresser
 unpack-description = Extrait les fichiers d'une image de firmware M-branded Smartphone dont l'en-tête magique est SINGLE_N_LONELY, par exemple radio.img.
 unpack-select-image = Sélectionner l'image…
 unpack-select-folder = Sélectionner le dossier de sortie…

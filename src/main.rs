@@ -11,6 +11,7 @@ mod carrier;
 mod config;
 mod debloat;
 mod decrypt;
+mod decrypt_mode;
 mod driver;
 mod driver_install;
 mod factory_reset;
@@ -531,13 +532,15 @@ fn detect_category(model: &str) -> Option<(firmware::Category, Option<&'static s
 /// Inputs for the firmware-decrypt mode (Mode 3).
 #[derive(Default)]
 struct DecryptState {
+    /// Whether the "Tablet Firmware Decrypt" modal is open.
+    open: bool,
     directory: Option<std::path::PathBuf>,
     custom_password: bool,
     password: String,
     status: DecryptStatus,
 }
 
-/// State of the "Smartphone Flash" mode (Mode 2) feature tiles.
+/// State of the "Smart Device Flashing" mode (Mode 2) feature tiles.
 #[derive(Default)]
 struct SmartphoneFlashState {
     bootloader: BootloaderState,
@@ -546,10 +549,9 @@ struct SmartphoneFlashState {
     firmware: FirmwareFlashState,
     driver: DriverState,
     bloatware: BloatwareState,
-    unpack: UnpackState,
 }
 
-/// State of the "Unpack Image" feature (Mode 2).
+/// State of the "Unpack Image" feature (Mode 3, firmware-file tools).
 #[derive(Default)]
 struct UnpackState {
     /// Whether the modal is open.
@@ -1228,6 +1230,8 @@ struct State {
     receives_callbacks: bool,
     lookup: LookupState,
     decrypt: DecryptState,
+    /// The "Unpack Image" feature of the firmware-decrypt mode (Mode 3).
+    unpack: UnpackState,
     flash: SmartphoneFlashState,
     /// Whether the About dialog (the round "i" button next to the language
     /// selector on the Firmware Lookup page) is open.
@@ -1260,6 +1264,7 @@ impl Default for State {
             receives_callbacks: false,
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
+            unpack: UnpackState::default(),
             flash: SmartphoneFlashState::default(),
             about_open: false,
             anim_tick: 0,
@@ -1397,6 +1402,13 @@ enum Message {
     DecryptPasswordChanged(String),
     DecryptRequested,
     DecryptFinished(Result<decrypt::DecryptSummary, String>),
+    /// A feature tile of the firmware-decrypt mode (Mode 3) was pressed.
+    DecryptFeaturePressed(decrypt_mode::DecryptFeature),
+    /// Tablet Firmware Decrypt: close the dialog.
+    DecryptCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    DecryptBackdropPressed,
     SmartphoneFeaturePressed(SmartphoneFeature),
     BootloaderManualSelected,
     BootloaderGuidedSelected,
@@ -1689,7 +1701,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let driver = &state.flash.driver;
     let tablet = &state.flash.tablet_unlock;
     let bloatware = &state.flash.bloatware;
-    let unpack = &state.flash.unpack;
+    let unpack = &state.unpack;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
@@ -1715,7 +1727,10 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || bloatware.checking
         || bloatware.removing
         || unpack.listing
-        || unpack.working;
+        || unpack.working
+        // The decrypt dialog only has text while it works, but its spinner
+        // ticks along with the others.
+        || matches!(state.decrypt.status, DecryptStatus::Working);
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
@@ -1829,6 +1844,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::DriverCancel
             | Message::BloatwareCancel
             | Message::UnpackCancel
+            | Message::DecryptCancel
             | Message::AboutClosed
             | Message::FastbootDevicePickerCancelled
     )
@@ -1882,6 +1898,8 @@ const OVERLAY_BLOATWARE: u8 = 0xB0;
 /// The "Unpack Image" dialog; its low nibble is the step it shows (the setup
 /// form, or the running extraction and its result).
 const OVERLAY_UNPACK: u8 = 0xD0;
+/// The "Tablet Firmware Decrypt" dialog.
+const OVERLAY_DECRYPT: u8 = 0xE0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
 
 /// Identifies the dialog card that is on screen (or [`OVERLAY_NONE`]), so that
@@ -1992,7 +2010,7 @@ fn overlay_key(state: &State) -> u8 {
 
     if unpack::is_open(state) {
         // The setup form, and the running extraction with its result.
-        let unpack = &state.flash.unpack;
+        let unpack = &state.unpack;
         let step = if unpack.working || unpack.result.is_some() {
             1
         } else {
@@ -2000,6 +2018,10 @@ fn overlay_key(state: &State) -> u8 {
         };
 
         return OVERLAY_UNPACK + step;
+    }
+
+    if decrypt::is_open(state) {
+        return OVERLAY_DECRYPT;
     }
 
     if state.about_open {
@@ -2103,10 +2125,27 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
-            SmartphoneFeature::UnpackImage => start_unpack_dialog(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
         },
+        Message::DecryptFeaturePressed(feature) => match feature {
+            decrypt_mode::DecryptFeature::TabletDecrypt => start_decrypt_dialog(state),
+            decrypt_mode::DecryptFeature::UnpackImage => start_unpack_dialog(state),
+        },
+        Message::DecryptCancel => {
+            // Never close the dialog while a batch is running: its result would
+            // have nowhere to go.
+            if matches!(
+                state.decrypt.status,
+                DecryptStatus::PickingDir | DecryptStatus::Working
+            ) {
+                return Task::none();
+            }
+
+            state.decrypt = DecryptState::default();
+            Task::none()
+        }
+        Message::DecryptBackdropPressed => Task::none(),
         Message::FactoryResetDevicesFetched(result) => {
             let reset = &mut state.flash.factory_reset;
             reset.listing = false;
@@ -2955,7 +2994,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::BloatwareBackdropPressed => Task::none(),
         Message::UnpackPickImageRequested => {
-            if state.flash.unpack.busy() {
+            if state.unpack.busy() {
                 return Task::none();
             }
 
@@ -2980,7 +3019,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 return Task::none();
             };
 
-            let unpack = &mut state.flash.unpack;
+            let unpack = &mut state.unpack;
             if unpack.busy() {
                 return Task::none();
             }
@@ -3013,7 +3052,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             )
         }
         Message::UnpackListed(path, result) => {
-            let unpack = &mut state.flash.unpack;
+            let unpack = &mut state.unpack;
 
             if unpack.image.as_deref() != Some(path.as_path()) {
                 return Task::none();
@@ -3038,7 +3077,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::UnpackPickFolderRequested => {
-            if state.flash.unpack.busy() {
+            if state.unpack.busy() {
                 return Task::none();
             }
 
@@ -3057,7 +3096,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::UnpackFolderPicked(folder) => {
             if let Some(folder) = folder {
-                state.flash.unpack.output = Some(folder);
+                state.unpack.output = Some(folder);
             }
 
             Task::none()
@@ -3066,7 +3105,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::UnpackLocate => {
             // Only a finished run has files to find; the button is drawn in
             // that state.
-            let Some(directory) = state.flash.unpack.output.clone() else {
+            let Some(directory) = state.unpack.output.clone() else {
                 return Task::none();
             };
 
@@ -3092,7 +3131,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::UnpackFolderOpened => Task::none(),
         Message::UnpackEvent(job, event) => {
-            let unpack = &mut state.flash.unpack;
+            let unpack = &mut state.unpack;
 
             // Stale events (a job the user left behind) are dropped.
             if job != unpack.job {
@@ -3119,11 +3158,11 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::UnpackWorkerDone => Task::none(),
         Message::UnpackCancel => {
             // Never close the dialog while the image is being read or written.
-            if state.flash.unpack.busy() {
+            if state.unpack.busy() {
                 return Task::none();
             }
 
-            state.flash.unpack = UnpackState::default();
+            state.unpack = UnpackState::default();
             Task::none()
         }
         Message::UnpackBackdropPressed => Task::none(),
@@ -4309,6 +4348,17 @@ fn request_lookup(state: &mut State) -> Task<Message> {
     )
 }
 
+/// Opens the "Tablet Firmware Decrypt" dialog. Nothing is decrypted yet: the
+/// dialog asks for the directory and starts the batch from its own button.
+fn start_decrypt_dialog(state: &mut State) -> Task<Message> {
+    state.decrypt = DecryptState {
+        open: true,
+        ..DecryptState::default()
+    };
+
+    Task::none()
+}
+
 /// Validates the decrypt form and starts decrypting the selected directory.
 fn start_decrypt(state: &mut State) -> Task<Message> {
     let Some(directory) = state.decrypt.directory.clone() else {
@@ -5225,7 +5275,7 @@ fn start_bloatware_remove(state: &mut State) -> Task<Message> {
 /// the image (whose directory is listed as soon as it is picked) and for the
 /// folder the files are written into.
 fn start_unpack_dialog(state: &mut State) -> Task<Message> {
-    state.flash.unpack = UnpackState {
+    state.unpack = UnpackState {
         open: true,
         ..UnpackState::default()
     };
@@ -5236,14 +5286,14 @@ fn start_unpack_dialog(state: &mut State) -> Task<Message> {
 /// Extracts the selected image on a worker thread, streaming its progress into
 /// the dialog.
 fn start_unpack_job(state: &mut State) -> Task<Message> {
-    let Some(image) = state.flash.unpack.image.clone() else {
+    let Some(image) = state.unpack.image.clone() else {
         return Task::none();
     };
-    let Some(output) = state.flash.unpack.output.clone() else {
+    let Some(output) = state.unpack.output.clone() else {
         return Task::none();
     };
 
-    let unpack = &mut state.flash.unpack;
+    let unpack = &mut state.unpack;
     if unpack.busy() {
         return Task::none();
     }
@@ -6241,7 +6291,7 @@ fn view(state: &State) -> Element<'_, Message> {
     let content = match state.mode {
         Mode::Mode1 => lookup::firmware_lookup_view(state),
         Mode::Mode2 => smartphone::smartphone_flash_view(state),
-        Mode::Mode3 => decrypt::view(state),
+        Mode::Mode3 => decrypt_mode::view(state),
     };
     let language_options: Vec<Labeled<l10n::Language>> = l10n::Language::ALL
         .iter()
@@ -6353,6 +6403,12 @@ fn view(state: &State) -> Element<'_, Message> {
     // Unpack Image dialog (image and output selection, contents, progress)
     // drawn over the whole window while it is open.
     if let Some(overlay) = unpack::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Tablet Firmware Decrypt dialog (directory, password, progress) drawn
+    // over the whole window while it is open.
+    if let Some(overlay) = decrypt::overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
