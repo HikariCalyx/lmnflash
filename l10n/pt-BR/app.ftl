@@ -95,6 +95,7 @@ flash-firmware-title = Gravar firmware
 flash-firmware-smartphone-button = Smartphone
 flash-firmware-tablet-button = Tablet
 firmware-flash-desc = Grava um pacote de firmware completo em um telefone conectado no modo fastboot. Selecione o ZIP do firmware, ou o flashfile.xml junto com seus arquivos de imagem. Isso substitui o firmware e apaga todos os dados do telefone.
+firmware-flash-desc-no-erase = Grava um pacote de firmware completo em um telefone conectado no modo fastboot. Selecione o ZIP do firmware, ou o flashfile.xml junto com seus arquivos de imagem. Isso substitui o firmware do telefone.
 firmware-flash-select = Selecionar pacote de firmware
 firmware-flash-no-package = Nenhum pacote selecionado
 firmware-flash-loading = Lendo o pacote de firmware…
@@ -204,6 +205,8 @@ login-fetching = Obtendo URL de login…
 login-webview-open = Conclua o login na janela de diálogo.
 login-button-hint-browser = Clique esquerdo: entrar com o navegador · Clique direito: entrar manualmente
 login-browser-waiting = Conclua o login no navegador — esta janela entrará automaticamente assim que você voltar.
+login-browser-cookie-hint = Recebeu o erro HTTP 400 durante o login? Limpe os cookies do domínio lenovo.com no seu navegador.
+login-retry-webview = Tentar novamente com WebView
 login-manual-prompt = Faça login no navegador e cole o link SoftwareFix://callback abaixo:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Abrir no navegador

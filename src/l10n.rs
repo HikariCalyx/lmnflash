@@ -481,6 +481,8 @@ mod tests {
             "login-protocol-restore",
             "login-button-hint-browser",
             "login-browser-waiting",
+            "login-browser-cookie-hint",
+            "login-retry-webview",
         ];
 
         for language in Language::ALL {
@@ -1009,6 +1011,23 @@ mod tests {
                 "multi-flash-close-prompt",
                 "multi-flash-close-prompt-ok",
             ] {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+        }
+    }
+
+    /// The Firmware Flash description exists in two variants: the plain one,
+    /// and one without the "erases all data" clause shown while no user-data
+    /// erase is selected. Both must be present in every locale.
+    #[test]
+    fn the_firmware_flash_description_renders_in_every_locale() {
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in ["firmware-flash-desc", "firmware-flash-desc-no-erase"] {
                 let text = bundle.tr(id);
 
                 assert!(!text.trim().is_empty(), "{language:?}: {id}");

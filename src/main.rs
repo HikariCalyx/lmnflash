@@ -1746,6 +1746,8 @@ enum Message {
     SubmitManual,
     LoginCallback(String),
     OpenBrowser,
+    /// Run the login in the embedded WebView instead of the system browser.
+    LoginWebViewRetry,
     CopyUrl,
     CancelLogin,
     ProtocolToggled,
@@ -5243,19 +5245,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                             return open_browser(&url);
                         }
 
-                        state.login = LoginStatus::WebViewOpen { url: url.clone() };
-                        let title = state.l10n.tr("login-dialog-title");
-
-                        Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || {
-                                    webview::show_login_dialog(&title, &url)
-                                })
-                                .await
-                                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
-                            },
-                            Message::WebViewFinished,
-                        )
+                        start_webview_login(state, url)
                     }
                 },
             }
@@ -5329,6 +5319,17 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
 
             Task::none()
+        }
+        Message::LoginWebViewRetry => {
+            // The browser login is stuck (typically an old lenovo.com session
+            // answering the sign-in page with HTTP 400), so run the login in
+            // the embedded WebView instead: it has its own cookie jar.
+            let url = match &state.login {
+                LoginStatus::WaitingForBrowser { url } => url.clone(),
+                _ => return Task::none(),
+            };
+
+            start_webview_login(state, url)
         }
         Message::OpenBrowser => {
             let url = match &state.login {
@@ -6145,6 +6146,26 @@ fn submit_telemetry(lookup: telemetry::Lookup, found: telemetry::Found) -> Task<
                 .unwrap_or_else(|e| Err(format!("telemetry background task failed: {e}")))
         },
         Message::TelemetrySent,
+    )
+}
+
+/// Opens the login URL in the embedded WebView instead of the system browser.
+///
+/// The WebView keeps its own cookie jar, so it is the way around a browser
+/// session that answers the sign-in page with HTTP 400. The result comes back
+/// as [`Message::WebViewFinished`]; a failure falls back to the manual login
+/// page with the URL shown.
+fn start_webview_login(state: &mut State, url: String) -> Task<Message> {
+    state.login = LoginStatus::WebViewOpen { url: url.clone() };
+    let title = state.l10n.tr("login-dialog-title");
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || webview::show_login_dialog(&title, &url))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::WebViewFinished,
     )
 }
 

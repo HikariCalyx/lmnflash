@@ -95,6 +95,7 @@ flash-firmware-title = 펌웨어 플래시
 flash-firmware-smartphone-button = 스마트폰
 flash-firmware-tablet-button = 태블릿
 firmware-flash-desc = fastboot 모드로 연결된 휴대폰에 전체 펌웨어 패키지를 플래시합니다. 펌웨어 ZIP 또는 flashfile.xml과 해당 이미지 파일을 선택하세요. 펌웨어가 덮어써지고 휴대폰의 모든 데이터가 지워집니다.
+firmware-flash-desc-no-erase = fastboot 모드로 연결된 휴대폰에 전체 펌웨어 패키지를 플래시합니다. 펌웨어 ZIP 또는 flashfile.xml과 해당 이미지 파일을 선택하세요. 펌웨어가 덮어써집니다.
 firmware-flash-select = 펌웨어 패키지 선택
 firmware-flash-no-package = 선택한 패키지 없음
 firmware-flash-loading = 펌웨어 패키지를 읽는 중…
@@ -204,6 +205,8 @@ login-fetching = 로그인 URL 가져오는 중…
 login-webview-open = 대화 상자 창에서 로그인을 완료하세요.
 login-button-hint-browser = 왼쪽 클릭: 브라우저로 로그인 · 오른쪽 클릭: 수동으로 로그인
 login-browser-waiting = 브라우저에서 로그인을 완료하세요. 돌아오면 이 창이 자동으로 로그인됩니다.
+login-browser-cookie-hint = 로그인 중 HTTP 400 오류가 발생했나요? 브라우저에서 lenovo.com 도메인의 쿠키를 삭제하세요.
+login-retry-webview = WebView로 다시 시도
 login-manual-prompt = 브라우저에서 로그인한 후 SoftwareFix://callback 링크를 아래에 붙여넣으세요.
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = 브라우저에서 열기

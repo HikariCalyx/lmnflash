@@ -117,6 +117,15 @@ pub(crate) mod widget {
         ) -> iced::widget::button::Style {
             crate::fluent::primary_button(theme, status)
         }
+
+        /// Fluent's secondary button (iced's `button::secondary`) — the class
+        /// a plain `button(..)` uses.
+        pub(crate) fn secondary(
+            theme: &crate::fluent::Theme,
+            status: iced::widget::button::Status,
+        ) -> iced::widget::button::Style {
+            crate::fluent::secondary_button(theme, status)
+        }
     }
 
     /// Fluent replacements for the iced pick-list styles.

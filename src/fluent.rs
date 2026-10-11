@@ -90,6 +90,16 @@ pub(crate) fn primary_button(
     iced_fluent_theme::button::rounded::primary(theme, status)
 }
 
+/// Fluent's secondary button style (iced's `button::secondary`), which is what
+/// a plain `button(..)` wears: [`iced_fluent_theme::button::Catalog`]'s default
+/// class is `rounded::secondary`.
+pub(crate) fn secondary_button(
+    theme: &Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    iced_fluent_theme::button::rounded::secondary(theme, status)
+}
+
 /// Fluent's pick-list style (iced's `pick_list::default`).
 pub(crate) fn pick_list_default(
     theme: &Theme,

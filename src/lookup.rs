@@ -11,6 +11,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Fill, Length};
 
+use crate::bootloader::warning_orange;
 use crate::bulk::bulk_summary;
 use crate::compat_iced as iced;
 use crate::compat_iced::*;
@@ -58,20 +59,37 @@ pub(crate) fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
         .spacing(12)
         .align_x(Alignment::Center)
         .into(),
-        LoginStatus::WaitingForBrowser { .. } => column![
-            text(l10n.tr("login-browser-waiting"))
-                .size(18.0)
-                .width(460)
-                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-            row![
-                button(text(l10n.tr("login-open-browser"))).on_press(Message::OpenBrowser),
-                button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
+        LoginStatus::WaitingForBrowser { .. } => {
+            // The browser keeps its own cookies, and an old lenovo.com session
+            // makes the sign-in page answer HTTP 400 instead of signing in; the
+            // embedded WebView has its own cookie jar, so it is the way around
+            // it (greyed out when no WebView is available on this machine).
+            let mut retry = button(text(l10n.tr("login-retry-webview")));
+            if crate::webview::webview_available() {
+                retry = retry.on_press(Message::LoginWebViewRetry);
+            }
+
+            column![
+                text(l10n.tr("login-browser-waiting"))
+                    .size(18.0)
+                    .width(460)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                text(l10n.tr("login-browser-cookie-hint"))
+                    .size(13.0)
+                    .width(460)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                    .style(warning_orange),
+                row![
+                    button(text(l10n.tr("login-open-browser"))).on_press(Message::OpenBrowser),
+                    retry,
+                    button(text(l10n.tr("login-cancel"))).on_press(Message::CancelLogin),
+                ]
+                .spacing(8),
             ]
-            .spacing(8),
-        ]
-        .spacing(12)
-        .align_x(Alignment::Center)
-        .into(),
+            .spacing(12)
+            .align_x(Alignment::Center)
+            .into()
+        }
         LoginStatus::Manual { url, input, notice, .. } => {
             let placeholder = l10n.tr("login-manual-placeholder");
 

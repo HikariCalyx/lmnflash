@@ -95,6 +95,7 @@ flash-firmware-title = ファームウェアの書き込み
 flash-firmware-smartphone-button = スマホ
 flash-firmware-tablet-button = タブレット
 firmware-flash-desc = fastboot モードで接続した端末に、完全なファームウェアパッケージを書き込みます。ファームウェアの ZIP、または flashfile.xml とそのイメージファイルを選択してください。ファームウェアは上書きされ、端末内のすべてのデータが消去されます。
+firmware-flash-desc-no-erase = fastboot モードで接続した端末に、完全なファームウェアパッケージを書き込みます。ファームウェアの ZIP、または flashfile.xml とそのイメージファイルを選択してください。ファームウェアは上書きされます。
 firmware-flash-select = ファームウェアパッケージを選択
 firmware-flash-no-package = パッケージが選択されていません
 firmware-flash-loading = ファームウェアパッケージを読み込んでいます…
@@ -204,6 +205,8 @@ login-fetching = ログイン URL を取得中…
 login-webview-open = ダイアログ ウィンドウでログインを完了してください。
 login-button-hint-browser = 左クリック：ブラウザーでログイン · 右クリック：手動でログイン
 login-browser-waiting = ブラウザーでログインを完了してください。戻るとこのウィンドウが自動的にサインインします。
+login-browser-cookie-hint = ログイン時に HTTP 400 エラーが発生しましたか？ブラウザーで lenovo.com ドメインの Cookie を削除してください。
+login-retry-webview = WebView で再試行
 login-manual-prompt = ブラウザーでログインし、SoftwareFix://callback リンクを下に貼り付けてください：
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = ブラウザーで開く

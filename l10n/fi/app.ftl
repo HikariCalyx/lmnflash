@@ -95,6 +95,7 @@ flash-firmware-title = Laiteohjelmiston flashays
 flash-firmware-smartphone-button = Älypuhelin
 flash-firmware-tablet-button = Tabletti
 firmware-flash-desc = Flashaa täydellisen laiteohjelmistopaketin fastboot-tilassa yhdistettyyn puhelimeen. Valitse laiteohjelmiston ZIP-tiedosto tai flashfile.xml ja sen kuvatiedostot. Tämä korvaa laiteohjelmiston ja poistaa kaikki puhelimen tiedot.
+firmware-flash-desc-no-erase = Flashaa täydellisen laiteohjelmistopaketin fastboot-tilassa yhdistettyyn puhelimeen. Valitse laiteohjelmiston ZIP-tiedosto tai flashfile.xml ja sen kuvatiedostot. Tämä korvaa laiteohjelmiston puhelimessa.
 firmware-flash-select = Valitse laiteohjelmistopaketti
 firmware-flash-no-package = Pakettia ei ole valittu
 firmware-flash-loading = Luetaan laiteohjelmistopakettia…
@@ -204,6 +205,8 @@ login-fetching = Noudetaan kirjautumis-URL-osoitetta…
 login-webview-open = Viimeistele kirjautuminen valintaikkunassa.
 login-button-hint-browser = Vasen klikkaus: kirjaudu selaimella · Oikea klikkaus: kirjaudu manuaalisesti
 login-browser-waiting = Viimeistele kirjautuminen selaimessa — tämä ikkuna kirjautuu heti, kun palaat.
+login-browser-cookie-hint = Saitko HTTP-virheen 400 kirjautumisen aikana? Tyhjennä selaimesta lenovo.com-verkkotunnuksen evästeet.
+login-retry-webview = Yritä uudelleen WebView'llä
 login-manual-prompt = Kirjaudu selaimella ja liitä SoftwareFix://callback-linkki alle:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Avaa selaimessa

@@ -87,9 +87,19 @@ fn card(state: &State) -> Element<'_, Message> {
     let flash = &state.flash.firmware;
     let busy = flash.loading || flash.running;
 
+    // The description warns that flashing "erases all data on the phone".
+    // That is only what the job does while a user-data erase is part of it, so
+    // the clause is dropped once `erase userdata`/`erase metadata` (or the
+    // group that clears them) is no longer selected.
+    let description = if erases_user_data(state) {
+        l10n.tr("firmware-flash-desc")
+    } else {
+        l10n.tr("firmware-flash-desc-no-erase")
+    };
+
     let mut content = column![
         text(l10n.tr("flash-firmware-title")).size(18.0),
-        text(l10n.tr("firmware-flash-desc"))
+        text(description)
             .size(14.0)
             .width(Fill)
             .wrapping(Wrapping::WordOrGlyph),
@@ -114,31 +124,40 @@ fn card(state: &State) -> Element<'_, Message> {
     // the phone is not left half-flashed. "Enter Multi Flashing Mode" hands
     // the user to the multi-device workspace and is locked for the same
     // reason.
-    content = content.push(horizontal_rule(1));
+    //
+    // Both are hidden once the user committed to a flash: the warning page and
+    // the running/result page carry their own way back, and leaving them from
+    // the footer would either skip the warning or abandon a half-flashed
+    // phone.
+    let footer = !flash.confirming && !(flash.running || flash.result.is_some());
 
-    let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
-    let multi = button(text(l10n.tr("firmware-flash-multi-flashing"))).width(Fill);
-    // The Multi Flashing workspace behind this button is still being built, so
-    // it is only live in a debug build. There it also waits for a free dialog,
-    // like Cancel does (iced greys a button without `on_press` out and ignores
-    // clicks on it).
-    let multi = if cfg!(debug_assertions) && !busy {
-        multi.on_press(Message::FirmwareFlashMultiFlashing)
-    } else {
-        multi
-    };
+    if footer {
+        content = content.push(horizontal_rule(1));
 
-    content = content.push(
-        row![
-            if busy {
-                cancel
-            } else {
-                cancel.on_press(Message::FirmwareFlashCancel)
-            },
-            multi,
-        ]
-        .spacing(8),
-    );
+        let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
+        let multi = button(text(l10n.tr("firmware-flash-multi-flashing"))).width(Fill);
+        // The Multi Flashing workspace behind this button is still being built, so
+        // it is only live in a debug build. There it also waits for a free dialog,
+        // like Cancel does (iced greys a button without `on_press` out and ignores
+        // clicks on it).
+        let multi = if cfg!(debug_assertions) && !busy {
+            multi.on_press(Message::FirmwareFlashMultiFlashing)
+        } else {
+            multi
+        };
+
+        content = content.push(
+            row![
+                if busy {
+                    cancel
+                } else {
+                    cancel.on_press(Message::FirmwareFlashCancel)
+                },
+                multi,
+            ]
+            .spacing(8),
+        );
+    }
 
     // The padding sits inside the scrollable, so the card's border is the
     // viewport: the scrollbar rides on the right border instead of floating
@@ -152,6 +171,35 @@ fn card(state: &State) -> Element<'_, Message> {
     .height(520)
     .style(darker_card)
     .into()
+}
+
+/// Whether the job erases the phone's user data: the "Erase Userdata" group
+/// (which clears both `userdata` and `metadata`), or an `erase userdata` /
+/// `erase metadata` step of the package itself while it is checked. An
+/// unchecked step does not run, so it does not count.
+///
+/// The description at the top of [`card`] only claims that flashing "erases
+/// all data on the phone" while this is true.
+fn erases_user_data(state: &State) -> bool {
+    let flash = &state.flash.firmware;
+
+    if flash.erase_groups.contains(&EraseGroup::Userdata) {
+        return true;
+    }
+
+    flash.plan.as_ref().is_some_and(|package| {
+        package.steps.iter().enumerate().any(|(index, step)| {
+            let crate::flashfile::FlashOp::Erase { partition } = step else {
+                return false;
+            };
+
+            flash.enabled.get(index).copied().unwrap_or(true)
+                && matches!(
+                    crate::flashfile::normalize_partition(partition).as_str(),
+                    "userdata" | "metadata"
+                )
+        })
+    })
 }
 
 /// Package selection, tool selection, and device selection.
@@ -561,16 +609,19 @@ fn current_slot_known(state: &State) -> bool {
 
 /// The style of a dropdown that is a menu of one-shot actions sitting in the
 /// same row as buttons, so it is drawn like them: it borrows the style of a
-/// primary button — the class a plain `button(..)` uses — instead of the pick
-/// list's own field, which is nearly white on a light theme and disappears
-/// against the white dialog. It is used by the Reboot dropdown here and by the
-/// "Disconnect" one in [`crate::wireless_dialog`].
+/// secondary button — the class a plain `button(..)` uses, and the one its
+/// neighbours in that row wear — instead of the pick list's own field, which
+/// is nearly white on a light theme and disappears against the white dialog.
+/// It is used by the Reboot dropdown here and by the "Disconnect" one in
+/// [`crate::wireless_dialog`].
 ///
 /// (The first attempt only recoloured the placeholder, to
 /// `primary.strong.text` — the colour that goes *on* a primary button, i.e.
 /// white in a light theme — and then to the plain text colour, which read as a
 /// chosen value but still left the field looking like an empty input rather
-/// than the button it sits next to.)
+/// than the button it sits next to. Recolouring the *whole* control with
+/// `button::primary` fixed that, but made the menu the only filled control in a
+/// row of plain ones; hence secondary.)
 pub(crate) fn menu_style(
     theme: &crate::fluent::Theme,
     status: pick_list::Status,
@@ -581,7 +632,7 @@ pub(crate) fn menu_style(
         // hovered by the pointer.
         pick_list::Status::Hovered | pick_list::Status::Opened { .. } => button::Status::Hovered,
     };
-    let button = button::primary(theme, button_status);
+    let button = button::secondary(theme, button_status);
 
     let mut style = pick_list::default(theme, status);
     style.background = button.background.unwrap_or(style.background);

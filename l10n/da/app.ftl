@@ -95,6 +95,7 @@ flash-firmware-title = Firmwareflash
 flash-firmware-smartphone-button = Smartphone
 flash-firmware-tablet-button = Tablet
 firmware-flash-desc = Flasher en komplet firmwarepakke til en telefon, der er tilsluttet i fastboot-tilstand. Vælg firmware-ZIP-filen, eller flashfile.xml sammen med dens billedfiler. Dette overskriver firmwaren og sletter alle data på telefonen.
+firmware-flash-desc-no-erase = Flasher en komplet firmwarepakke til en telefon, der er tilsluttet i fastboot-tilstand. Vælg firmware-ZIP-filen, eller flashfile.xml sammen med dens billedfiler. Dette overskriver firmwaren på telefonen.
 firmware-flash-select = Vælg firmwarepakke
 firmware-flash-no-package = Ingen pakke valgt
 firmware-flash-loading = Læser firmwarepakken…
@@ -204,6 +205,8 @@ login-fetching = Henter login-URL…
 login-webview-open = Fuldfør login i dialogvinduet.
 login-button-hint-browser = Venstreklik: log ind med din browser · Højreklik: log ind manuelt
 login-browser-waiting = Fuldfør login i din browser — dette vindue logger ind, så snart du vender tilbage.
+login-browser-cookie-hint = Fik du HTTP-fejl 400 under login? Ryd cookies under domænet lenovo.com i din browser.
+login-retry-webview = Prøv igen med WebView
 login-manual-prompt = Log ind i din browser, og indsæt derefter SoftwareFix://callback-linket:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Åbn i browser

@@ -95,6 +95,7 @@ flash-firmware-title = Прошивання прошивки
 flash-firmware-smartphone-button = Смартфон
 flash-firmware-tablet-button = Планшет
 firmware-flash-desc = Прошиває повний пакет прошивки на телефон, підключений у режимі fastboot. Виберіть ZIP-архів прошивки або flashfile.xml разом із файлами образів. Прошивку буде перезаписано, а всі дані на телефоні — видалено.
+firmware-flash-desc-no-erase = Прошиває повний пакет прошивки на телефон, підключений у режимі fastboot. Виберіть ZIP-архів прошивки або flashfile.xml разом із файлами образів. Прошивку буде перезаписано.
 firmware-flash-select = Вибрати пакет прошивки
 firmware-flash-no-package = Пакет не вибрано
 firmware-flash-loading = Читання пакета прошивки…
@@ -204,6 +205,8 @@ login-fetching = Отримання URL входу…
 login-webview-open = Завершіть вхід у діалоговому вікні.
 login-button-hint-browser = Лівий клік: вхід через браузер · Правий клік: ручний вхід
 login-browser-waiting = Завершіть вхід у браузері — це вікно виконає вхід, щойно ви повернетеся.
+login-browser-cookie-hint = Отримали помилку HTTP 400 під час входу? Видаліть файли cookie для домену lenovo.com у браузері.
+login-retry-webview = Повторити через WebView
 login-manual-prompt = Увійдіть у браузері, потім вставте посилання SoftwareFix://callback нижче:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Відкрити в браузері

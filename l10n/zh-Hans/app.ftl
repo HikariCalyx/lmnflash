@@ -95,6 +95,7 @@ flash-firmware-title = 固件刷写
 flash-firmware-smartphone-button = 智能手机
 flash-firmware-tablet-button = 平板电脑
 firmware-flash-desc = 将完整固件包刷入处于 fastboot 模式的手机。请选择固件 ZIP 压缩包，或 flashfile.xml 及其镜像文件。此操作会覆盖手机固件并清除手机上的所有数据。
+firmware-flash-desc-no-erase = 将完整固件包刷入处于 fastboot 模式的手机。请选择固件 ZIP 压缩包，或 flashfile.xml 及其镜像文件。此操作会覆盖手机固件。
 firmware-flash-select = 选择固件包
 firmware-flash-no-package = 未选择固件包
 firmware-flash-loading = 正在读取固件包…
@@ -204,6 +205,8 @@ login-fetching = 正在获取登录链接…
 login-webview-open = 请在弹窗中完成登录。
 login-button-hint-browser = 左键单击：使用浏览器登录 · 右键单击：手动登录
 login-browser-waiting = 请在浏览器中完成登录，回到本窗口后将自动登录。
+login-browser-cookie-hint = 登录时出现 HTTP 400 错误？请用浏览器清除 lenovo.com 域名下的 Cookies。
+login-retry-webview = 使用 WebView 重试
 login-manual-prompt = 请在浏览器中登录，然后将 SoftwareFix://callback 链接粘贴到下面：
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = 在浏览器中打开

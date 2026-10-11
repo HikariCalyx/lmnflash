@@ -95,6 +95,7 @@ flash-firmware-title = Flash del firmware
 flash-firmware-smartphone-button = Smartphone
 flash-firmware-tablet-button = Tablet
 firmware-flash-desc = Esegue il flash di un pacchetto firmware completo su un telefono collegato in modalità fastboot. Seleziona lo ZIP del firmware, oppure il flashfile.xml insieme ai suoi file immagine. L'operazione sovrascrive il firmware e cancella tutti i dati del telefono.
+firmware-flash-desc-no-erase = Esegue il flash di un pacchetto firmware completo su un telefono collegato in modalità fastboot. Seleziona lo ZIP del firmware, oppure il flashfile.xml insieme ai suoi file immagine. L'operazione sovrascrive il firmware del telefono.
 firmware-flash-select = Seleziona pacchetto firmware
 firmware-flash-no-package = Nessun pacchetto selezionato
 firmware-flash-loading = Lettura del pacchetto firmware…
@@ -204,6 +205,8 @@ login-fetching = Recupero URL di accesso…
 login-webview-open = Completa l'accesso nella finestra di dialogo.
 login-button-hint-browser = Clic sinistro: accedi con il browser · Clic destro: accedi manualmente
 login-browser-waiting = Completa l'accesso nel browser: questa finestra effettuerà l'accesso appena torni.
+login-browser-cookie-hint = Hai ricevuto un errore HTTP 400 durante l'accesso? Cancella i cookie del dominio lenovo.com nel tuo browser.
+login-retry-webview = Riprova con WebView
 login-manual-prompt = Accedi con il browser, poi incolla il link SoftwareFix://callback qui sotto:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
 login-open-browser = Apri nel browser
