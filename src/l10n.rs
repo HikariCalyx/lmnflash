@@ -582,6 +582,7 @@ mod tests {
             "bloatware-select-device",
             "bloatware-no-device",
             "bloatware-unauthorized",
+            "bloatware-retry",
             "bloatware-checking",
             "bloatware-found-heading",
             "bloatware-search",
@@ -752,6 +753,7 @@ mod tests {
             "captive-portal-done",
             "captive-portal-unsupported",
             "captive-portal-manual-airplane",
+            "captive-portal-retry",
         ];
 
         for language in Language::ALL {

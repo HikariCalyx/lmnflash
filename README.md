@@ -220,7 +220,9 @@ The uninstall is per user: the system partition is not touched, and a removed
 app comes back with `pm install-existing --user 0 <package>` over ADB or a
 factory reset — the dialog says so afterwards. A device that has not accepted
 this computer's debugging key yet is reported as unauthorized until the "Allow
-USB debugging?" prompt is accepted on it; **Refresh** re-scans the USB bus.
+USB debugging?" prompt is accepted on it; such a device carries a **Retry**
+button (`adb -s <serial> reconnect`), which makes it show that prompt again if
+it was dismissed by mistake, and **Refresh** re-scans the USB bus.
 
 ## Connect ADB Wireless Debugging
 
@@ -270,7 +272,11 @@ settings put global ntp_server time.asia.apple.com
 ```
 
 The dialog lists the devices connected with USB debugging enabled; the one that
-is picked runs the fix. Android 5.0 is the oldest version with any of these
+is picked runs the fix. A device that has not accepted this computer's debugging
+key is listed as unauthorized and offers a **Retry** button instead, which runs
+`adb -s <serial> reconnect` — that makes the device show its *"Allow USB
+debugging?"* prompt again, so a prompt dismissed by mistake can be answered.
+Android 5.0 is the oldest version with any of these
 settings, so anything older is reported as unsupported instead of being
 changed. On Android 10 and newer the connection is also cycled afterwards
 (`cmd connectivity airplane-mode enable`, a five-second wait, `disable`),

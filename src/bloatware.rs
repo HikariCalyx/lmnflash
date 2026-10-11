@@ -180,6 +180,11 @@ fn device_section(state: &State) -> Element<'_, Message> {
             .iter()
             .filter(|device| device.state == AdbDeviceState::Ready)
             .collect();
+        let unauthorized: Vec<_> = bloatware
+            .devices
+            .iter()
+            .filter(|device| device.state == AdbDeviceState::Unauthorized)
+            .collect();
 
         if !ready.is_empty() {
             content = content.push(
@@ -191,15 +196,31 @@ fn device_section(state: &State) -> Element<'_, Message> {
                 }))
                 .spacing(8),
             );
-        } else if bloatware
-            .devices
-            .iter()
-            .any(|device| device.state == AdbDeviceState::Unauthorized)
-        {
+        }
+
+        if !unauthorized.is_empty() {
             // The device answered, but has not accepted this computer's
-            // debugging key yet.
+            // debugging key yet. The prompt is only shown while the device
+            // (re)connects, so one that was dismissed by mistake is brought
+            // back by reconnecting to that device rather than by scanning the
+            // bus again.
             content = content.push(notice(l10n.tr("bloatware-unauthorized")));
-        } else {
+            content = content.push(
+                Column::with_children(unauthorized.iter().map(|device| {
+                    button(text(format!(
+                        "{} — {}",
+                        device.label(),
+                        l10n.tr("bloatware-retry")
+                    )))
+                    .width(Fill)
+                    .on_press(Message::BloatwareRetry(device.serial.clone()))
+                    .into()
+                }))
+                .spacing(8),
+            );
+        }
+
+        if ready.is_empty() && unauthorized.is_empty() {
             content = content.push(notice(l10n.tr("bloatware-no-device")));
         }
     }

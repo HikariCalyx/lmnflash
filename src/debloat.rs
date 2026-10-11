@@ -459,6 +459,19 @@ pub fn list_devices() -> Result<Vec<AdbDevice>, String> {
     Ok(parse_devices(&platform_tools::run_adb(&["devices", "-l"])?))
 }
 
+/// Asks `adb` to reconnect to `serial`, which makes the device show its
+/// "Allow USB debugging?" prompt again.
+///
+/// A prompt that was dismissed by mistake leaves the device listed as
+/// unauthorized, and the prompt is only shown while the device (re)connects —
+/// so reconnecting is what brings it back. The dialogs that list devices use
+/// this for the "Retry" button next to an unauthorized one.
+pub fn reconnect(serial: &str) -> Result<(), String> {
+    ensure_adb()?;
+
+    platform_tools::run_adb(&["-s", serial, "reconnect"]).map(|_| ())
+}
+
 /// The bloatware packages installed on `serial`.
 pub fn list_installed(serial: &str) -> Result<Vec<Bloatware>, String> {
     let output = platform_tools::run_adb(&["-s", serial, "shell", "pm", "list", "packages"])?;

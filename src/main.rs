@@ -2077,6 +2077,9 @@ enum Message {
     BloatwareDevicesFetched(Result<Vec<debloat::AdbDevice>, String>),
     /// Remove System Bloatware: the user picked the device to work on.
     BloatwareDeviceSelected(String),
+    /// Remove System Bloatware: reconnect to a device whose "Allow USB
+    /// debugging?" prompt was dismissed, so it is shown again.
+    BloatwareRetry(String),
     /// Remove System Bloatware: re-scan for connected devices.
     BloatwareRescan,
     /// Remove System Bloatware: the device's installed bloatware was read.
@@ -2138,6 +2141,9 @@ enum Message {
     CaptivePortalRescan,
     /// Fix Captive Portal Server: the device to fix was chosen.
     CaptivePortalDeviceSelected(String),
+    /// Fix Captive Portal Server: reconnect to a device whose "Allow USB
+    /// debugging?" prompt was dismissed, so it is shown again.
+    CaptivePortalRetry(String),
     /// Fix Captive Portal Server: apply the fix to the chosen device.
     CaptivePortalFix,
     /// Fix Captive Portal Server: the fix finished.
@@ -3776,6 +3782,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::BloatwareDeviceSelected(serial) => start_bloatware_check(state, serial),
+        Message::BloatwareRetry(serial) => start_bloatware_retry(state, serial),
         Message::BloatwareRescan => {
             if state.flash.bloatware.busy() {
                 return Task::none();
@@ -4112,6 +4119,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             portal.result = None;
             Task::none()
         }
+        Message::CaptivePortalRetry(serial) => start_captive_portal_retry(state, serial),
         Message::CaptivePortalFix => {
             let Some(serial) = state.flash.captive_portal.selected.clone() else {
                 return Task::none();
@@ -6949,6 +6957,37 @@ fn start_firmware_flash_reboot(
     Task::batch([producer, consumer])
 }
 
+/// Reconnects to `serial`, then lists the devices `adb devices` reports,
+/// which is what turns a device whose "Allow USB debugging?" prompt was
+/// dismissed into one the dialog can work on.
+///
+/// The listing is the one the device step starts from, so a device that was
+/// authorized this time is picked up by the auto-selection a single ready
+/// device triggers.
+fn start_bloatware_retry(state: &mut State, serial: String) -> Task<Message> {
+    let bloatware = &mut state.flash.bloatware;
+
+    if bloatware.busy() {
+        return Task::none();
+    }
+
+    bloatware.preparing = true;
+    bloatware.prepare_error = None;
+    bloatware.devices.clear();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                debloat::reconnect(&serial)?;
+                debloat::list_devices()
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        Message::BloatwareDevicesFetched,
+    )
+}
+
 /// Clears every working field of the bloatware dialog, keeping only its open
 /// state (the caller sets what the new step needs).
 fn reset_bloatware(bloatware: &mut BloatwareState) {
@@ -7168,6 +7207,35 @@ fn start_captive_portal_devices() -> Task<Message> {
             tokio::task::spawn_blocking(debloat::list_devices)
                 .await
                 .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::CaptivePortalDevicesFetched,
+    )
+}
+
+/// Reconnects to `serial`, then reads the devices `adb devices` lists.
+///
+/// Reconnecting is what makes a device whose "Allow USB debugging?" prompt was
+/// dismissed show it again; the listing that follows is what says whether the
+/// prompt was accepted.
+fn start_captive_portal_retry(state: &mut State, serial: String) -> Task<Message> {
+    let portal = &mut state.flash.captive_portal;
+
+    if portal.busy() {
+        return Task::none();
+    }
+
+    portal.listing = true;
+    portal.list_error = None;
+    portal.devices.clear();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                debloat::reconnect(&serial)?;
+                debloat::list_devices()
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
         },
         Message::CaptivePortalDevicesFetched,
     )
