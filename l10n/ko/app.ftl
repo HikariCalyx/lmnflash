@@ -486,3 +486,6 @@ multi-flash-start = 시작
 multi-flash-stop = 중지
 multi-flash-close-prompt = 닫기 전에 작업을 중지하십시오.
 multi-flash-close-prompt-ok = 확인
+
+# Firmware Flash: the selected ZIP is not a firmware package.
+firmware-flash-invalid-package = 선택한 ZIP 아카이브는 유효한 펌웨어 패키지가 아닙니다(flashfile.xml이 없음)

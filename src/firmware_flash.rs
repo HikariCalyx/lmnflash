@@ -22,7 +22,7 @@ use iced::{Alignment, Element, Fill};
 use crate::bootloader::{bright_success, darker_card, warning_orange};
 use crate::fastboot_info::{self, SecureState};
 use crate::flash_engine::{Engine, RebootMode};
-use crate::flashfile::{EraseGroup, FlashPart};
+use crate::flashfile::{EraseGroup, FlashPart, LoadError};
 use crate::guided::spinner;
 use crate::text;
 use crate::{enabled_procedures, engine_tool_missing, FirmwareFlashDialog, Labeled, Message, State};
@@ -220,8 +220,16 @@ fn setup_section(state: &State) -> Element<'_, Message> {
             content = content.push(bar(fraction(done, total)));
         }
     } else if let Some(error) = &flash.error {
+        // The one message the user has to act on is translated; the rest come
+        // from the ZIP reader, the XML parser or the file system and are shown
+        // as they are.
+        let message = match error {
+            LoadError::NotAPackage => l10n.tr("firmware-flash-invalid-package"),
+            LoadError::Other(message) => message.clone(),
+        };
+
         content = content.push(
-            text(error.clone())
+            text(message)
                 .size(13.0)
                 .width(Fill)
                 .wrapping(Wrapping::WordOrGlyph)
@@ -418,6 +426,10 @@ fn setup_section(state: &State) -> Element<'_, Message> {
     // dropdown rather than a page of their own, and picking one runs it — the
     // control keeps its `Reboot` placeholder, so it reads as a menu and every
     // pick (even the same one twice) sends a fresh command.
+    //
+    // Without a connected phone there is nothing a reboot could act on, and
+    // iced cannot grey a `pick_list` out, so the control is a plain button
+    // (which a missing `on_press` does disable) until a device is selected.
     let mut modes = vec![
         reboot_option(l10n, "firmware-flash-reboot-system", RebootMode::System),
         reboot_option(
@@ -459,19 +471,27 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         RebootMode::Sideload,
     ));
 
-    let reboot: iced::widget::PickList<
-        '_,
-        Labeled<RebootMode>,
-        Vec<Labeled<RebootMode>>,
-        Labeled<RebootMode>,
-        Message,
-    > = pick_list(modes, None, |mode| {
-        Message::FirmwareFlashRebootSelected(mode.value)
-    })
-    .placeholder(l10n.tr("firmware-flash-reboot"))
-    .text_shaping(Shaping::Advanced)
-    .style(reboot_menu_style)
-    .width(Fill);
+    let reboot: Element<'_, Message> = if flash.selected.is_some() && !busy {
+        let reboot: iced::widget::PickList<
+            '_,
+            Labeled<RebootMode>,
+            Vec<Labeled<RebootMode>>,
+            Labeled<RebootMode>,
+            Message,
+        > = pick_list(modes, None, |mode| {
+            Message::FirmwareFlashRebootSelected(mode.value)
+        })
+        .placeholder(l10n.tr("firmware-flash-reboot"))
+        .text_shaping(Shaping::Advanced)
+        .style(reboot_menu_style)
+        .width(Fill);
+
+        reboot.into()
+    } else {
+        button(text(l10n.tr("firmware-flash-reboot")))
+            .width(Fill)
+            .into()
+    };
 
     // The three controls share the row, so they share its width too.
     let export = export.width(Fill);

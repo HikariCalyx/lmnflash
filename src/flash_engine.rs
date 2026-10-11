@@ -105,7 +105,7 @@ pub enum PackageEvent {
     Log(String),
     /// The package is ready to be flashed.
     Ready(Box<FlashPackage>),
-    Failed(String),
+    Failed(flashfile::LoadError),
 }
 
 /// Events emitted while a package is being flashed.

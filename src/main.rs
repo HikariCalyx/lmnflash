@@ -1032,7 +1032,7 @@ struct FirmwareFlashState {
     /// `true` while the procedure checklist is shown.
     editing: bool,
     /// Package-loading failure.
-    error: Option<String>,
+    error: Option<flashfile::LoadError>,
     /// `mfastboot` builds found next to the application (newest first).
     mfastboot: Vec<flash_engine::Mfastboot>,
     /// Google's `fastboot`, when this system has a download for it. Built when
@@ -5132,9 +5132,9 @@ fn start_firmware_flash_load(state: &mut State, path: std::path::PathBuf) -> Tas
                 tokio::task::spawn_blocking(move || flash_engine::load_package(&path, &emit));
 
             if let Err(error) = worker.await {
-                let _ = failure_sender.unbounded_send(flash_engine::PackageEvent::Failed(format!(
-                    "background task failed: {error}"
-                )));
+                let _ = failure_sender.unbounded_send(flash_engine::PackageEvent::Failed(
+                    format!("background task failed: {error}").into(),
+                ));
             }
         },
         |()| Message::FirmwareFlashWorkerDone,

@@ -486,3 +486,6 @@ multi-flash-start = Start
 multi-flash-stop = Stopp
 multi-flash-close-prompt = Stopp handlingen før du lukker.
 multi-flash-close-prompt-ok = OK
+
+# Firmware Flash: the selected ZIP is not a firmware package.
+firmware-flash-invalid-package = Den valgte ZIP-filen er ikke en gyldig fastvarepakke (ingen flashfile.xml inni)

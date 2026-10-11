@@ -449,6 +449,52 @@ pub fn cleanup_work_directory() {
     let _ = std::fs::remove_dir_all(work_directory());
 }
 
+/// Why a package could not be loaded.
+///
+/// Most of what the loader reports is technical text — from the ZIP reader,
+/// the XML parser or the file system — which the dialog shows as it is. The
+/// one message the user has to act on is a value instead, so the dialog can
+/// translate it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadError {
+    /// The ZIP archive holds no `flashfile.xml`, so it is not a firmware
+    /// package at all.
+    NotAPackage,
+    /// Anything else the loader ran into.
+    Other(String),
+}
+
+impl LoadError {
+    /// The English wording, for the places that need a message but have no
+    /// translation at hand.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::NotAPackage => {
+                "The selected ZIP archive is not a valid firmware package (no flashfile.xml inside)"
+            }
+            Self::Other(message) => message,
+        }
+    }
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl From<String> for LoadError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<&str> for LoadError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.to_owned())
+    }
+}
+
 /// Loads a package from `path`: a ZIP archive or a `flashfile.xml`.
 ///
 /// `on_progress` reports the ZIP extraction as `(bytes_written, total_bytes)`.
@@ -456,13 +502,13 @@ pub fn cleanup_work_directory() {
 pub fn load(
     path: &Path,
     on_progress: &mut dyn FnMut(u64, u64),
-) -> Result<FlashPackage, String> {
+) -> Result<FlashPackage, LoadError> {
     if path.is_dir() {
-        return Err("select the firmware ZIP or its flashfile.xml, not a directory".to_owned());
+        return Err("select the firmware ZIP or its flashfile.xml, not a directory".into());
     }
 
     if !path.is_file() {
-        return Err(format!("{} does not exist", path.display()));
+        return Err(format!("{} does not exist", path.display()).into());
     }
 
     let is_zip = path
@@ -470,6 +516,14 @@ pub fn load(
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"));
 
     let directory = if is_zip {
+        // A ZIP without a `flashfile.xml` is not a firmware package. Saying so
+        // here means a file that was picked by mistake never gets unpacked
+        // (a factory package is several gigabytes of images), and the dialog
+        // reports it as invalid instead of failing halfway through.
+        if !zip_has_flashfile(path)? {
+            return Err(LoadError::NotAPackage);
+        }
+
         let destination = work_directory();
         cleanup_work_directory();
         std::fs::create_dir_all(&destination)
@@ -759,6 +813,44 @@ pub fn find_flashfile(directory: &Path) -> Option<PathBuf> {
     }
 
     search(directory, 3)
+}
+
+/// Whether a ZIP archive holds a `flashfile.xml`, at the same depth
+/// [`find_flashfile`] searches.
+///
+/// This runs before the archive is unpacked, so a file that is not a firmware
+/// package is rejected without writing anything to disk.
+fn zip_has_flashfile(archive: &Path) -> Result<bool, String> {
+    /// Directory levels [`find_flashfile`] searches; the two have to agree,
+    /// or a package would pass this check only to fail that search.
+    const DEPTH: usize = 3;
+
+    let file = std::fs::File::open(archive)
+        .map_err(|error| format!("could not open {}: {error}", archive.display()))?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|error| format!("{} is not a readable ZIP archive: {error}", archive.display()))?;
+
+    for index in 0..zip.len() {
+        // An entry that cannot be read is left to the extraction to complain
+        // about; only the names matter here.
+        let Ok(entry) = zip.by_index(index) else {
+            continue;
+        };
+
+        // The name as the archive spells it, e.g. `XT2451/arcfox/flashfile.xml`.
+        let name = entry.name().replace('\\', "/");
+        let mut parts: Vec<&str> = name.split('/').filter(|part| !part.is_empty()).collect();
+
+        let Some(file_name) = parts.pop() else {
+            continue;
+        };
+
+        if parts.len() <= DEPTH && file_name.eq_ignore_ascii_case("flashfile.xml") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Extracts every file of a ZIP archive into `destination`.
@@ -1311,5 +1403,78 @@ mod tests {
             .describe(),
             "oem config bootmode fastboot"
         );
+    }
+
+    /// A ZIP archive built in memory.
+    fn zip_archive(entries: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+
+        for (name, contents) in entries {
+            writer
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(contents.as_bytes()).unwrap();
+        }
+
+        writer.finish().unwrap().into_inner()
+    }
+
+    /// Writes such an archive into a file of its own.
+    fn zip_file(name: &str, entries: &[(&str, &str)]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("lmnflash-flashfile-{name}.zip"));
+        std::fs::write(&path, zip_archive(entries)).unwrap();
+
+        path
+    }
+
+    #[test]
+    fn a_zip_without_a_flashfile_is_not_a_package() {
+        let path = zip_file(
+            "no-flashfile",
+            &[("gpt.bin", "binary"), ("boot.img", "binary")],
+        );
+
+        assert!(!zip_has_flashfile(&path).unwrap());
+        // The package is rejected before anything is unpacked, and with the
+        // error the dialog knows to translate rather than print.
+        assert!(matches!(
+            load(&path, &mut |_, _| {}),
+            Err(LoadError::NotAPackage)
+        ));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_zip_with_a_flashfile_passes_the_pre_check() {
+        let root = zip_file("flashfile-root", &[("flashfile.xml", "xml")]);
+        assert!(zip_has_flashfile(&root).unwrap());
+        let _ = std::fs::remove_file(&root);
+
+        // A factory package wraps everything in a per-model folder.
+        let nested = zip_file("flashfile-nested", &[("XT2451/arcfox/flashfile.xml", "xml")]);
+        assert!(zip_has_flashfile(&nested).unwrap());
+        let _ = std::fs::remove_file(&nested);
+
+        // The name is matched without regard to case, like `find_flashfile`.
+        let upper = zip_file("flashfile-upper", &[("FLASHFILE.XML", "xml")]);
+        assert!(zip_has_flashfile(&upper).unwrap());
+        let _ = std::fs::remove_file(&upper);
+    }
+
+    #[test]
+    fn a_flashfile_beyond_the_searched_depth_does_not_count() {
+        // `find_flashfile` searches three directories down at most, and this
+        // check has to agree with it: a package it cannot find would otherwise
+        // be unpacked and then reported as having no flashfile after all.
+        let found = zip_file("flashfile-at-depth", &[("a/b/c/flashfile.xml", "xml")]);
+        assert!(zip_has_flashfile(&found).unwrap());
+        let _ = std::fs::remove_file(&found);
+
+        let too_deep = zip_file("flashfile-too-deep", &[("a/b/c/d/flashfile.xml", "xml")]);
+        assert!(!zip_has_flashfile(&too_deep).unwrap());
+        let _ = std::fs::remove_file(&too_deep);
     }
 }

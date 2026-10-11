@@ -486,3 +486,6 @@ multi-flash-start = 開始
 multi-flash-stop = 停止
 multi-flash-close-prompt = 請在關閉前停止操作。
 multi-flash-close-prompt-ok = 確定
+
+# Firmware Flash: the selected ZIP is not a firmware package.
+firmware-flash-invalid-package = 所選的 ZIP 壓縮檔不是有效的韌體套件（其中沒有 flashfile.xml）
