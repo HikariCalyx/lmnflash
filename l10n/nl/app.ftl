@@ -206,6 +206,10 @@ login-webview-open = Voltooi het aanmelden in het dialoogvenster.
 login-button-hint-browser = Linksklik: aanmelden met uw browser · Rechtsklik: handmatig aanmelden
 login-browser-waiting = Voltooi het aanmelden in uw browser; dit venster meldt u aan zodra u terugkeert.
 login-browser-cookie-hint = Kreeg je HTTP-fout 400 tijdens het inloggen? Wis de cookies van het domein lenovo.com in je browser.
+login-browser-cookie-chrome = In Chrome: Privacy en beveiliging - Machtigingen en gegevens van sites bekijken (chrome://settings/content/all), zoek lenovo.com en verwijder de getoonde gegevens.
+login-browser-cookie-edge = In Edge: Privacy, zoeken en services - Sitemachtigingen - Alle sites (edge://settings/content/all), zoek lenovo.com en verwijder de getoonde gegevens.
+login-browser-cookie-firefox = In Firefox: Privacy en beveiliging - Cookies en sitegegevens - Gegevens beheren… (about:preferences#privacy), zoek lenovo.com en verwijder de getoonde gegevens.
+login-browser-cookie-other = Open de cookie- of sitegegevensinstellingen van je browser, zoek lenovo.com en verwijder de getoonde gegevens.
 login-retry-webview = Opnieuw proberen met WebView
 login-manual-prompt = Meld u aan in uw browser en plak daarna de SoftwareFix://callback-link hieronder:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

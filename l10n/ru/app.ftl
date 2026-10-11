@@ -206,6 +206,10 @@ login-webview-open = Завершите вход в диалоговом окн�
 login-button-hint-browser = Левый клик: вход через браузер · Правый клик: ручной вход
 login-browser-waiting = Завершите вход в браузере — это окно выполнит вход, как только вы вернётесь.
 login-browser-cookie-hint = Получили ошибку HTTP 400 при входе? Удалите файлы cookie для домена lenovo.com в браузере.
+login-browser-cookie-chrome = В Chrome: Конфиденциальность и безопасность - Просмотр разрешений и данных, сохранённых на сайтах (chrome://settings/content/all) — найдите lenovo.com и удалите показанные данные.
+login-browser-cookie-edge = В Edge: Конфиденциальность, поиск и службы - Разрешения сайтов - Все сайты (edge://settings/content/all) — найдите lenovo.com и удалите показанные данные.
+login-browser-cookie-firefox = В Firefox: Приватность и защита - Куки и данные сайтов - Управление данными… (about:preferences#privacy) — найдите lenovo.com и удалите показанные данные.
+login-browser-cookie-other = Откройте в браузере настройки файлов cookie или данных сайтов, найдите lenovo.com и удалите показанные данные.
 login-retry-webview = Повторить через WebView
 login-manual-prompt = Войдите через браузер и вставьте ссылку SoftwareFix://callback ниже:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

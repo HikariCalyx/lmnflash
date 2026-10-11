@@ -6,6 +6,7 @@ mod about;
 mod anim;
 mod bloatware;
 mod bootloader;
+mod browser;
 mod bulk;
 mod carrier;
 mod compat_iced;
@@ -113,6 +114,11 @@ pub fn main() -> ::iced::Result {
     // Bootloader Unlock chooser (whose "Guided" button is gated on it) would
     // stall on that process spawn.
     let _ = webview::webview_available();
+
+    // Same for the default browser: the login page names the cookie-clearing
+    // steps of the browser that is set as default, and reading that spawns a
+    // helper process on macOS/Linux.
+    browser::warm();
 
     let icon = iced::window::icon::from_file_data(include_bytes!("icon.ico"), None).ok();
 

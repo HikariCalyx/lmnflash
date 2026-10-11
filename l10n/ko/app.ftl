@@ -206,6 +206,10 @@ login-webview-open = 대화 상자 창에서 로그인을 완료하세요.
 login-button-hint-browser = 왼쪽 클릭: 브라우저로 로그인 · 오른쪽 클릭: 수동으로 로그인
 login-browser-waiting = 브라우저에서 로그인을 완료하세요. 돌아오면 이 창이 자동으로 로그인됩니다.
 login-browser-cookie-hint = 로그인 중 HTTP 400 오류가 발생했나요? 브라우저에서 lenovo.com 도메인의 쿠키를 삭제하세요.
+login-browser-cookie-chrome = Chrome: 개인 정보 보호 및 보안 - 사이트에 저장된 권한 및 데이터 보기(chrome://settings/content/all)에서 lenovo.com을 검색하고 표시된 데이터를 삭제하세요.
+login-browser-cookie-edge = Edge: 개인 정보, 검색 및 서비스 - 사이트 권한 - 모든 사이트(edge://settings/content/all)에서 lenovo.com을 검색하고 표시된 데이터를 삭제하세요.
+login-browser-cookie-firefox = Firefox: 개인 정보 및 보안 - 쿠키 및 사이트 데이터 - 데이터 관리…(about:preferences#privacy)에서 lenovo.com을 검색하고 표시된 데이터를 삭제하세요.
+login-browser-cookie-other = 브라우저의 쿠키 또는 사이트 데이터 설정을 열고 lenovo.com을 검색한 뒤 표시된 데이터를 삭제하세요.
 login-retry-webview = WebView로 다시 시도
 login-manual-prompt = 브라우저에서 로그인한 후 SoftwareFix://callback 링크를 아래에 붙여넣으세요.
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

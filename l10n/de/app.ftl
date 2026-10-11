@@ -206,6 +206,10 @@ login-webview-open = Schließen Sie die Anmeldung im Dialogfenster ab.
 login-button-hint-browser = Linksklick: mit dem Browser anmelden · Rechtsklick: manuell anmelden
 login-browser-waiting = Schließen Sie die Anmeldung im Browser ab – dieses Fenster meldet sich automatisch an, sobald Sie zurückkehren.
 login-browser-cookie-hint = Haben Sie beim Anmelden den HTTP-Fehler 400 erhalten? Löschen Sie die Cookies für die Domain lenovo.com in Ihrem Browser.
+login-browser-cookie-chrome = In Chrome: Datenschutz und Sicherheit - Berechtigungen und Daten anzeigen, die auf Websites gespeichert sind (chrome://settings/content/all) – nach lenovo.com suchen und die angezeigten Daten löschen.
+login-browser-cookie-edge = In Edge: Datenschutz, Suche und Dienste - Websiteberechtigungen - Alle Websites (edge://settings/content/all) – nach lenovo.com suchen und die angezeigten Daten löschen.
+login-browser-cookie-firefox = In Firefox: Datenschutz & Sicherheit - Cookies und Website-Daten - Daten verwalten… (about:preferences#privacy) – nach lenovo.com suchen und die angezeigten Daten entfernen.
+login-browser-cookie-other = Öffnen Sie die Cookie- oder Website-Daten-Einstellungen Ihres Browsers, suchen Sie nach lenovo.com und löschen Sie die angezeigten Daten.
 login-retry-webview = Erneut mit WebView versuchen
 login-manual-prompt = Melden Sie sich im Browser an und fügen Sie dann den SoftwareFix://callback-Link unten ein:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

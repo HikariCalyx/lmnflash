@@ -206,6 +206,10 @@ login-webview-open = Viimeistele kirjautuminen valintaikkunassa.
 login-button-hint-browser = Vasen klikkaus: kirjaudu selaimella · Oikea klikkaus: kirjaudu manuaalisesti
 login-browser-waiting = Viimeistele kirjautuminen selaimessa — tämä ikkuna kirjautuu heti, kun palaat.
 login-browser-cookie-hint = Saitko HTTP-virheen 400 kirjautumisen aikana? Tyhjennä selaimesta lenovo.com-verkkotunnuksen evästeet.
+login-browser-cookie-chrome = Chromessa: Tietosuoja ja turvallisuus - Näytä sivustoille tallennetut käyttöoikeudet ja tiedot (chrome://settings/content/all), etsi lenovo.com ja poista näytetyt tiedot.
+login-browser-cookie-edge = Edgessä: Tietosuoja, haku ja palvelut - Sivuston käyttöoikeudet - Kaikki sivustot (edge://settings/content/all), etsi lenovo.com ja poista näytetyt tiedot.
+login-browser-cookie-firefox = Firefoxissa: Tietosuoja ja turvallisuus - Evästeet ja sivustotiedot - Hallinnoi tietoja… (about:preferences#privacy), etsi lenovo.com ja poista näytetyt tiedot.
+login-browser-cookie-other = Avaa selaimen eväste- tai sivustotietoasetukset, etsi lenovo.com ja poista näytetyt tiedot.
 login-retry-webview = Yritä uudelleen WebView'llä
 login-manual-prompt = Kirjaudu selaimella ja liitä SoftwareFix://callback-linkki alle:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

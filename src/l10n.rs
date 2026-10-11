@@ -483,6 +483,10 @@ mod tests {
             "login-browser-waiting",
             "login-browser-cookie-hint",
             "login-retry-webview",
+            "login-browser-cookie-chrome",
+            "login-browser-cookie-edge",
+            "login-browser-cookie-firefox",
+            "login-browser-cookie-other",
         ];
 
         for language in Language::ALL {

@@ -206,6 +206,10 @@ login-webview-open = ダイアログ ウィンドウでログインを完了し�
 login-button-hint-browser = 左クリック：ブラウザーでログイン · 右クリック：手動でログイン
 login-browser-waiting = ブラウザーでログインを完了してください。戻るとこのウィンドウが自動的にサインインします。
 login-browser-cookie-hint = ログイン時に HTTP 400 エラーが発生しましたか？ブラウザーで lenovo.com ドメインの Cookie を削除してください。
+login-browser-cookie-chrome = Chrome：プライバシーとセキュリティ - 各サイトに保存された権限とデータを表示（chrome://settings/content/all）から lenovo.com を検索し、表示されたデータを削除します。
+login-browser-cookie-edge = Edge：プライバシー、検索、サービス - サイトのアクセス許可 - すべてのサイト（edge://settings/content/all）から lenovo.com を検索し、表示されたデータを削除します。
+login-browser-cookie-firefox = Firefox：プライバシーとセキュリティ - Cookie とサイトデータ - データを管理…（about:preferences#privacy）から lenovo.com を検索し、表示されたデータを削除します。
+login-browser-cookie-other = ブラウザーの Cookie またはサイトデータの設定を開き、lenovo.com を検索して表示されたデータを削除します。
 login-retry-webview = WebView で再試行
 login-manual-prompt = ブラウザーでログインし、SoftwareFix://callback リンクを下に貼り付けてください：
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

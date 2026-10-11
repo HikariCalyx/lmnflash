@@ -206,6 +206,10 @@ login-webview-open = 请在弹窗中完成登录。
 login-button-hint-browser = 左键单击：使用浏览器登录 · 右键单击：手动登录
 login-browser-waiting = 请在浏览器中完成登录，回到本窗口后将自动登录。
 login-browser-cookie-hint = 登录时出现 HTTP 400 错误？请用浏览器清除 lenovo.com 域名下的 Cookies。
+login-browser-cookie-chrome = Chrome：隐私与安全 - 查看各网站的权限及储存的数据（chrome://settings/content/all），搜索 lenovo.com 并删除显示的数据。
+login-browser-cookie-edge = Edge：隐私、搜索和服务 - 站点权限 - 所有站点（edge://settings/content/all），搜索 lenovo.com 并删除显示的数据。
+login-browser-cookie-firefox = Firefox：隐私与安全 - Cookie 和网站数据 - 管理数据…（about:preferences#privacy），搜索 lenovo.com 并删除显示的数据。
+login-browser-cookie-other = 打开浏览器的 Cookie 或网站数据设置，搜索 lenovo.com 并删除显示的数据。
 login-retry-webview = 使用 WebView 重试
 login-manual-prompt = 请在浏览器中登录，然后将 SoftwareFix://callback 链接粘贴到下面：
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

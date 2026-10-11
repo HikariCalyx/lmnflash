@@ -206,6 +206,10 @@ login-webview-open = Complete el inicio de sesión en la ventana de diálogo.
 login-button-hint-browser = Clic izquierdo: iniciar sesión con su navegador · Clic derecho: iniciar sesión manualmente
 login-browser-waiting = Complete el inicio de sesión en su navegador; esta ventana iniciará sesión en cuanto vuelva.
 login-browser-cookie-hint = ¿Recibiste el error HTTP 400 al iniciar sesión? Borra las cookies del dominio lenovo.com en tu navegador.
+login-browser-cookie-chrome = En Chrome: Privacidad y seguridad - Ver permisos y datos almacenados en los sitios (chrome://settings/content/all), busca lenovo.com y elimina los datos mostrados.
+login-browser-cookie-edge = En Edge: Privacidad, búsqueda y servicios - Permisos del sitio - Todos los sitios (edge://settings/content/all), busca lenovo.com y elimina los datos mostrados.
+login-browser-cookie-firefox = En Firefox: Privacidad y seguridad - Cookies y datos del sitio - Administrar datos… (about:preferences#privacy), busca lenovo.com y elimina los datos mostrados.
+login-browser-cookie-other = Abre la configuración de cookies o de datos de sitios de tu navegador, busca lenovo.com y elimina los datos mostrados.
 login-retry-webview = Reintentar con WebView
 login-manual-prompt = Inicie sesión en su navegador y pegue el enlace SoftwareFix://callback a continuación:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…

@@ -79,6 +79,12 @@ pub(crate) fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
                     .width(460)
                     .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
                     .style(warning_orange),
+                // The exact clicks depend on the browser the user has set as
+                // default, so they are named for it.
+                text(l10n.tr(crate::browser::default_browser().cookie_hint_id()))
+                    .size(12.0)
+                    .width(460)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
                 row![
                     button(text(l10n.tr("login-open-browser"))).on_press(Message::OpenBrowser),
                     retry,

@@ -206,6 +206,10 @@ login-webview-open = Fuldfør login i dialogvinduet.
 login-button-hint-browser = Venstreklik: log ind med din browser · Højreklik: log ind manuelt
 login-browser-waiting = Fuldfør login i din browser — dette vindue logger ind, så snart du vender tilbage.
 login-browser-cookie-hint = Fik du HTTP-fejl 400 under login? Ryd cookies under domænet lenovo.com i din browser.
+login-browser-cookie-chrome = I Chrome: Fortrolighed og sikkerhed - Se tilladelser og data, der er gemt på tværs af websteder (chrome://settings/content/all), søg efter lenovo.com og slet de viste data.
+login-browser-cookie-edge = I Edge: Fortrolighed, søgning og tjenester - Webstedstilladelser - Alle websteder (edge://settings/content/all), søg efter lenovo.com og slet de viste data.
+login-browser-cookie-firefox = I Firefox: Privatliv og sikkerhed - Cookies og webstedsdata - Administrer data… (about:preferences#privacy), søg efter lenovo.com og fjern de viste data.
+login-browser-cookie-other = Åbn browserens indstillinger for cookies eller webstedsdata, søg efter lenovo.com og slet de viste data.
 login-retry-webview = Prøv igen med WebView
 login-manual-prompt = Log ind i din browser, og indsæt derefter SoftwareFix://callback-linket:
 login-manual-placeholder = SoftwareFix://callback?Authorization=…
