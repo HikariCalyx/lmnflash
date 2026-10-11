@@ -1629,6 +1629,9 @@ struct State {
     content_transition_covers_chrome: bool,
     /// In-flight fade + slide of the modal dialog (see `overlay_key`).
     overlay_transition: Option<anim::Transition>,
+    /// In-flight fade + slide of the login page, started when the login flow
+    /// moves to another step (see [`login_step`]).
+    login_transition: Option<anim::Transition>,
     /// The close of a dialog, held back until it has finished animating out;
     /// `Some` while it is leaving.
     pending_close: Option<Message>,
@@ -1659,6 +1662,7 @@ impl Default for State {
             content_transition: None,
             content_transition_covers_chrome: false,
             overlay_transition: None,
+            login_transition: None,
             pending_close: None,
         }
     }
@@ -2293,6 +2297,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     // one is actually running; iced redraws once per tick.
     let transition = if state.content_transition.is_some()
         || state.overlay_transition.is_some()
+        || state.login_transition.is_some()
         || state.pending_close.is_some()
     {
         iced::time::every(anim::FRAME).map(|_| Message::TransitionTick)
@@ -2329,6 +2334,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
 
     let before = overlay_key(state);
+    let login_before = login_step(state);
 
     // The user closing the dialog is held back for the length of the exit
     // transition, so the dialog can be seen to leave; the close itself runs
@@ -2348,6 +2354,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
 
     let task = handle(state, message);
+
+    // The login flow eases from one step to the next (asking for the URL, the
+    // browser/WebView wait, the result) instead of swapping the page.
+    start_login_transition(state, login_before, login_step(state));
 
     // A dialog that appeared, or whose card changed, eases in. A dialog that
     // closed without the user asking for it just disappears.
@@ -2687,6 +2697,43 @@ fn mode_index(mode: Mode) -> usize {
     Mode::ALL.iter().position(|&tab| tab == mode).unwrap_or(0)
 }
 
+/// The login page currently shown, as a step number, used to tell which way
+/// the user is moving through the flow (and therefore which way the page
+/// should slide in).
+///
+/// The numbers follow the flow, so a later step means "forward" (the page
+/// comes in from the right): making the request, the WebView or browser wait,
+/// the manual fallback — and the two outcomes, the login and the error, last.
+fn login_step(state: &State) -> u8 {
+    match state.login {
+        LoginStatus::LoggedOut => 0,
+        LoginStatus::Fetching { .. } => 1,
+        LoginStatus::WebViewOpen { .. } => 2,
+        LoginStatus::WaitingForBrowser { .. } => 3,
+        LoginStatus::Manual { .. } => 4,
+        LoginStatus::LoggedIn { .. } => 5,
+        LoginStatus::Error(_) => 6,
+    }
+}
+
+/// Plays the transition that matches a change of the login page on screen.
+fn start_login_transition(state: &mut State, before: u8, after: u8) {
+    if after == before {
+        return;
+    }
+
+    // Like the dialog cards, a step that resolves before the previous change
+    // settled carries that movement on instead of jumping back to the start of
+    // the slide (the login URL answers well before the 200 ms are up).
+    let running = state
+        .login_transition
+        .as_ref()
+        .map(|transition| transition.pose());
+    let from = running.unwrap_or_else(|| anim::content_start(after > before));
+
+    state.login_transition = Some(anim::Transition::settle(from, anim::content_rest()));
+}
+
 fn handle(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::ModeSelected(mode) => {
@@ -2714,6 +2761,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::TransitionTick => {
             anim::tick(&mut state.content_transition);
             anim::tick(&mut state.overlay_transition);
+            anim::tick(&mut state.login_transition);
 
             // A finished transition is followed by ordinary ones again
             // (the Multi Flashing page is the only full-window one so far).
@@ -8289,6 +8337,24 @@ fn view(state: &State) -> Element<'_, Message> {
     // the window background colour (see `anim`). A transition that covers the
     // chrome animates the whole window instead, so the content is left alone
     // here and is animated together with that chrome further down.
+    //
+    // A change of the login page is drawn the same way, one layer in: it is
+    // posed inside the tab switch, so both can be running at once. The login
+    // page is Mode 1's content, so a login that completes while another
+    // feature is on screen (a browser callback arriving late) leaves that
+    // feature alone.
+    let login_pose = match state.mode {
+        Mode::Mode1 => state
+            .login_transition
+            .as_ref()
+            .map(anim::Transition::pose),
+        _ => None,
+    };
+    let content = match login_pose {
+        Some(pose) => anim::animated(content, pose),
+        None => content,
+    };
+
     let mut content_layers: Vec<Element<'_, Message>> = match &state.content_transition {
         Some(transition) if !state.content_transition_covers_chrome => {
             let pose = transition.pose();
@@ -8299,6 +8365,13 @@ fn view(state: &State) -> Element<'_, Message> {
         }
         _ => vec![content],
     };
+
+    // The login veil goes above the content but below the tab switch's veil
+    // and below the language selector pushed next, so the chrome never
+    // flickers with the login page.
+    if let Some(pose) = login_pose {
+        content_layers.push(anim::veil(anim::window_background(state.dark), pose.veil));
+    }
 
     // The Multi Flashing page owns the whole window: the language selector
     // and the mode tabs are hidden there, since the page is left through its
@@ -8617,5 +8690,64 @@ mod tests {
 
         assert_eq!(fresh.scale, 1.0);
         assert_ne!(fresh.slide.x, 0.0);
+    }
+
+    /// The login flow eases from one step to the next, in the direction the
+    /// user is moving through it.
+    #[test]
+    fn the_login_flow_animates_between_its_steps() {
+        let mut state = State::default();
+        assert_eq!(login_step(&state), 0);
+        assert!(state.login_transition.is_none());
+
+        // Asking to log in moves on to the next step, which slides in from the
+        // right: the flow moves forward.
+        let _ = update(&mut state, Message::LoginRequested(Click::Left));
+        assert!(matches!(state.login, LoginStatus::Fetching { .. }));
+
+        let forward = state
+            .login_transition
+            .as_ref()
+            .expect("the next step animates")
+            .pose();
+        assert!(forward.slide.x > 0.0, "{}", forward.slide.x);
+        assert!(forward.veil > 0.0);
+
+        // A step that resolves before that one settled is picked up mid-slide
+        // instead of jumping back to the start of the movement.
+        anim::tick(&mut state.login_transition);
+        let midway = state
+            .login_transition
+            .as_ref()
+            .expect("the first step is still running")
+            .pose();
+        let _ = update(
+            &mut state,
+            Message::LoginUrlFetched(Ok("https://example.test/login".to_owned())),
+        );
+        assert_ne!(login_step(&state), 1);
+        let continued = state
+            .login_transition
+            .as_ref()
+            .expect("the next step animates")
+            .pose();
+        assert_eq!(continued.slide.x, midway.slide.x);
+
+        // Cancelling goes back to the first step. The slide is settled first,
+        // so the direction is the user's and not the leftover movement.
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.login_transition.is_none());
+
+        let _ = update(&mut state, Message::CancelLogin);
+        assert_eq!(login_step(&state), 0);
+
+        let back = state
+            .login_transition
+            .as_ref()
+            .expect("going back animates")
+            .pose();
+        assert!(back.slide.x < 0.0, "{}", back.slide.x);
     }
 }
