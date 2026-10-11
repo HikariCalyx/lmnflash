@@ -136,15 +136,34 @@ fn card(state: &State) -> Element<'_, Message> {
     }
 
     // Footer: Cancel closes the dialog, but never while a job is running so
-    // the phone is not left half-flashed.
+    // the phone is not left half-flashed. "Enter Multi Flashing Mode" hands
+    // the user to the multi-device workspace and is locked for the same
+    // reason.
     content = content.push(horizontal_rule(1));
 
     let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
-    content = content.push(if busy {
-        cancel
+    let multi = button(text(l10n.tr("firmware-flash-multi-flashing"))).width(Fill);
+    // The Multi Flashing workspace behind this button is still being built, so
+    // it is only live in a debug build. There it also waits for a free dialog,
+    // like Cancel does (iced greys a button without `on_press` out and ignores
+    // clicks on it).
+    let multi = if cfg!(debug_assertions) && !busy {
+        multi.on_press(Message::FirmwareFlashMultiFlashing)
     } else {
-        cancel.on_press(Message::FirmwareFlashCancel)
-    });
+        multi
+    };
+
+    content = content.push(
+        row![
+            if busy {
+                cancel
+            } else {
+                cancel.on_press(Message::FirmwareFlashCancel)
+            },
+            multi,
+        ]
+        .spacing(8),
+    );
 
     // The padding sits inside the scrollable, so the card's border is the
     // viewport: the scrollbar rides on the right border instead of floating

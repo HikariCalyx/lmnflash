@@ -474,3 +474,15 @@ unpack-working = Uitpakken…
 unpack-done = { $count } bestanden uitgepakt ({ $size }).
 unpack-locate = Tonen
 unpack-failed = Kan de image niet uitpakken: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Naar multi-flashmodus gaan
+multi-flash-placeholder = De multi-flashmodus is nog niet beschikbaar. De bediening verschijnt hier.
+multi-flash-exit = Afsluiten
+multi-flash-preset-manage = Presets beheren
+multi-flash-preset-add = Firmware-image toevoegen…
+multi-flash-preset-empty = Er is nog geen firmware-image geladen.
+multi-flash-start = Starten
+multi-flash-stop = Stoppen
+multi-flash-close-prompt = Stop de bewerking voordat u afsluit.
+multi-flash-close-prompt-ok = OK

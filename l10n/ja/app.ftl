@@ -474,3 +474,15 @@ unpack-working = 展開中…
 unpack-done = { $count } 個のファイルを展開しました（{ $size }）。
 unpack-locate = 場所を開く
 unpack-failed = イメージを展開できませんでした: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = マルチフラッシュモードに入る
+multi-flash-placeholder = マルチフラッシュモードはまだ利用できません。ここに操作項目が表示されます。
+multi-flash-exit = 終了
+multi-flash-preset-manage = プリセット管理
+multi-flash-preset-add = ファームウェアイメージを追加…
+multi-flash-preset-empty = ファームウェアイメージがまだ読み込まれていません。
+multi-flash-start = 開始
+multi-flash-stop = 停止
+multi-flash-close-prompt = 閉じる前に操作を停止してください。
+multi-flash-close-prompt-ok = OK

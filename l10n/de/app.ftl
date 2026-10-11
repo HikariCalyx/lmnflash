@@ -474,3 +474,15 @@ unpack-working = Wird entpackt…
 unpack-done = { $count } Dateien entpackt ({ $size }).
 unpack-locate = Anzeigen
 unpack-failed = Das Image konnte nicht entpackt werden: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Multi-Flash-Modus starten
+multi-flash-placeholder = Der Multi-Flash-Modus ist noch nicht verfügbar. Seine Bedienelemente erscheinen hier.
+multi-flash-exit = Beenden
+multi-flash-preset-manage = Vorlagen verwalten
+multi-flash-preset-add = Firmware-Image hinzufügen…
+multi-flash-preset-empty = Es ist noch kein Firmware-Image geladen.
+multi-flash-start = Start
+multi-flash-stop = Stopp
+multi-flash-close-prompt = Bitte beenden Sie den Vorgang, bevor Sie schließen.
+multi-flash-close-prompt-ok = OK

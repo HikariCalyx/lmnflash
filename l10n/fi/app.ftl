@@ -474,3 +474,15 @@ unpack-working = Puretaan…
 unpack-done = Purettu { $count } tiedostoa ({ $size }).
 unpack-locate = Näytä
 unpack-failed = Kuvan purkaminen ei onnistunut: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Siirry monilataustilaan
+multi-flash-placeholder = Monilataustila ei ole vielä käytettävissä. Sen säätimet tulevat tähän.
+multi-flash-exit = Poistu
+multi-flash-preset-manage = Hallitse esiasetuksia
+multi-flash-preset-add = Lisää laiteohjelmistokuva…
+multi-flash-preset-empty = Laiteohjelmistokuvaa ei ole vielä ladattu.
+multi-flash-start = Aloita
+multi-flash-stop = Lopeta
+multi-flash-close-prompt = Pysäytä toiminto ennen sulkemista.
+multi-flash-close-prompt-ok = OK

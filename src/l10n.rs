@@ -736,5 +736,32 @@ mod tests {
             assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
         }
     }
+
+    /// The Multi Flashing page is entered from the Firmware Flash dialog: its
+    /// placeholder and its way out must be present in every locale.
+    #[test]
+    fn the_multi_flash_page_renders_in_every_locale() {
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in [
+                "firmware-flash-multi-flashing",
+                "multi-flash-placeholder",
+                "multi-flash-exit",
+                "multi-flash-preset-manage",
+                "multi-flash-preset-add",
+                "multi-flash-preset-empty",
+                "multi-flash-start",
+                "multi-flash-stop",
+                "multi-flash-close-prompt",
+                "multi-flash-close-prompt-ok",
+            ] {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+        }
+    }
 }
 

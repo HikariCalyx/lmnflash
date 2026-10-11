@@ -474,3 +474,15 @@ unpack-working = Pakker ut…
 unpack-done = Pakket ut { $count } filer ({ $size }).
 unpack-locate = Vis
 unpack-failed = Kunne ikke pakke ut bildet: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Gå til multi-flash-modus
+multi-flash-placeholder = Multi-flash-modus er ikke tilgjengelig ennå. Kontrollene vises her.
+multi-flash-exit = Avslutt
+multi-flash-preset-manage = Administrer forhåndsinnstillinger
+multi-flash-preset-add = Legg til fastvarebilde…
+multi-flash-preset-empty = Ingen fastvarebilde er lastet inn ennå.
+multi-flash-start = Start
+multi-flash-stop = Stopp
+multi-flash-close-prompt = Stopp handlingen før du lukker.
+multi-flash-close-prompt-ok = OK

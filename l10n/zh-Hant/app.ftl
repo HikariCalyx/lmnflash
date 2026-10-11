@@ -474,3 +474,15 @@ unpack-working = 正在解包…
 unpack-done = 已解包 { $count } 個檔案（{ $size }）。
 unpack-locate = 定位
 unpack-failed = 無法解包此映像：{ $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = 進入多機刷機模式
+multi-flash-placeholder = 多機刷機模式尚未開放，相關操作將顯示在此處。
+multi-flash-exit = 退出
+multi-flash-preset-manage = 預設管理
+multi-flash-preset-add = 新增韌體映像…
+multi-flash-preset-empty = 尚未載入韌體映像。
+multi-flash-start = 開始
+multi-flash-stop = 停止
+multi-flash-close-prompt = 請在關閉前停止操作。
+multi-flash-close-prompt-ok = 確定

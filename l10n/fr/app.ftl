@@ -474,3 +474,15 @@ unpack-working = Décompression…
 unpack-done = { $count } fichiers décompressés ({ $size }).
 unpack-locate = Afficher
 unpack-failed = Impossible de décompresser l'image : { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Passer en mode flash multiple
+multi-flash-placeholder = Le mode flash multiple n'est pas encore disponible. Ses commandes apparaîtront ici.
+multi-flash-exit = Quitter
+multi-flash-preset-manage = Gérer les préréglages
+multi-flash-preset-add = Ajouter une image de firmware…
+multi-flash-preset-empty = Aucune image de firmware chargée pour l'instant.
+multi-flash-start = Démarrer
+multi-flash-stop = Arrêter
+multi-flash-close-prompt = Veuillez arrêter l'opération avant de fermer.
+multi-flash-close-prompt-ok = OK

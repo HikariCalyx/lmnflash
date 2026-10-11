@@ -474,3 +474,15 @@ unpack-working = Estrazione…
 unpack-done = Estratti { $count } file ({ $size }).
 unpack-locate = Mostra
 unpack-failed = Impossibile estrarre l'immagine: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Entra in modalità flash multiplo
+multi-flash-placeholder = La modalità flash multiplo non è ancora disponibile. I suoi controlli appariranno qui.
+multi-flash-exit = Esci
+multi-flash-preset-manage = Gestisci preset
+multi-flash-preset-add = Aggiungi immagine firmware…
+multi-flash-preset-empty = Nessuna immagine firmware ancora caricata.
+multi-flash-start = Avvia
+multi-flash-stop = Arresta
+multi-flash-close-prompt = Arresta l'operazione prima di chiudere.
+multi-flash-close-prompt-ok = OK

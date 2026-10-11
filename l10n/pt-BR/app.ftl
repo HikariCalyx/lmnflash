@@ -474,3 +474,15 @@ unpack-working = Descompactando…
 unpack-done = { $count } arquivos descompactados ({ $size }).
 unpack-locate = Mostrar
 unpack-failed = Não foi possível descompactar a imagem: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Entrar no modo multiflash
+multi-flash-placeholder = O modo multiflash ainda não está disponível. Os controles aparecerão aqui.
+multi-flash-exit = Sair
+multi-flash-preset-manage = Gerenciar presets
+multi-flash-preset-add = Adicionar imagem de firmware…
+multi-flash-preset-empty = Nenhuma imagem de firmware carregada ainda.
+multi-flash-start = Iniciar
+multi-flash-stop = Parar
+multi-flash-close-prompt = Pare a operação antes de fechar.
+multi-flash-close-prompt-ok = OK

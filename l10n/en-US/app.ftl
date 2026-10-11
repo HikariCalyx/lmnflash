@@ -476,3 +476,15 @@ unpack-working = Unpacking…
 unpack-done = Unpacked { $count } files ({ $size }).
 unpack-locate = Locate
 unpack-failed = Could not unpack the image: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Enter Multi Flashing Mode
+multi-flash-placeholder = Multi Flashing Mode is not available yet. Its controls will appear here.
+multi-flash-exit = Exit
+multi-flash-preset-manage = Preset Manage
+multi-flash-preset-add = Add firmware image…
+multi-flash-preset-empty = No firmware image loaded yet.
+multi-flash-start = Start
+multi-flash-stop = Stop
+multi-flash-close-prompt = Please Stop the operation before closing.
+multi-flash-close-prompt-ok = OK

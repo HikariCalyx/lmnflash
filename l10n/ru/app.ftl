@@ -474,3 +474,15 @@ unpack-working = Распаковка…
 unpack-done = Распаковано файлов: { $count } ({ $size }).
 unpack-locate = Показать
 unpack-failed = Не удалось распаковать образ: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = Перейти в режим множественной прошивки
+multi-flash-placeholder = Режим множественной прошивки пока недоступен. Его элементы управления появятся здесь.
+multi-flash-exit = Выход
+multi-flash-preset-manage = Управление пресетами
+multi-flash-preset-add = Добавить образ прошивки…
+multi-flash-preset-empty = Образ прошивки ещё не загружен.
+multi-flash-start = Запуск
+multi-flash-stop = Остановить
+multi-flash-close-prompt = Остановите операцию перед закрытием.
+multi-flash-close-prompt-ok = ОК

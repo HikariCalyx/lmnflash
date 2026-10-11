@@ -474,3 +474,15 @@ unpack-working = 푸는 중…
 unpack-done = { $count }개 파일을 풀었습니다({ $size }).
 unpack-locate = 위치 열기
 unpack-failed = 이미지를 풀 수 없습니다: { $error }
+
+# "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
+firmware-flash-multi-flashing = 멀티 플래싱 모드 진입
+multi-flash-placeholder = 멀티 플래싱 모드는 아직 사용할 수 없습니다. 이곳에 조작 항목이 표시됩니다.
+multi-flash-exit = 종료
+multi-flash-preset-manage = 프리셋 관리
+multi-flash-preset-add = 펌웨어 이미지 추가…
+multi-flash-preset-empty = 아직 불러온 펌웨어 이미지가 없습니다.
+multi-flash-start = 시작
+multi-flash-stop = 중지
+multi-flash-close-prompt = 닫기 전에 작업을 중지하십시오.
+multi-flash-close-prompt-ok = 확인

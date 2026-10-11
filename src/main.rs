@@ -28,6 +28,7 @@ mod l10n;
 mod lenovoubl;
 mod login;
 mod lookup;
+mod multi_flash;
 mod platform_tools;
 mod protocol;
 mod smartphone;
@@ -97,6 +98,10 @@ pub fn main() -> iced::Result {
         .default_font(system_ui_font())
         .window(iced::window::Settings {
             icon,
+            // The app answers close requests itself (see
+            // `Message::WindowCloseRequested`), so a Multi Flashing run can
+            // refuse to be cut short.
+            exit_on_close_request: false,
             ..iced::window::Settings::default()
         })
         .window_size(Size::new(720.0, 720.0))
@@ -540,6 +545,27 @@ struct DecryptState {
     status: DecryptStatus,
 }
 
+/// State of the "Multi Flashing" page (Mode 2).
+///
+/// The page is reached from the Firmware Flash dialog and takes the place of
+/// the feature grid; several devices are flashed in one run there.
+#[derive(Default)]
+struct MultiFlashState {
+    /// Whether the page is shown instead of the feature grid.
+    open: bool,
+    /// The firmware images loaded for the run. The "Preset Manage" dialog
+    /// fills them in, and starting a run needs at least one.
+    images: Vec<std::path::PathBuf>,
+    /// Whether the "Preset Manage" dialog is open.
+    preset_dialog: bool,
+    /// `true` while a run goes on: the workspace is locked, "Start" reads
+    /// "Stop", and the window cannot be closed.
+    running: bool,
+    /// Whether a close request was refused because a run was going on; the
+    /// prompt stays up until it is acknowledged.
+    close_prompt: bool,
+}
+
 /// State of the "Smart Device Flashing" mode (Mode 2) feature tiles.
 #[derive(Default)]
 struct SmartphoneFlashState {
@@ -549,6 +575,7 @@ struct SmartphoneFlashState {
     firmware: FirmwareFlashState,
     driver: DriverState,
     bloatware: BloatwareState,
+    multi_flash: MultiFlashState,
 }
 
 /// State of the "Unpack Image" feature (Mode 3, firmware-file tools).
@@ -1242,6 +1269,11 @@ struct State {
     /// In-flight fade + slide of the tab content, started when the user
     /// switches to another feature (Mode 1/2/3).
     content_transition: Option<anim::Transition>,
+    /// Whether that transition animates the whole window — the language
+    /// selector and the mode tabs included — instead of only the content.
+    /// Entering and leaving the Multi Flashing page is a full-screen change,
+    /// so its chrome travels with it rather than popping.
+    content_transition_covers_chrome: bool,
     /// In-flight fade + slide of the modal dialog (see `overlay_key`).
     overlay_transition: Option<anim::Transition>,
     /// The close of a dialog, held back until it has finished animating out;
@@ -1269,6 +1301,7 @@ impl Default for State {
             about_open: false,
             anim_tick: 0,
             content_transition: None,
+            content_transition_covers_chrome: false,
             overlay_transition: None,
             pending_close: None,
         }
@@ -1586,6 +1619,9 @@ enum Message {
     FirmwareFlashEditDone,
     /// Firmware Flash: close the dialog.
     FirmwareFlashCancel,
+    /// Firmware Flash: leave the dialog for the Multi Flashing page, which
+    /// takes the place of the Mode 2 feature grid.
+    FirmwareFlashMultiFlashing,
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     FirmwareFlashBackdropPressed,
@@ -1677,6 +1713,32 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     UnpackBackdropPressed,
+    /// Multi Flashing: leave the page and return to the Mode 2 feature grid.
+    MultiFlashExit,
+    /// Multi Flashing: open the "Preset Manage" dialog.
+    MultiFlashPresetManage,
+    /// Multi Flashing: add a firmware image to the run (file picker).
+    MultiFlashPresetAdd,
+    /// Multi Flashing: that picker closed (`None` = cancelled).
+    MultiFlashPresetPicked(Option<std::path::PathBuf>),
+    /// Multi Flashing: close the "Preset Manage" dialog.
+    MultiFlashPresetClose,
+    /// Click on the "Preset Manage" dialog's empty space (swallowed, so it
+    /// neither dismisses the dialog nor reaches the UI underneath).
+    MultiFlashPresetBackdropPressed,
+    /// Multi Flashing: start the run of the loaded firmware images.
+    MultiFlashStart,
+    /// Multi Flashing: stop the running job.
+    MultiFlashStop,
+    /// The window was asked to close. The app answers it itself (the window
+    /// settings turn iced's automatic close off), so a job can refuse to be
+    /// cut short.
+    WindowCloseRequested(iced::window::Id),
+    /// Multi Flashing: acknowledge the prompt that blocked closing the
+    /// window while a run was going on.
+    MultiFlashClosePromptDismissed,
+    /// Click on that prompt's empty space (swallowed).
+    MultiFlashClosePromptBackdropPressed,
     /// The best-effort telemetry POST finished (only logged; telemetry must
     /// never affect the app).
     TelemetrySent(Result<(), String>),
@@ -1755,7 +1817,13 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         iced::Subscription::none()
     };
 
-    iced::Subscription::batch([ticks, countdown, transition])
+    // A window close request is answered by the app (iced's automatic close
+    // is turned off in the window settings), so a running job can keep the
+    // window open until it is stopped.
+    let close_requests =
+        iced::window::close_requests().map(Message::WindowCloseRequested);
+
+    iced::Subscription::batch([ticks, countdown, transition, close_requests])
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -1833,7 +1901,9 @@ fn start_overlay_transition(state: &mut State, before: u8, after: u8) {
 }
 
 /// Whether the message is the user closing the dialog, rather than a step
-/// inside it. Only these are held back for the exit animation.
+/// inside it — including leaving the Firmware Flash dialog for the Multi
+/// Flashing page, which closes it. Only these are held back for the exit
+/// animation.
 fn closes_overlay(message: &Message) -> bool {
     matches!(
         message,
@@ -1841,10 +1911,13 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::TabletUnlockCancel
             | Message::FactoryResetCancel
             | Message::FirmwareFlashCancel
+            | Message::FirmwareFlashMultiFlashing
             | Message::DriverCancel
             | Message::BloatwareCancel
             | Message::UnpackCancel
             | Message::DecryptCancel
+            | Message::MultiFlashPresetClose
+            | Message::MultiFlashClosePromptDismissed
             | Message::AboutClosed
             | Message::FastbootDevicePickerCancelled
     )
@@ -1901,6 +1974,10 @@ const OVERLAY_UNPACK: u8 = 0xD0;
 /// The "Tablet Firmware Decrypt" dialog.
 const OVERLAY_DECRYPT: u8 = 0xE0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
+/// The Multi Flashing page's modals: its "Preset Manage" dialog, and the
+/// prompt that a close request was refused because a run was going on.
+const OVERLAY_MULTI_FLASH_PRESET: u8 = 0xF0;
+const OVERLAY_MULTI_FLASH_CLOSE_PROMPT: u8 = 0xF1;
 
 /// Identifies the dialog card that is on screen (or [`OVERLAY_NONE`]), so that
 /// opening, closing, stepping through and replacing a dialog can be noticed
@@ -1913,6 +1990,16 @@ const OVERLAY_RETCN_PICKER: u8 = 0xC0;
 /// while a dialog stays on screen (flashing log lines, progress, a spinner)
 /// has to leave its key alone.
 fn overlay_key(state: &State) -> u8 {
+    // The Multi Flashing page's own modals are drawn above everything else:
+    // the page can only be reached with every other dialog closed.
+    if multi_flash::close_prompt_open(state) {
+        return OVERLAY_MULTI_FLASH_CLOSE_PROMPT;
+    }
+
+    if multi_flash::preset_open(state) {
+        return OVERLAY_MULTI_FLASH_PRESET;
+    }
+
     if bootloader::is_open(state) {
         let bootloader = &state.flash.bootloader;
         if bootloader.picker.is_some() {
@@ -2061,6 +2148,9 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 ));
             }
 
+            // A tab move animates the content only: the tabs stay put.
+            state.content_transition_covers_chrome = false;
+
             state.mode = mode;
             Task::none()
         }
@@ -2071,6 +2161,12 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::TransitionTick => {
             anim::tick(&mut state.content_transition);
             anim::tick(&mut state.overlay_transition);
+
+            // A finished transition is followed by ordinary ones again
+            // (the Multi Flashing page is the only full-window one so far).
+            if state.content_transition.is_none() {
+                state.content_transition_covers_chrome = false;
+            }
 
             // A dialog that has finished leaving now runs the close that was
             // held back for it.
@@ -2676,6 +2772,130 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             cleanup_firmware_flash_package()
         }
+        Message::FirmwareFlashMultiFlashing => {
+            // The workspace is still being built, so it is only reachable from
+            // a debug build (the button that leads there is greyed out
+            // otherwise, and this keeps a stray event out too).
+            if !cfg!(debug_assertions) {
+                return Task::none();
+            }
+
+            // Never leave the dialog while a job is in flight: the phone must
+            // not be left half-flashed.
+            let busy = {
+                let flash = &state.flash.firmware;
+                flash.loading || flash.running || flash.rebooting
+            };
+
+            if busy {
+                return Task::none();
+            }
+
+            // The dialog is discarded exactly as Cancel discards it, so the
+            // package it unpacked is cleaned up, and the workspace takes over.
+            let job = state.flash.firmware.job + 1;
+            state.flash.firmware = FirmwareFlashState {
+                job,
+                ..FirmwareFlashState::default()
+            };
+            state.flash.multi_flash.open = true;
+            // The workspace slides in the way a tab does. This runs after the
+            // dialog finished leaving (the close is held back for its exit
+            // animation), so the two movements follow each other.
+            state.content_transition = Some(anim::Transition::settle(
+                anim::content_start(true),
+                anim::content_rest(),
+            ));
+            // The whole window is animated: the tab bar and the language
+            // selector disappear together with the grid instead of popping
+            // while the page fades in.
+            state.content_transition_covers_chrome = true;
+
+            cleanup_firmware_flash_package()
+        }
+        Message::MultiFlashExit => {
+            // A run has to be stopped first; the button is locked while it
+            // goes on, but a stray event must not leave one behind either.
+            if state.flash.multi_flash.running {
+                return Task::none();
+            }
+
+            state.flash.multi_flash.open = false;
+            // Leaving plays the same slide the other way round, so the
+            // feature grid comes back the way the page went in.
+            state.content_transition = Some(anim::Transition::settle(
+                anim::content_start(false),
+                anim::content_rest(),
+            ));
+            // The chrome comes back with the grid, fading in over the same
+            // pose as the content around it.
+            state.content_transition_covers_chrome = true;
+            Task::none()
+        }
+        Message::MultiFlashPresetManage => {
+            state.flash.multi_flash.preset_dialog = true;
+            Task::none()
+        }
+        Message::MultiFlashPresetBackdropPressed => Task::none(),
+        Message::MultiFlashPresetClose => {
+            state.flash.multi_flash.preset_dialog = false;
+            Task::none()
+        }
+        Message::MultiFlashPresetAdd => {
+            let title = state.l10n.tr("multi-flash-preset-add");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::MultiFlashPresetPicked,
+            )
+        }
+        Message::MultiFlashPresetPicked(path) => {
+            if let Some(path) = path {
+                let images = &mut state.flash.multi_flash.images;
+
+                if !images.contains(&path) {
+                    images.push(path);
+                }
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashStart => {
+            let multi = &mut state.flash.multi_flash;
+
+            // A run needs something to flash; the button is only drawn live
+            // once an image was loaded.
+            if !multi.running && !multi.images.is_empty() {
+                multi.running = true;
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashStop => {
+            state.flash.multi_flash.running = false;
+            Task::none()
+        }
+        Message::WindowCloseRequested(id) => {
+            // Closing the window would cut the run short, so it is refused
+            // and the user is told to stop the operation first.
+            if state.flash.multi_flash.running {
+                state.flash.multi_flash.close_prompt = true;
+                return Task::none();
+            }
+
+            iced::window::close::<Message>(id)
+        }
+        Message::MultiFlashClosePromptDismissed => {
+            state.flash.multi_flash.close_prompt = false;
+            Task::none()
+        }
+        Message::MultiFlashClosePromptBackdropPressed => Task::none(),
         Message::FirmwareFlashBackdropPressed => Task::none(),
         Message::FirmwareFlashPackageEvent(job, event) => {
             let flash = &mut state.flash.firmware;
@@ -6290,6 +6510,9 @@ fn finish_tablet_guided(
 fn view(state: &State) -> Element<'_, Message> {
     let content = match state.mode {
         Mode::Mode1 => lookup::firmware_lookup_view(state),
+        // The Multi Flashing page (entered from the Firmware Flash dialog)
+        // takes the place of the Mode 2 feature grid.
+        Mode::Mode2 if state.flash.multi_flash.open => multi_flash::view(state),
         Mode::Mode2 => smartphone::smartphone_flash_view(state),
         Mode::Mode3 => decrypt_mode::view(state),
     };
@@ -6310,37 +6533,46 @@ fn view(state: &State) -> Element<'_, Message> {
     .text_shaping(Shaping::Advanced);
 
     // The tab that was just switched to slides in a little and fades in from
-    // the window background colour (see `anim`).
+    // the window background colour (see `anim`). A transition that covers the
+    // chrome animates the whole window instead, so the content is left alone
+    // here and is animated together with that chrome further down.
     let mut content_layers: Vec<Element<'_, Message>> = match &state.content_transition {
-        Some(transition) => {
+        Some(transition) if !state.content_transition_covers_chrome => {
             let pose = transition.pose();
             vec![
                 anim::animated(content, pose),
                 anim::veil(anim::window_background(), pose.veil),
             ]
         }
-        None => vec![content],
+        _ => vec![content],
     };
+
+    // The Multi Flashing page owns the whole window: the language selector
+    // and the mode tabs are hidden there, since the page is left through its
+    // own Exit button.
+    let multi_flashing = state.flash.multi_flash.open;
 
     // The language selector sits in the top-right corner; on the Firmware
     // Lookup page a round "About" button is drawn to its left. They stay above
     // the transition's veil, so they do not flicker along with the content.
-    let corner: Element<'_, Message> = if state.mode == Mode::Mode1 {
-        row![about::about_button(), language_dropdown]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
-    } else {
-        language_dropdown.into()
-    };
+    if !multi_flashing {
+        let corner: Element<'_, Message> = if state.mode == Mode::Mode1 {
+            row![about::about_button(), language_dropdown]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into()
+        } else {
+            language_dropdown.into()
+        };
 
-    content_layers.push(
-        container(corner)
-            .padding(8)
-            .align_top(Fill)
-            .align_right(Fill)
-            .into(),
-    );
+        content_layers.push(
+            container(corner)
+                .padding(8)
+                .align_top(Fill)
+                .align_right(Fill)
+                .into(),
+        );
+    }
 
     let content_area = iced::widget::Stack::with_children(content_layers);
 
@@ -6362,7 +6594,40 @@ fn view(state: &State) -> Element<'_, Message> {
     .padding(8)
     .width(Fill);
 
-    let base = column![content_area, horizontal_rule(1), tab_bar];
+    // The mode tabs are left out of the Multi Flashing page entirely (see
+    // `multi_flashing` above), so no tab is ever clickable during a run.
+    let base: Element<'_, Message> = if multi_flashing {
+        content_area.into()
+    } else {
+        column![content_area, horizontal_rule(1), tab_bar].into()
+    };
+
+    // Entering or leaving the Multi Flashing page is a full-screen change:
+    // the language selector and the mode tabs come and go with the content, so
+    // the whole window is what slides and fades — rather than the content
+    // sliding while the chrome pops in or out.
+    let base: Element<'_, Message> = match &state.content_transition {
+        Some(transition) if state.content_transition_covers_chrome => {
+            let pose = transition.pose();
+
+            iced::widget::Stack::with_children(vec![
+                anim::animated(base, pose),
+                anim::veil(anim::window_background(), pose.veil),
+            ])
+            .into()
+        }
+        _ => base,
+    };
+
+    // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
+    // prompt that a close request was refused while a run goes on.
+    if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    if let Some(overlay) = multi_flash::preset_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
 
     // Bootloader Unlock dialog (chooser / manual flow) drawn over the whole
     // window (including the tab bar) when a dialog is open.
