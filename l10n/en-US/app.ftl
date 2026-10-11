@@ -477,6 +477,61 @@ unpack-done = Unpacked { $count } files ({ $size }).
 unpack-locate = Locate
 unpack-failed = Could not unpack the image: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = Unpack
+pac-repack-button = Repack
+pac-description = Extract the files stored in a Unisoc (Spreadtrum) PAC firmware package, and write a flash.cfg describing it alongside them.
+pac-select-file = Select PAC file…
+pac-listing = Reading the package…
+pac-invalid = This file is not a Unisoc PAC package (the PAC header is missing).
+pac-encrypted = This PAC package is encrypted, so its files cannot be extracted.
+pac-failed = Could not unpack the package: { $error }
+pac-select-all = Select all
+pac-select-none = Deselect all
+pac-none-chosen = Select at least one file to unpack.
+pac-search = Search files…
+pac-no-match = No file matches “{ $query }”.
+pac-partial = The package is incomplete ({ $found } of { $expected }), so some of its files are missing or cut short.
+pac-incomplete = incomplete
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = Select both download agents (FDL and FDL2) to generate the scripts.
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = Generate SPD Dump Script
+pac-spd-written = Scripts written: { $files }
+pac-spd-failed = Could not write the scripts: { $error }
+pac-spd-no-config = This package carries no configuration XML, so the partition names are not known.
+
+# "Repack Package" dialog (Mode 3): builds a PAC package from a flash.cfg or a
+# scatter XML and the files next to it.
+pac-repack-title = Repack Package
+pac-repack-description = Build a Unisoc PAC package from a flash.cfg or a scatter XML and the files next to it: every record of the source is matched to the file it needs.
+pac-repack-select-source = Select flash.cfg or scatter XML…
+pac-repack-reading = Reading the source…
+pac-repack-invalid = This file is neither a flash.cfg nor a scatter XML.
+pac-repack-files = { $resolved } of { $total } files found
+pac-repack-needs-file = no file yet
+pac-repack-select-file = Choose file
+pac-repack-leave-out = Leave out the { $count } without a file
+pac-repack-alias = Product alias
+pac-repack-version = Product version
+pac-repack-metadata = A scatter XML does not name the version of the product, so fill in what the package should carry.
+pac-repack-nothing = Select at least one file to write.
+pac-repack-save = Save package as…
+pac-repack-working = Writing the package…
+pac-repack-done = Wrote { $count } files ({ $size }) to { $path }.
+pac-repack-failed = Could not repack: { $error }
+
+# The record table's columns.
+pac-repack-col-part = Part Name
+pac-repack-col-partition = Actual Partition Name
+pac-repack-col-size = Size
+pac-repack-col-file = FileName
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = Enter Multi Flashing Mode
 multi-flash-placeholder = Multi Flashing Mode is not available yet. Its controls will appear here.

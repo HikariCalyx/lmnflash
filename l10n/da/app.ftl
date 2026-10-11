@@ -475,6 +475,61 @@ unpack-done = Udpackede { $count } filer ({ $size }).
 unpack-locate = Vis
 unpack-failed = Kunne ikke udpacke billedet: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = Udpack
+pac-repack-button = Genpak
+pac-description = Udtræk filerne i en Unisoc (Spreadtrum) PAC-firmwarepakke, og skriv en flash.cfg, der beskriver den, ved siden af dem.
+pac-select-file = Vælg PAC-fil…
+pac-listing = Læser pakken…
+pac-invalid = Denne fil er ikke en Unisoc PAC-pakke (PAC-headeren mangler).
+pac-encrypted = Denne PAC-pakke er krypteret, så dens filer kan ikke udtrækkes.
+pac-failed = Kunne ikke udpakke pakken: { $error }
+pac-select-all = Vælg alle
+pac-select-none = Fravælg alle
+pac-none-chosen = Vælg mindst én fil, der skal pakkes ud.
+pac-search = Søg i filer…
+pac-no-match = Ingen filer matcher “{ $query }”.
+pac-partial = Pakken er ufuldstændig ({ $found } af { $expected }), så nogle af dens filer mangler eller er afkortet.
+pac-incomplete = ufuldstændig
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = Vælg begge downloadagenter (FDL og FDL2) for at generere scriptene.
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = Generér SPD-dump-script
+pac-spd-written = Scripts skrevet: { $files }
+pac-spd-failed = Scriptene kunne ikke skrives: { $error }
+pac-spd-no-config = Denne pakke indeholder ingen konfigurations-XML, så partitionens navne kendes ikke.
+
+# Dialogen "Genpak pakke" (tilstand 3): bygger en PAC-pakke ud fra en flash.cfg
+# eller en scatter-XML og filerne ved siden af.
+pac-repack-title = Genpak pakke
+pac-repack-description = Byg en Unisoc PAC-pakke ud fra en flash.cfg eller en scatter-XML og filerne ved siden af: hver post i kilden knyttes til den fil, den skal bruge.
+pac-repack-select-source = Vælg flash.cfg eller scatter-XML…
+pac-repack-reading = Læser kilden…
+pac-repack-invalid = Denne fil er hverken en flash.cfg eller en scatter-XML.
+pac-repack-files = { $resolved } af { $total } filer fundet
+pac-repack-needs-file = ingen fil endnu
+pac-repack-select-file = Vælg fil
+pac-repack-leave-out = Udelad de { $count } uden fil
+pac-repack-alias = Produktalias
+pac-repack-version = Produktversion
+pac-repack-metadata = En scatter-XML angiver ikke produktets version; udfyld hvad pakken skal indeholde.
+pac-repack-nothing = Vælg mindst én fil, der skal skrives.
+pac-repack-save = Gem pakken som…
+pac-repack-working = Skriver pakken…
+pac-repack-done = Skrev { $count } filer ({ $size }) til { $path }.
+pac-repack-failed = Kunne ikke genpakke: { $error }
+
+# Kolonnerne i posttabellen.
+pac-repack-col-part = Delnavn
+pac-repack-col-partition = Faktisk partitionsnavn
+pac-repack-col-size = Størrelse
+pac-repack-col-file = Filnavn
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = Gå til multi-flash-tilstand
 multi-flash-placeholder = Multi-flash-tilstand er ikke tilgængelig endnu. Betjeningselementerne vises her.

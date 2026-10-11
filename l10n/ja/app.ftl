@@ -475,6 +475,61 @@ unpack-done = { $count } 個のファイルを展開しました（{ $size }）�
 unpack-locate = 場所を開く
 unpack-failed = イメージを展開できませんでした: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = 展開
+pac-repack-button = 再パック
+pac-description = Unisoc（Spreadtrum）の PAC ファームウェアパッケージに含まれるファイルを展開し、その内容を記述した flash.cfg を一緒に書き出します。
+pac-select-file = PAC ファイルを選択…
+pac-listing = パッケージを読み込み中…
+pac-invalid = このファイルは Unisoc の PAC パッケージではありません（PAC ヘッダーがありません）。
+pac-encrypted = この PAC パッケージは暗号化されているため、ファイルを展開できません。
+pac-failed = パッケージを展開できませんでした: { $error }
+pac-select-all = すべて選択
+pac-select-none = すべて解除
+pac-none-chosen = 展開するファイルを 1 つ以上選択してください。
+pac-search = ファイルを検索…
+pac-no-match = 「{ $query }」に一致するファイルはありません。
+pac-partial = パッケージが不完全です（{ $found } / { $expected }）。一部のファイルが欠落しているか、途中で切れています。
+pac-incomplete = 不完全
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = スクリプトを生成するには、2 つのダウンロードエージェント（FDL と FDL2）を選択してください。
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = SPD Dump スクリプトを生成
+pac-spd-written = スクリプトを書き出しました: { $files }
+pac-spd-failed = スクリプトを書き出せませんでした: { $error }
+pac-spd-no-config = このパッケージには構成 XML が含まれていないため、パーティション名がわかりません。
+
+# 「パッケージを再パック」ダイアログ（モード 3）：flash.cfg または scatter XML
+# とその隣のファイルから PAC パッケージを作成します。
+pac-repack-title = パッケージを再パック
+pac-repack-description = flash.cfg または scatter XML と、その隣にあるファイルから Unisoc PAC パッケージを作成します。元データの各項目は、必要なファイルと照合されます。
+pac-repack-select-source = flash.cfg または scatter XML を選択…
+pac-repack-reading = 元データを読み込んでいます…
+pac-repack-invalid = このファイルは flash.cfg でも scatter XML でもありません。
+pac-repack-files = { $total } 個中 { $resolved } 個のファイルが見つかりました
+pac-repack-needs-file = ファイル未選択
+pac-repack-select-file = ファイルを選択
+pac-repack-leave-out = ファイルのない { $count } 個を除外
+pac-repack-alias = 製品エイリアス
+pac-repack-version = 製品バージョン
+pac-repack-metadata = scatter XML には製品のバージョンが含まれていません。パッケージに含める内容を入力してください。
+pac-repack-nothing = 書き込むファイルを 1 つ以上選択してください。
+pac-repack-save = パッケージを名前を付けて保存…
+pac-repack-working = パッケージを書き込んでいます…
+pac-repack-done = { $count } 個のファイル（{ $size }）を { $path } に書き込みました。
+pac-repack-failed = 再パックできませんでした: { $error }
+
+# レコード表の列。
+pac-repack-col-part = パート名
+pac-repack-col-partition = 実際のパーティション名
+pac-repack-col-size = サイズ
+pac-repack-col-file = ファイル名
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = マルチフラッシュモードに入る
 multi-flash-placeholder = マルチフラッシュモードはまだ利用できません。ここに操作項目が表示されます。

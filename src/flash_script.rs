@@ -232,7 +232,7 @@ fn step_command(shell: Shell, step: &FlashOp) -> String {
 
 /// Turns a phone model into something that can be part of a file name
 /// (`XT2451-2` stays as it is, anything else becomes `_`).
-fn sanitize(name: &str) -> String {
+pub(crate) fn sanitize(name: &str) -> String {
     name.chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {

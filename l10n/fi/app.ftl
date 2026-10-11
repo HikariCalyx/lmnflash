@@ -475,6 +475,61 @@ unpack-done = Purettu { $count } tiedostoa ({ $size }).
 unpack-locate = Näytä
 unpack-failed = Kuvan purkaminen ei onnistunut: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = Pura
+pac-repack-button = Pakkaa uudelleen
+pac-description = Purkaa Unisoc (Spreadtrum) PAC -laiteohjelmistopaketin tiedostot ja kirjoittaa niiden viereen paketin kuvaavan flash.cfg-tiedoston.
+pac-select-file = Valitse PAC-tiedosto…
+pac-listing = Luetaan pakettia…
+pac-invalid = Tämä tiedosto ei ole Unisoc PAC -paketti (PAC-otsikko puuttuu).
+pac-encrypted = Tämä PAC-paketti on salattu, joten sen tiedostoja ei voi purkaa.
+pac-failed = Pakettia ei voitu purkaa: { $error }
+pac-select-all = Valitse kaikki
+pac-select-none = Poista valinnat
+pac-none-chosen = Valitse vähintään yksi purettava tiedosto.
+pac-search = Etsi tiedostoja…
+pac-no-match = Yksikään tiedosto ei vastaa hakua “{ $query }”.
+pac-partial = Paketti on puutteellinen ({ $found } / { $expected }), joten osa sen tiedostoista puuttuu tai on katkaistu.
+pac-incomplete = puutteellinen
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = Valitse molemmat latausagentit (FDL ja FDL2), jotta skriptit voidaan luoda.
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = Luo SPD-dump-skripti
+pac-spd-written = Skriptit kirjoitettu: { $files }
+pac-spd-failed = Skriptejä ei voitu kirjoittaa: { $error }
+pac-spd-no-config = Tässä paketissa ei ole määritys-XML:ää, joten osioiden nimet eivät ole tiedossa.
+
+# Valintaikkuna "Pakkaa paketti uudelleen" (tila 3): kokoaa PAC-paketin
+# flash.cfg- tai scatter-XML-tiedostosta ja sen vieressä olevista tiedostoista.
+pac-repack-title = Pakkaa paketti uudelleen
+pac-repack-description = Kokoa Unisoc PAC -paketti flash.cfg- tai scatter-XML-tiedostosta ja sen vieressä olevista tiedostoista: jokainen lähteen tietue yhdistetään tarvitsemaansa tiedostoon.
+pac-repack-select-source = Valitse flash.cfg tai scatter-XML…
+pac-repack-reading = Luetaan lähdettä…
+pac-repack-invalid = Tämä tiedosto ei ole flash.cfg eikä scatter-XML.
+pac-repack-files = { $resolved } / { $total } tiedostoa löytyi
+pac-repack-needs-file = ei vielä tiedostoa
+pac-repack-select-file = Valitse tiedosto
+pac-repack-leave-out = Jätä pois { $count } ilman tiedostoa
+pac-repack-alias = Tuotteen alias
+pac-repack-version = Tuotteen versio
+pac-repack-metadata = Scatter-XML ei kerro tuotteen versiota, joten täytä se, mikä paketin pitäisi sisältää.
+pac-repack-nothing = Valitse vähintään yksi kirjoitettava tiedosto.
+pac-repack-save = Tallenna paketti nimellä…
+pac-repack-working = Kirjoitetaan pakettia…
+pac-repack-done = Kirjoitettiin { $count } tiedostoa ({ $size }): { $path }.
+pac-repack-failed = Uudelleenpakkaaminen ei onnistunut: { $error }
+
+# Tietuetaulukon sarakkeet.
+pac-repack-col-part = Osan nimi
+pac-repack-col-partition = Todellinen osion nimi
+pac-repack-col-size = Koko
+pac-repack-col-file = Tiedostonimi
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = Siirry monilataustilaan
 multi-flash-placeholder = Monilataustila ei ole vielä käytettävissä. Sen säätimet tulevat tähän.

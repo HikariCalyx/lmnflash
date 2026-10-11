@@ -25,7 +25,7 @@ use crate::flash_engine::{Engine, RebootMode};
 use crate::flashfile::{EraseGroup, FlashPart, LoadError};
 use crate::guided::spinner;
 use crate::text;
-use crate::{enabled_procedures, engine_tool_missing, FirmwareFlashDialog, Labeled, Message, State};
+use crate::{enabled_procedures, engine_tool_missing, output_font, FirmwareFlashDialog, Labeled, Message, State};
 
 /// Id of the flashing log's scrollable, so [`crate`] can scroll it to the
 /// newest line as lines arrive.
@@ -41,33 +41,6 @@ const BAR_HEIGHT: f32 = 6.0;
 /// Monospace reads smaller than the proportional font at the same size, so it
 /// is a step up from the labels around it.
 const OUTPUT_SIZE: f32 = 13.0;
-
-/// The font the tool output is written in.
-///
-/// iced's [`iced::Font::MONOSPACE`] is a *generic* family and iced bundles no
-/// font of its own, so the system picks it — and on a machine whose monospace
-/// font is a CJK one that is a trap: those fonts map ASCII `0x5C` to their own
-/// character, so a Korean font shows the won sign (`₩`) where the output had a
-/// backslash. Naming the platform's classic monospace font keeps the output
-/// ASCII-shaped.
-fn output_font() -> iced::Font {
-    let family = {
-        #[cfg(target_os = "windows")]
-        {
-            "Consolas"
-        }
-        #[cfg(target_os = "macos")]
-        {
-            "Menlo"
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            "DejaVu Sans Mono"
-        }
-    };
-
-    iced::Font::with_name(family)
-}
 
 /// A progress bar at the height used everywhere in this dialog.
 fn bar<'a>(fraction: f32) -> Element<'a, Message> {

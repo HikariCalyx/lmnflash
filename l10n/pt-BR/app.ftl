@@ -475,6 +475,61 @@ unpack-done = { $count } arquivos descompactados ({ $size }).
 unpack-locate = Mostrar
 unpack-failed = Não foi possível descompactar a imagem: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = Descompactar
+pac-repack-button = Recomprimir
+pac-description = Extrai os arquivos de um pacote de firmware PAC da Unisoc (Spreadtrum) e grava junto deles um flash.cfg que o descreve.
+pac-select-file = Selecionar arquivo PAC…
+pac-listing = Lendo o pacote…
+pac-invalid = Este arquivo não é um pacote PAC da Unisoc (o cabeçalho PAC está ausente).
+pac-encrypted = Este pacote PAC está criptografado, portanto seus arquivos não podem ser extraídos.
+pac-failed = Não foi possível descompactar o pacote: { $error }
+pac-select-all = Selecionar tudo
+pac-select-none = Desmarcar tudo
+pac-none-chosen = Selecione pelo menos um arquivo para descompactar.
+pac-search = Pesquisar arquivos…
+pac-no-match = Nenhum arquivo corresponde a “{ $query }”.
+pac-partial = O pacote está incompleto ({ $found } de { $expected }), então alguns de seus arquivos estão faltando ou truncados.
+pac-incomplete = incompleto
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = Selecione os dois agentes de download (FDL e FDL2) para gerar os scripts.
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = Gerar script de dump SPD
+pac-spd-written = Scripts gravados: { $files }
+pac-spd-failed = Não foi possível gravar os scripts: { $error }
+pac-spd-no-config = Este pacote não contém o XML de configuração, então os nomes das partições são desconhecidos.
+
+# Caixa de diálogo "Recomprimir pacote" (modo 3): cria um pacote PAC a partir
+# de um flash.cfg ou de um XML scatter e dos arquivos ao lado.
+pac-repack-title = Recomprimir pacote
+pac-repack-description = Crie um pacote PAC da Unisoc a partir de um flash.cfg ou de um XML scatter e dos arquivos ao lado: cada registro da fonte é associado ao arquivo de que precisa.
+pac-repack-select-source = Selecionar flash.cfg ou XML scatter…
+pac-repack-reading = Lendo a fonte…
+pac-repack-invalid = Este arquivo não é um flash.cfg nem um XML scatter.
+pac-repack-files = { $resolved } de { $total } arquivos encontrados
+pac-repack-needs-file = ainda sem arquivo
+pac-repack-select-file = Escolher arquivo
+pac-repack-leave-out = Omitir os { $count } sem arquivo
+pac-repack-alias = Alias do produto
+pac-repack-version = Versão do produto
+pac-repack-metadata = Um XML scatter não informa a versão do produto; preencha o que o pacote deve conter.
+pac-repack-nothing = Selecione pelo menos um arquivo para gravar.
+pac-repack-save = Salvar pacote como…
+pac-repack-working = Gravando o pacote…
+pac-repack-done = { $count } arquivos ({ $size }) gravados em { $path }.
+pac-repack-failed = Não foi possível recomprimir: { $error }
+
+# As colunas da tabela de registros.
+pac-repack-col-part = Nome da parte
+pac-repack-col-partition = Nome real da partição
+pac-repack-col-size = Tamanho
+pac-repack-col-file = Nome do arquivo
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = Entrar no modo multiflash
 multi-flash-placeholder = O modo multiflash ainda não está disponível. Os controles aparecerão aqui.

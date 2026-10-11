@@ -29,9 +29,15 @@ mod lenovoubl;
 mod login;
 mod lookup;
 mod multi_flash;
+mod pac;
+mod pac_build;
+mod pac_repack;
+mod pac_unpack;
 mod platform_tools;
 mod protocol;
+mod scatter;
 mod smartphone;
+mod spd_script;
 mod tablet_bootloader;
 mod tablet_unlock;
 mod telemetry;
@@ -213,6 +219,33 @@ fn system_ui_font() -> Font {
             {
                 "Noto Sans"
             }
+        }
+    };
+
+    Font::with_name(family)
+}
+
+/// The font tool output and table data are written in.
+///
+/// iced's [`iced::Font::MONOSPACE`] is a *generic* family and iced bundles no
+/// font of its own, so the system picks it — and on a machine whose monospace
+/// font is a CJK one that is a trap: those fonts map ASCII `0x5C` to their own
+/// character, so a Korean font shows the won sign (`₩`) where the output had a
+/// backslash. Naming the platform's classic monospace font keeps the output
+/// ASCII-shaped.
+pub(crate) fn output_font() -> Font {
+    let family = {
+        #[cfg(target_os = "windows")]
+        {
+            "Consolas"
+        }
+        #[cfg(target_os = "macos")]
+        {
+            "Menlo"
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            "DejaVu Sans Mono"
         }
     };
 
@@ -611,6 +644,146 @@ impl UnpackState {
     fn busy(&self) -> bool {
         self.listing || self.working
     }
+}
+
+/// State of the "Unisoc PAC" package tool (Mode 3, firmware-file tools).
+#[derive(Default)]
+struct PacState {
+    /// Whether the modal is open.
+    open: bool,
+    /// The package file chosen by the user.
+    file: Option<std::path::PathBuf>,
+    /// Where the files are written.
+    output: Option<std::path::PathBuf>,
+    /// The package's header and file table, once they were read.
+    package: Option<pac::Package>,
+    /// Which entries are checked, parallel to `package.files`.
+    selected: Vec<bool>,
+    /// What the search box above the file list contains. It only filters what
+    /// the list shows; `selected` keeps the indexes into `package.files`, so a
+    /// selection survives changing the query.
+    filter: String,
+    /// `true` while the package's file table is being read.
+    listing: bool,
+    /// Why the package could not be read.
+    file_error: Option<pac::PacError>,
+    /// Id of the running extraction, so events of an abandoned job are dropped.
+    job: u64,
+    /// `true` while the checked files are written out.
+    working: bool,
+    /// The file being written right now.
+    current: Option<String>,
+    /// Payload bytes written so far, and the payload size of the selection.
+    done_bytes: u64,
+    total_bytes: u64,
+    /// How the run ended.
+    result: Option<Result<pac::Summary, pac::PacError>>,
+    /// Whether the run also writes the `spd_dump` scripts next to the files.
+    spd_script: bool,
+    /// The scripts the last run wrote, or why they could not be written.
+    /// `None` while nothing ran, and empty when none were asked for.
+    scripts: Option<Result<Vec<String>, String>>,
+}
+
+/// Progress of a package extraction.
+///
+/// The worker reports its outcome itself, in one place, so the dialog can never
+/// wait for an event that does not come.
+#[derive(Debug, Clone)]
+enum PacJobEvent {
+    /// A file is about to be written.
+    File(String),
+    /// `bytes` payload bytes have been written so far (across all files).
+    Progress { bytes: u64, total: u64 },
+    /// The run is over: what it wrote, and the scripts written next to the
+    /// files — empty when the user asked for none.
+    Finished {
+        result: Result<pac::Summary, pac::PacError>,
+        scripts: Result<Vec<String>, String>,
+    },
+}
+
+impl PacState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.listing || self.working
+    }
+
+    /// How many entries are checked.
+    fn chosen(&self) -> usize {
+        self.selected.iter().filter(|chosen| **chosen).count()
+    }
+
+    /// Indexes of the checked entries, the way [`pac::unpack`] takes them.
+    fn chosen_indexes(&self) -> Vec<usize> {
+        self.selected
+            .iter()
+            .enumerate()
+            .filter(|(_, chosen)| **chosen)
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
+/// State of the "Repack Package" dialog (Mode 3, firmware-file tools).
+///
+/// Unisoc leaves a scattered firmware behind as its files, a scatter XML and a
+/// `flash.cfg`; either of the two is read here and turned back into a package.
+/// A `flash.cfg` names every file itself, a scatter XML only for the names its
+/// product uses — what cannot be matched is pointed at by hand, or left out of
+/// the package.
+#[derive(Default)]
+struct PacRepackState {
+    /// Whether the modal is open.
+    open: bool,
+    /// The `flash.cfg` or scatter XML the package is described by.
+    source: Option<std::path::PathBuf>,
+    /// The records to write, once the source was read.
+    plan: Option<pac_build::Plan>,
+    /// What the search box above the record list contains. It only filters what
+    /// the list shows.
+    filter: String,
+    /// How far the record table is scrolled sideways, so its header can be
+    /// drawn above the columns the rows are scrolled to.
+    offset: f32,
+    /// `true` while the source is being read.
+    reading: bool,
+    /// Why the source could not be read.
+    source_error: Option<pac_build::BuildError>,
+    /// The file the package is written to, once the user named it.
+    output: Option<std::path::PathBuf>,
+    /// Id of the running build, so events of an abandoned job are dropped.
+    job: u64,
+    /// `true` while the package is written.
+    working: bool,
+    /// The file being written right now.
+    current: Option<String>,
+    /// Payload bytes written so far, and the payload size of the run.
+    done_bytes: u64,
+    total_bytes: u64,
+    /// How the run ended.
+    result: Option<Result<pac::Summary, pac_build::BuildError>>,
+}
+
+impl PacRepackState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.reading || self.working
+    }
+}
+
+/// What a running repack reports.
+///
+/// The package writer reports its own progress, but it does not know why a plan
+/// was refused, so the outcome of the whole build is reported here instead.
+#[derive(Debug, Clone)]
+enum PacRepackEvent {
+    /// The file being written right now.
+    File(String),
+    /// Payload bytes written so far, out of the total.
+    Progress { bytes: u64, total: u64 },
+    /// How the build ended.
+    Finished(Result<pac::Summary, pac_build::BuildError>),
 }
 
 /// Which "Remove System Bloatware" dialog is currently on screen.
@@ -1259,6 +1432,10 @@ struct State {
     decrypt: DecryptState,
     /// The "Unpack Image" feature of the firmware-decrypt mode (Mode 3).
     unpack: UnpackState,
+    /// The "Unisoc PAC" feature of the firmware-decrypt mode (Mode 3).
+    pac: PacState,
+    /// The "Repack Package" feature of the firmware-decrypt mode (Mode 3).
+    pac_repack: PacRepackState,
     flash: SmartphoneFlashState,
     /// Whether the About dialog (the round "i" button next to the language
     /// selector on the Firmware Lookup page) is open.
@@ -1297,6 +1474,8 @@ impl Default for State {
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
             unpack: UnpackState::default(),
+            pac: PacState::default(),
+            pac_repack: PacRepackState::default(),
             flash: SmartphoneFlashState::default(),
             about_open: false,
             anim_tick: 0,
@@ -1713,6 +1892,90 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     UnpackBackdropPressed,
+    /// Unisoc PAC: ask for the package file to unpack.
+    PacPickFileRequested,
+    /// Unisoc PAC: the file picker closed (`None` = cancelled).
+    PacFilePicked(Option<std::path::PathBuf>),
+    /// Unisoc PAC: the picked package's file table was read (the carried path
+    /// tells a late answer for another file apart).
+    PacListed(std::path::PathBuf, Result<pac::Package, pac::PacError>),
+    /// Unisoc PAC: ask for the folder the files are written to.
+    PacPickFolderRequested,
+    /// Unisoc PAC: the folder picker closed (`None` = cancelled).
+    PacFolderPicked(Option<std::path::PathBuf>),
+    /// Unisoc PAC: check or uncheck one entry.
+    PacEntryToggled(usize, bool),
+    /// Unisoc PAC: check or uncheck every entry.
+    PacSelectAll(bool),
+    /// Unisoc PAC: the search box above the file list changed.
+    PacFilterChanged(String),
+    /// Unisoc PAC: write the `spd_dump` scripts next to the files, or not.
+    PacScriptToggled(bool),
+    /// Unisoc PAC: start extracting the checked files.
+    PacStart,
+    /// Unisoc PAC: show the output folder in the system's file manager.
+    PacLocate,
+    /// Unisoc PAC: the output folder was handed to the file manager (only
+    /// logs a failure).
+    PacFolderOpened,
+    /// Unisoc PAC: progress of the running extraction.
+    PacEvent(u64, PacJobEvent),
+    /// A background extraction ended (only completes the task; the outcome
+    /// arrives through the event message above).
+    PacWorkerDone,
+    /// Unisoc PAC: close the dialog.
+    PacCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    PacBackdropPressed,
+    /// Repack Package: ask for the `flash.cfg` or scatter XML to build from.
+    PacRepackPickSourceRequested,
+    /// Repack Package: the source picker closed (`None` = cancelled).
+    PacRepackSourcePicked(Option<std::path::PathBuf>),
+    /// Repack Package: the picked source was read (the carried path tells a
+    /// late answer for another file apart).
+    PacRepackPlanned(
+        std::path::PathBuf,
+        Result<pac_build::Plan, pac_build::BuildError>,
+    ),
+    /// Repack Package: the product alias the package should carry changed.
+    PacRepackAliasChanged(String),
+    /// Repack Package: the product version the package should carry changed.
+    PacRepackVersionChanged(String),
+    /// Repack Package: the search box above the record list changed.
+    PacRepackFilterChanged(String),
+    /// Repack Package: the record table was scrolled sideways — the header of
+    /// the table follows it.
+    PacRepackScrolled(f32),
+    /// Repack Package: leave one record in the package, or out of it.
+    PacRepackToggle(usize, bool),
+    /// Repack Package: leave in, or out, every record the search box shows.
+    PacRepackSelectAll(bool),
+    /// Repack Package: leave out every record that still has no file.
+    PacRepackLeaveOut,
+    /// Repack Package: ask for the file of one record.
+    PacRepackSelectFile(usize),
+    /// Repack Package: that picker closed (`None` = cancelled).
+    PacRepackFilePicked(usize, Option<std::path::PathBuf>),
+    /// Repack Package: ask where the package is written, and build it.
+    PacRepackStart,
+    /// Repack Package: the save dialog closed (`None` = cancelled).
+    PacRepackOutputChosen(Option<std::path::PathBuf>),
+    /// Repack Package: show the written package in the system's file manager.
+    PacRepackLocate,
+    /// Repack Package: the folder was handed to the file manager (only logs a
+    /// failure).
+    PacRepackFolderOpened,
+    /// Repack Package: progress of the running build.
+    PacRepackEvent(u64, PacRepackEvent),
+    /// A background build ended (only completes the task; the outcome arrives
+    /// through the event message above).
+    PacRepackWorkerDone,
+    /// Repack Package: close the dialog.
+    PacRepackCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    PacRepackBackdropPressed,
     /// Multi Flashing: leave the page and return to the Mode 2 feature grid.
     MultiFlashExit,
     /// Multi Flashing: open the "Preset Manage" dialog.
@@ -1764,6 +2027,8 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let tablet = &state.flash.tablet_unlock;
     let bloatware = &state.flash.bloatware;
     let unpack = &state.unpack;
+    let pac = &state.pac;
+    let repack = &state.pac_repack;
     let animating = guided.logging_in
         || guided.logging_out
         || guided.fetching_account
@@ -1790,6 +2055,10 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || bloatware.removing
         || unpack.listing
         || unpack.working
+        || pac.listing
+        || pac.working
+        || repack.reading
+        || repack.working
         // The decrypt dialog only has text while it works, but its spinner
         // ticks along with the others.
         || matches!(state.decrypt.status, DecryptStatus::Working);
@@ -1915,6 +2184,8 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::DriverCancel
             | Message::BloatwareCancel
             | Message::UnpackCancel
+            | Message::PacCancel
+            | Message::PacRepackCancel
             | Message::DecryptCancel
             | Message::MultiFlashPresetClose
             | Message::MultiFlashClosePromptDismissed
@@ -1971,6 +2242,14 @@ const OVERLAY_BLOATWARE: u8 = 0xB0;
 /// The "Unpack Image" dialog; its low nibble is the step it shows (the setup
 /// form, or the running extraction and its result).
 const OVERLAY_UNPACK: u8 = 0xD0;
+/// The "Unisoc PAC" dialog; its low nibble is the step it shows (the setup
+/// form with the file list, or the running extraction and its result). It
+/// shares the tablet-decrypt nibble, since the two dialogs are never open at
+/// once.
+const OVERLAY_PAC: u8 = 0xE1;
+/// The "Repack Package" dialog; its low nibble is the step it shows (the setup
+/// form with the record list, or the running build and its result).
+const OVERLAY_PAC_REPACK: u8 = 0xE3;
 /// The "Tablet Firmware Decrypt" dialog.
 const OVERLAY_DECRYPT: u8 = 0xE0;
 const OVERLAY_RETCN_PICKER: u8 = 0xC0;
@@ -2111,6 +2390,32 @@ fn overlay_key(state: &State) -> u8 {
         return OVERLAY_DECRYPT;
     }
 
+    if pac_unpack::is_open(state) {
+        // The setup form with the file list, and the running extraction with
+        // its result.
+        let pac = &state.pac;
+        let step = if pac.working || pac.result.is_some() {
+            1
+        } else {
+            0
+        };
+
+        return OVERLAY_PAC + step;
+    }
+
+    if pac_repack::is_open(state) {
+        // The setup form with the record list, and the running build with its
+        // result.
+        let repack = &state.pac_repack;
+        let step = if repack.working || repack.result.is_some() {
+            1
+        } else {
+            0
+        };
+
+        return OVERLAY_PAC_REPACK + step;
+    }
+
     if state.about_open {
         return OVERLAY_ABOUT;
     }
@@ -2227,6 +2532,8 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::DecryptFeaturePressed(feature) => match feature {
             decrypt_mode::DecryptFeature::TabletDecrypt => start_decrypt_dialog(state),
             decrypt_mode::DecryptFeature::UnpackImage => start_unpack_dialog(state),
+            decrypt_mode::DecryptFeature::UnisocPac => start_pac_dialog(state),
+            decrypt_mode::DecryptFeature::UnisocPacRepack => start_pac_repack_dialog(state),
         },
         Message::DecryptCancel => {
             // Never close the dialog while a batch is running: its result would
@@ -3386,6 +3693,605 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::UnpackBackdropPressed => Task::none(),
+        Message::PacPickFileRequested => {
+            if state.pac.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("pac-select-file");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("PAC", &["pac"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::PacFilePicked,
+            )
+        }
+        Message::PacFilePicked(path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            let pac = &mut state.pac;
+            if pac.busy() {
+                return Task::none();
+            }
+
+            // A new package starts over: the old table (and any result) belongs
+            // to another file.
+            pac.file = Some(path.clone());
+            pac.package = None;
+            pac.selected.clear();
+            pac.filter.clear();
+            pac.file_error = None;
+            pac.result = None;
+            pac.listing = true;
+
+            // The path guards the answer: a file picked while an earlier one is
+            // still being read must not be overwritten by its result.
+            Task::perform(
+                async move {
+                    let listing = path.clone();
+                    let result = tokio::task::spawn_blocking(move || pac::list(&listing))
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(pac::PacError::Read(format!(
+                                "background task failed: {error}"
+                            )))
+                        });
+
+                    (path, result)
+                },
+                |(path, result)| Message::PacListed(path, result),
+            )
+        }
+        Message::PacListed(path, result) => {
+            let pac = &mut state.pac;
+
+            if pac.file.as_deref() != Some(path.as_path()) {
+                return Task::none();
+            }
+
+            pac.listing = false;
+
+            match result {
+                Ok(package) => {
+                    pac.total_bytes = package.files.iter().map(|entry| entry.size).sum();
+                    pac.done_bytes = 0;
+                    // Every file starts out checked: unpacking the whole
+                    // package is the common case. Files a partial package cut
+                    // short stay unchecked, so writing half an image takes a
+                    // deliberate click.
+                    pac.selected = package.files.iter().map(|entry| entry.complete).collect();
+                    pac.package = Some(package);
+                    pac.file_error = None;
+                }
+                Err(error) => {
+                    pac.package = None;
+                    pac.selected.clear();
+                    pac.total_bytes = 0;
+                    pac.file_error = Some(error);
+                }
+            }
+
+            // Another package may leave the scripts without their download
+            // agents.
+            drop_spd_script_when_impossible(pac);
+
+            Task::none()
+        }
+        Message::PacPickFolderRequested => {
+            if state.pac.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("unpack-select-folder");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_folder()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::PacFolderPicked,
+            )
+        }
+        Message::PacFolderPicked(folder) => {
+            if let Some(folder) = folder {
+                state.pac.output = Some(folder);
+            }
+
+            Task::none()
+        }
+        Message::PacEntryToggled(index, checked) => {
+            // The list is locked while the package is read or written.
+            if state.pac.busy() {
+                return Task::none();
+            }
+
+            if let Some(entry) = state.pac.selected.get_mut(index) {
+                *entry = checked;
+            }
+
+            drop_spd_script_when_impossible(&mut state.pac);
+
+            Task::none()
+        }
+        Message::PacSelectAll(checked) => {
+            if state.pac.busy() {
+                return Task::none();
+            }
+
+            // The buttons act on what the search box shows, like the bloatware
+            // dialog's checklist does. Without a query that is every file.
+            let visible: Vec<usize> = state
+                .pac
+                .package
+                .as_ref()
+                .map(|package| {
+                    package
+                        .files
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| pac::matches(&entry.name, &state.pac.filter))
+                        .map(|(index, _)| index)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            for index in visible {
+                if let Some(entry) = state.pac.selected.get_mut(index) {
+                    *entry = checked;
+                }
+            }
+
+            drop_spd_script_when_impossible(&mut state.pac);
+
+            Task::none()
+        }
+        Message::PacFilterChanged(filter) => {
+            state.pac.filter = filter;
+            Task::none()
+        }
+        Message::PacStart => start_pac_job(state),
+        Message::PacLocate => {
+            // Only a finished run has files to find; the button is drawn in
+            // that state.
+            let Some(directory) = state.pac.output.clone() else {
+                return Task::none();
+            };
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || open::that(&directory))
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                error.to_string(),
+                            ))
+                        })
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the output folder: {error}");
+                    }
+
+                    Message::PacFolderOpened
+                },
+            )
+        }
+        Message::PacFolderOpened => Task::none(),
+        Message::PacEvent(job, event) => {
+            let pac = &mut state.pac;
+
+            // Stale events (a job the user left behind) are dropped.
+            if job != pac.job {
+                return Task::none();
+            }
+
+            match event {
+                PacJobEvent::File(name) => {
+                    pac.current = Some(name);
+                }
+                PacJobEvent::Progress { bytes, total } => {
+                    pac.done_bytes = pac.done_bytes.max(bytes);
+                    pac.total_bytes = pac.total_bytes.max(total);
+                }
+                PacJobEvent::Finished { result, scripts } => {
+                    pac.working = false;
+                    pac.current = None;
+                    pac.result = Some(result);
+                    pac.scripts = Some(scripts);
+                }
+            }
+
+            Task::none()
+        }
+        Message::PacWorkerDone => Task::none(),
+        Message::PacScriptToggled(asked) => {
+            if state.pac.busy() {
+                return Task::none();
+            }
+
+            // The scripts name the two download agents, so they have to be part
+            // of what the run writes: the option cannot be switched on without
+            // them.
+            let possible = state
+                .pac
+                .package
+                .as_ref()
+                .is_some_and(|package| spd_script::can_generate(package, &state.pac.selected));
+
+            state.pac.spd_script = asked && possible;
+            state.pac.scripts = None;
+
+            Task::none()
+        }
+        Message::PacCancel => {
+            // Never close the dialog while the package is being read or its
+            // files are being written.
+            if state.pac.busy() {
+                return Task::none();
+            }
+
+            state.pac = PacState::default();
+            Task::none()
+        }
+        Message::PacBackdropPressed => Task::none(),
+        Message::PacRepackPickSourceRequested => {
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("pac-repack-select-source");
+
+            // The two files the Unisoc tools describe a firmware with, in one
+            // dialog: which one it is, is told by its extension. Both kinds are
+            // listed at once, so neither has to be hunted for by switching the
+            // dialog's own filter.
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("Flash configuration or scatter XML", &["cfg", "xml"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::PacRepackSourcePicked,
+            )
+        }
+        Message::PacRepackSourcePicked(path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            let repack = &mut state.pac_repack;
+            if repack.busy() {
+                return Task::none();
+            }
+
+            // Another source starts over: the old records (and any result)
+            // belong to another firmware.
+            repack.source = Some(path.clone());
+            repack.plan = None;
+            repack.filter.clear();
+            repack.offset = 0.0;
+            repack.source_error = None;
+            repack.output = None;
+            repack.result = None;
+            repack.reading = true;
+
+            // The path guards the answer: a source picked while an earlier one
+            // is still being read must not be overwritten by its result.
+            Task::perform(
+                async move {
+                    let listing = path.clone();
+                    let result = tokio::task::spawn_blocking(move || pac_build::plan(&listing))
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(pac_build::BuildError::Read(format!(
+                                "background task failed: {error}"
+                            )))
+                        });
+
+                    (path, result)
+                },
+                |(path, result)| Message::PacRepackPlanned(path, result),
+            )
+        }
+        Message::PacRepackPlanned(path, result) => {
+            let repack = &mut state.pac_repack;
+
+            if repack.source.as_deref() != Some(path.as_path()) {
+                return Task::none();
+            }
+
+            repack.reading = false;
+
+            match result {
+                Ok(plan) => {
+                    repack.done_bytes = 0;
+                    repack.total_bytes = 0;
+                    repack.plan = Some(plan);
+                    repack.source_error = None;
+                }
+                Err(error) => {
+                    repack.plan = None;
+                    repack.source_error = Some(error);
+                }
+            }
+
+            // The table of the source that was replaced is left where it was
+            // scrolled to: another firmware starts at its first column.
+            iced::widget::scrollable::scroll_to(
+                iced::widget::scrollable::Id::new(pac_repack::TABLE_ID),
+                iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+            )
+        }
+        Message::PacRepackAliasChanged(alias) => {
+            // The fields are drawn from the plan, so they can only be typed
+            // into while one is loaded.
+            if let Some(plan) = state.pac_repack.plan.as_mut() {
+                plan.header.product_alias = alias;
+            }
+
+            Task::none()
+        }
+        Message::PacRepackVersionChanged(version) => {
+            if let Some(plan) = state.pac_repack.plan.as_mut() {
+                plan.header.product_version = version;
+            }
+
+            Task::none()
+        }
+        Message::PacRepackFilterChanged(filter) => {
+            state.pac_repack.filter = filter;
+            Task::none()
+        }
+        Message::PacRepackScrolled(offset) => {
+            // The header of the table is drawn at this offset; nothing is
+            // scrolled here, so no task is started.
+            state.pac_repack.offset = offset;
+            Task::none()
+        }
+        Message::PacRepackToggle(index, included) => {
+            // The list is locked while the source is read or the package is
+            // written.
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            if let Some(plan) = state.pac_repack.plan.as_mut() {
+                plan.set_included(index, included);
+            }
+
+            Task::none()
+        }
+        Message::PacRepackSelectAll(included) => {
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            // The buttons act on what the search box shows, like the package
+            // dialog's list does. Without a query that is every record.
+            let filter = state.pac_repack.filter.clone();
+
+            if let Some(plan) = state.pac_repack.plan.as_mut() {
+                for index in pac_repack::visible(plan, &filter) {
+                    plan.set_included(index, included);
+                }
+            }
+
+            Task::none()
+        }
+        Message::PacRepackLeaveOut => {
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            // What the source could not match would hold the build back: it is
+            // still listed, just not written. The configuration XML is not the
+            // user's to leave out either.
+            if let Some(plan) = state.pac_repack.plan.as_mut() {
+                for entry in &mut plan.entries {
+                    if entry.is_missing() && !entry.is_configuration() {
+                        entry.include = false;
+                    }
+                }
+            }
+
+            Task::none()
+        }
+        Message::PacRepackSelectFile(index) => {
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            // The files of a scattered firmware sit next to the source, so the
+            // picker opens there.
+            let folder = state
+                .pac_repack
+                .plan
+                .as_ref()
+                .and_then(|plan| plan.source.parent())
+                .map(std::path::Path::to_path_buf);
+            let title = state.l10n.tr("pac-repack-select-file");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let mut dialog = rfd::FileDialog::new().set_title(&title);
+
+                        if let Some(folder) = folder {
+                            dialog = dialog.set_directory(folder);
+                        }
+
+                        dialog.pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                move |path| Message::PacRepackFilePicked(index, path),
+            )
+        }
+        Message::PacRepackFilePicked(index, path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            if let Some(plan) = state.pac_repack.plan.as_mut() {
+                if let Some(entry) = plan.entries.get_mut(index) {
+                    // The table shows what the file is called and how large it
+                    // is, so the record takes both from it.
+                    entry.choose(path);
+                }
+            }
+
+            Task::none()
+        }
+        Message::PacRepackStart => {
+            let repack = &state.pac_repack;
+
+            let Some(plan) = repack.plan.as_ref() else {
+                return Task::none();
+            };
+
+            // The button is only drawn when all of this holds; asking again
+            // guards against a build starting while the picker was open.
+            if repack.busy()
+                || repack.result.is_some()
+                || plan.missing() > 0
+                || plan.needs_metadata()
+                || plan.chosen() == 0
+            {
+                return Task::none();
+            }
+
+            let name = plan.suggested_name();
+            let folder = plan.source.parent().map(std::path::Path::to_path_buf);
+            let title = state.l10n.tr("pac-repack-save");
+
+            // The package is one file: the save dialog asks for its name, and
+            // the build starts with the answer, so no run can start without a
+            // destination — replacing the file it writes is the user's call.
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let mut dialog = rfd::FileDialog::new()
+                            .set_title(&title)
+                            .set_file_name(&name)
+                            .add_filter("PAC", &["pac"]);
+
+                        if let Some(folder) = folder {
+                            dialog = dialog.set_directory(folder);
+                        }
+
+                        dialog.save_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::PacRepackOutputChosen,
+            )
+        }
+        Message::PacRepackOutputChosen(path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            state.pac_repack.output = Some(path);
+            start_pac_repack_job(state)
+        }
+        Message::PacRepackLocate => {
+            // Only a finished run has a package to find; the button is drawn in
+            // that state.
+            let Some(folder) = state
+                .pac_repack
+                .output
+                .as_deref()
+                .and_then(std::path::Path::parent)
+                .map(std::path::Path::to_path_buf)
+            else {
+                return Task::none();
+            };
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || open::that(&folder))
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                error.to_string(),
+                            ))
+                        })
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the output folder: {error}");
+                    }
+
+                    Message::PacRepackFolderOpened
+                },
+            )
+        }
+        Message::PacRepackFolderOpened => Task::none(),
+        Message::PacRepackEvent(job, event) => {
+            let repack = &mut state.pac_repack;
+
+            // Stale events (a job the user left behind) are dropped.
+            if job != repack.job {
+                return Task::none();
+            }
+
+            match event {
+                PacRepackEvent::File(name) => repack.current = Some(name),
+                PacRepackEvent::Progress { bytes, total } => {
+                    repack.done_bytes = repack.done_bytes.max(bytes);
+                    repack.total_bytes = repack.total_bytes.max(total);
+                }
+                PacRepackEvent::Finished(result) => {
+                    repack.working = false;
+                    repack.current = None;
+                    repack.result = Some(result);
+                }
+            }
+
+            Task::none()
+        }
+        Message::PacRepackWorkerDone => Task::none(),
+        Message::PacRepackCancel => {
+            // Never close the dialog while the source is being read or the
+            // package is written.
+            if state.pac_repack.busy() {
+                return Task::none();
+            }
+
+            state.pac_repack = PacRepackState::default();
+            Task::none()
+        }
+        Message::PacRepackBackdropPressed => Task::none(),
         Message::FirmwareFlashExport => start_firmware_flash_export(state),
         Message::FirmwareFlashExported(result) => {
             let flash = &mut state.flash.firmware;
@@ -5555,6 +6461,276 @@ fn start_unpack_job(state: &mut State) -> Task<Message> {
     Task::batch([producer, consumer])
 }
 
+/// Opens the "Unisoc PAC" dialog. Nothing is read yet: the dialog asks for the
+/// package (whose file table is listed as soon as it is picked) and for the
+/// folder the files are written into.
+fn start_pac_dialog(state: &mut State) -> Task<Message> {
+    state.pac = PacState {
+        open: true,
+        ..PacState::default()
+    };
+
+    Task::none()
+}
+
+/// Extracts the checked files of the selected package on a worker thread,
+/// streaming its progress into the dialog.
+fn start_pac_job(state: &mut State) -> Task<Message> {
+    let Some(file) = state.pac.file.clone() else {
+        return Task::none();
+    };
+    let Some(output) = state.pac.output.clone() else {
+        return Task::none();
+    };
+
+    let selected = state.pac.chosen_indexes();
+    let script = state.pac.spd_script;
+
+    if selected.is_empty() {
+        return Task::none();
+    }
+
+    // A run of nothing but the download agents is not a scattered firmware: it
+    // prepares a factory reset, so it leaves the flash configuration out.
+    let configuration = if state
+        .pac
+        .package
+        .as_ref()
+        .is_some_and(|package| spd_script::only_loaders(package, &selected))
+    {
+        pac::Configuration::Skip
+    } else {
+        pac::Configuration::Write
+    };
+
+    let pac = &mut state.pac;
+    if pac.busy() {
+        return Task::none();
+    }
+
+    pac.working = true;
+    pac.job = pac.job.wrapping_add(1);
+    pac.current = None;
+    pac.done_bytes = 0;
+    pac.result = None;
+    pac.scripts = None;
+
+    let job_id = pac.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let event = match event {
+            pac::PacEvent::File { name, .. } => PacJobEvent::File(name),
+            pac::PacEvent::Progress { bytes, total } => PacJobEvent::Progress { bytes, total },
+            // The outcome is reported once, by the worker below.
+            pac::PacEvent::Finished(_) => return,
+        };
+
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker = tokio::task::spawn_blocking(move || {
+                let result = pac::unpack(&file, &output, &selected, configuration, &emit);
+
+                // The scripts describe the firmware the extraction just wrote,
+                // so they follow it — and only when it worked, and only when
+                // they were asked for.
+                let scripts = if script && result.is_ok() {
+                    write_spd_scripts(&file, &output, &selected)
+                } else {
+                    Ok(Vec::new())
+                };
+
+                (result, scripts)
+            });
+
+            // A worker that died without reporting anything has to be turned
+            // into an event here, or the dialog would wait for one that never
+            // comes (the sender it held is gone with it).
+            let event = match worker.await {
+                Ok((result, scripts)) => PacJobEvent::Finished { result, scripts },
+                Err(error) => PacJobEvent::Finished {
+                    result: Err(pac::PacError::Read(format!(
+                        "background task failed: {error}"
+                    ))),
+                    scripts: Ok(Vec::new()),
+                },
+            };
+
+            let _ = failure_sender.unbounded_send(event);
+        },
+        |()| Message::PacWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| Message::PacEvent(job_id, event));
+
+    Task::batch([producer, consumer])
+}
+
+/// Writes the `spd_dump` scripts next to the files a package was unpacked into.
+///
+/// They are rendered from the package and its configuration XML: the partition
+/// of every record and the addresses of the two download agents come from that
+/// XML, which is why a package that carries none cannot have them. The XML is
+/// read from the package itself — the user may well not have unpacked it, and
+/// the reset script does not need it to be there at all. The names of the files
+/// written are returned, so the dialog can say what it wrote.
+fn write_spd_scripts(
+    package: &std::path::Path,
+    output: &std::path::Path,
+    selected: &[usize],
+) -> Result<Vec<String>, String> {
+    let parsed = pac::list(package).map_err(|error| error.to_string())?;
+    let configuration = pac::config_name(&parsed).to_string();
+
+    let entry = parsed
+        .files
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(&configuration))
+        .ok_or_else(|| format!("{configuration}: the package does not carry it"))?;
+
+    let xml = pac::payload(package, entry).map_err(|error| error.to_string())?;
+    let xml = String::from_utf8_lossy(&xml).into_owned();
+
+    // The scripts are named after the product, or after the package when it
+    // does not name one.
+    let product = parsed.header.product_name.trim().to_string();
+    let base = if product.is_empty() {
+        package
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        product
+    };
+
+    let scripts = spd_script::scripts(
+        &parsed,
+        selected,
+        &xml,
+        flash_script::Shell::for_host(),
+        &base,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut written = Vec::new();
+
+    // Only the scripts that describe this run are there: with nothing left to
+    // write, the flash script would not.
+    for (name, contents) in [scripts.flash, Some(scripts.reset)].into_iter().flatten() {
+        let path = output.join(&name);
+
+        std::fs::write(&path, contents).map_err(|error| format!("{name}: {error}"))?;
+
+        // A script is meant to be started, so it has to be executable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+
+        written.push(name);
+    }
+
+    Ok(written)
+}
+
+/// Turns the "Generate SPD Dump Script" option off when the selection can no
+/// longer produce the scripts: they name the two download agents, so leaving
+/// one of them out makes the option impossible rather than wrong.
+fn drop_spd_script_when_impossible(pac: &mut PacState) {
+    if !pac.spd_script {
+        return;
+    }
+
+    let possible = pac
+        .package
+        .as_ref()
+        .is_some_and(|package| spd_script::can_generate(package, &pac.selected));
+
+    if !possible {
+        pac.spd_script = false;
+    }
+}
+
+/// Opens the "Repack Package" dialog. Nothing is read yet: the dialog asks for
+/// the `flash.cfg` or scatter XML the package is described by.
+fn start_pac_repack_dialog(state: &mut State) -> Task<Message> {
+    state.pac_repack = PacRepackState {
+        open: true,
+        ..PacRepackState::default()
+    };
+
+    Task::none()
+}
+
+/// Writes the package the loaded plan describes on a worker thread, streaming
+/// its progress into the dialog.
+fn start_pac_repack_job(state: &mut State) -> Task<Message> {
+    let Some(plan) = state.pac_repack.plan.clone() else {
+        return Task::none();
+    };
+    let Some(output) = state.pac_repack.output.clone() else {
+        return Task::none();
+    };
+
+    let repack = &mut state.pac_repack;
+
+    if repack.busy() {
+        return Task::none();
+    }
+
+    repack.working = true;
+    repack.job = repack.job.wrapping_add(1);
+    repack.current = None;
+    repack.done_bytes = 0;
+    repack.total_bytes = 0;
+    repack.result = None;
+
+    let job_id = repack.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let failure_sender = sender.clone();
+
+    // The writer reports the files it copies and how far it is. The outcome of
+    // the whole build is reported once, after the worker returned: a build that
+    // refuses a plan never gets to write anything, so its own events cannot be
+    // the only word.
+    let emit = move |event| {
+        let event = match event {
+            pac::PacEvent::File { name, .. } => PacRepackEvent::File(name),
+            pac::PacEvent::Progress { bytes, total } => PacRepackEvent::Progress { bytes, total },
+            pac::PacEvent::Finished(_) => return,
+        };
+
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker =
+                tokio::task::spawn_blocking(move || pac_build::build(&plan, &output, &emit));
+
+            let outcome = match worker.await {
+                Ok(result) => result,
+                Err(error) => Err(pac_build::BuildError::Read(format!(
+                    "background task failed: {error}"
+                ))),
+            };
+
+            let _ = failure_sender.unbounded_send(PacRepackEvent::Finished(outcome));
+        },
+        |()| Message::PacRepackWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| Message::PacRepackEvent(job_id, event));
+
+    Task::batch([producer, consumer])
+}
+
 /// Opens the "Install Driver" dialog. Nothing is downloaded or installed yet:
 /// the dialog explains what will happen and starts the job from its Install
 /// button (on Linux only once it has the password `sudo` needs).
@@ -6552,10 +7728,15 @@ fn view(state: &State) -> Element<'_, Message> {
     // own Exit button.
     let multi_flashing = state.flash.multi_flash.open;
 
+    // The Repack Package dialog is a full-window card as well, so the language
+    // selector would show through while that card animates in and out: it is
+    // left out while the dialog is open.
+    let full_window = multi_flashing || pac_repack::is_open(state) || pac_unpack::is_open(state);
+
     // The language selector sits in the top-right corner; on the Firmware
     // Lookup page a round "About" button is drawn to its left. They stay above
     // the transition's veil, so they do not flicker along with the content.
-    if !multi_flashing {
+    if !full_window {
         let corner: Element<'_, Message> = if state.mode == Mode::Mode1 {
             row![about::about_button(), language_dropdown]
                 .spacing(8)
@@ -6674,6 +7855,18 @@ fn view(state: &State) -> Element<'_, Message> {
     // Tablet Firmware Decrypt dialog (directory, password, progress) drawn
     // over the whole window while it is open.
     if let Some(overlay) = decrypt::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Unisoc PAC dialog (package and output selection, file list, progress)
+    // drawn over the whole window while it is open.
+    if let Some(overlay) = pac_unpack::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Repack Package dialog (source selection, record list, progress) drawn
+    // over the whole window while it is open.
+    if let Some(overlay) = pac_repack::overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 

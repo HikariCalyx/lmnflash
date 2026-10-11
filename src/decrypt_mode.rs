@@ -2,8 +2,8 @@
 //!
 //! Like the smartphone-flash mode, each tile is one feature and carries the
 //! buttons that start it. The feature's flow state lives in `crate`
-//! (`State::decrypt` and `State::unpack`); this module only describes the grid
-//! and which messages its buttons send.
+//! (`State::decrypt`, `State::unpack` and `State::pac`); this module only
+//! describes the grid and which messages its buttons send.
 
 use iced::widget::{button, column, container, scrollable, Row};
 use iced::{Alignment, Element, Fill};
@@ -19,15 +19,21 @@ use crate::{Message, State};
 pub(crate) enum DecryptFeature {
     TabletDecrypt,
     UnpackImage,
+    UnisocPac,
+    /// The second button of the Unisoc PAC tile, which builds a package instead
+    /// of unpacking one. It is not a tile of its own, so it is not in
+    /// [`Self::ALL`].
+    UnisocPacRepack,
 }
 
 impl DecryptFeature {
-    pub(crate) const ALL: [Self; 2] = [Self::TabletDecrypt, Self::UnpackImage];
+    pub(crate) const ALL: [Self; 3] = [Self::TabletDecrypt, Self::UnpackImage, Self::UnisocPac];
 
     fn title_id(self) -> &'static str {
         match self {
             Self::TabletDecrypt => "decrypt-title",
             Self::UnpackImage => "unpack-title",
+            Self::UnisocPac | Self::UnisocPacRepack => "pac-title",
         }
     }
 
@@ -43,6 +49,15 @@ impl DecryptFeature {
         match self {
             Self::TabletDecrypt => vec![("decrypt-button", pressed())],
             Self::UnpackImage => vec![("unpack-button", pressed())],
+            Self::UnisocPac => vec![
+                ("pac-unpack-button", pressed()),
+                (
+                    "pac-repack-button",
+                    Some(Message::DecryptFeaturePressed(Self::UnisocPacRepack)),
+                ),
+            ],
+            // Only reached through the Unisoc PAC tile's second button.
+            Self::UnisocPacRepack => Vec::new(),
         }
     }
 }

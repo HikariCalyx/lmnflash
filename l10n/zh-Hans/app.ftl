@@ -267,7 +267,7 @@ retcn-platform-label = 平台
 retcn-fsg-label = FSG 版本
 retcn-sim-label = SIM 卡槽
 platform-qualcomm = 高通
-platform-mediatek = 联发科或展锐
+platform-mediatek = 联发科或紫光展锐
 sim-single = 单卡
 sim-dual = 双卡
 retcn-error-model = 请填写 XT 型号代码
@@ -474,6 +474,60 @@ unpack-working = 正在解包…
 unpack-done = 已解包 { $count } 个文件（{ $size }）。
 unpack-locate = 定位
 unpack-failed = 无法解包该镜像：{ $error }
+
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = 紫光展锐 PAC
+pac-unpack-button = 解包
+pac-repack-button = 重新打包
+pac-description = 提取紫光展锐 PAC 固件包中存储的文件，并在同一目录下写入描述该固件包的 flash.cfg。
+pac-select-file = 选择 PAC 文件…
+pac-listing = 正在读取固件包…
+pac-invalid = 该文件不是紫光展锐 PAC 固件包（缺少 PAC 文件头）。
+pac-encrypted = 该 PAC 固件包已加密，无法提取其中的文件。
+pac-failed = 无法解包固件包：{ $error }
+pac-select-all = 全选
+pac-select-none = 全不选
+pac-none-chosen = 请至少选择一个要解包的文件。
+pac-search = 搜索文件…
+pac-no-match = 没有匹配“{ $query }”的文件。
+pac-partial = 固件包不完整（{ $found } / { $expected }），其中部分文件缺失或被截断。
+pac-incomplete = 不完整
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = 请先勾选两个下载代理（FDL 和 FDL2）才能生成脚本。
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = 生成 SPD Dump 脚本
+pac-spd-written = 已生成脚本：{ $files }
+pac-spd-failed = 无法生成脚本：{ $error }
+pac-spd-no-config = 此固件包不包含配置 XML，因此无法获知分区名称。
+
+# “重新打包”对话框（模式 3）：用 flash.cfg 或 scatter XML 及其旁边的文件构建 PAC 固件包。
+pac-repack-title = 重新打包
+pac-repack-description = 用 flash.cfg 或 scatter XML 及其旁边的文件构建紫光展锐 PAC 固件包：源中的每条记录都会匹配到它所需的文件。
+pac-repack-select-source = 选择 flash.cfg 或 scatter XML…
+pac-repack-reading = 正在读取来源…
+pac-repack-invalid = 此文件既不是 flash.cfg 也不是 scatter XML。
+pac-repack-files = 已找到 { $total } 个文件中的 { $resolved } 个
+pac-repack-needs-file = 尚未指定文件
+pac-repack-select-file = 选择文件
+pac-repack-leave-out = 排除没有文件的 { $count } 项
+pac-repack-alias = 产品别名
+pac-repack-version = 产品版本
+pac-repack-metadata = scatter XML 不含产品版本，请填写固件包应包含的内容。
+pac-repack-nothing = 请至少选择一个要写入的文件。
+pac-repack-save = 固件包另存为…
+pac-repack-working = 正在写入固件包…
+pac-repack-done = 已将 { $count } 个文件（{ $size }）写入 { $path }。
+pac-repack-failed = 无法重新打包：{ $error }
+
+# 记录表格的列。
+pac-repack-col-part = 部件名称
+pac-repack-col-partition = 实际分区名称
+pac-repack-col-size = 大小
+pac-repack-col-file = 文件名
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = 进入多机刷机模式

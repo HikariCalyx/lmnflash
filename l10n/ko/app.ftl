@@ -475,6 +475,61 @@ unpack-done = { $count }개 파일을 풀었습니다({ $size }).
 unpack-locate = 위치 열기
 unpack-failed = 이미지를 풀 수 없습니다: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = 풀기
+pac-repack-button = 다시 묶기
+pac-description = Unisoc(Spreadtrum) PAC 펌웨어 패키지에 들어 있는 파일을 추출하고, 패키지를 설명하는 flash.cfg를 함께 기록합니다.
+pac-select-file = PAC 파일 선택…
+pac-listing = 패키지 읽는 중…
+pac-invalid = 이 파일은 Unisoc PAC 패키지가 아닙니다(PAC 헤더 없음).
+pac-encrypted = 이 PAC 패키지는 암호화되어 있어 파일을 추출할 수 없습니다.
+pac-failed = 패키지를 풀 수 없습니다: { $error }
+pac-select-all = 모두 선택
+pac-select-none = 선택 해제
+pac-none-chosen = 풀 파일을 하나 이상 선택하세요.
+pac-search = 파일 검색…
+pac-no-match = "{ $query }"와 일치하는 파일이 없습니다.
+pac-partial = 패키지가 불완전합니다({ $found } / { $expected }). 일부 파일이 없거나 잘렸습니다.
+pac-incomplete = 불완전
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = 스크립트를 생성하려면 두 다운로드 에이전트(FDL 및 FDL2)를 선택하십시오.
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = SPD Dump 스크립트 생성
+pac-spd-written = 스크립트를 작성했습니다: { $files }
+pac-spd-failed = 스크립트를 작성할 수 없습니다: { $error }
+pac-spd-no-config = 이 패키지에는 구성 XML이 없어 파티션 이름을 알 수 없습니다.
+
+# "패키지 다시 묶기" 대화 상자(모드 3): flash.cfg 또는 scatter XML과 그 옆의
+# 파일로 PAC 패키지를 만듭니다.
+pac-repack-title = 패키지 다시 묶기
+pac-repack-description = flash.cfg 또는 scatter XML과 그 옆의 파일로 Unisoc PAC 패키지를 만듭니다. 소스의 각 항목은 필요한 파일과 연결됩니다.
+pac-repack-select-source = flash.cfg 또는 scatter XML 선택…
+pac-repack-reading = 소스를 읽는 중…
+pac-repack-invalid = 이 파일은 flash.cfg도 scatter XML도 아닙니다.
+pac-repack-files = { $total }개 중 { $resolved }개 파일을 찾았습니다
+pac-repack-needs-file = 아직 파일 없음
+pac-repack-select-file = 파일 선택
+pac-repack-leave-out = 파일이 없는 { $count }개 제외
+pac-repack-alias = 제품 별칭
+pac-repack-version = 제품 버전
+pac-repack-metadata = scatter XML에는 제품 버전이 없습니다. 패키지에 넣을 값을 입력하세요.
+pac-repack-nothing = 쓸 파일을 하나 이상 선택하세요.
+pac-repack-save = 패키지를 다른 이름으로 저장…
+pac-repack-working = 패키지를 쓰는 중…
+pac-repack-done = { $count }개 파일({ $size })을 { $path }에 썼습니다.
+pac-repack-failed = 다시 묶지 못했습니다: { $error }
+
+# 레코드 표의 열입니다.
+pac-repack-col-part = 파트 이름
+pac-repack-col-partition = 실제 파티션 이름
+pac-repack-col-size = 크기
+pac-repack-col-file = 파일 이름
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = 멀티 플래싱 모드 진입
 multi-flash-placeholder = 멀티 플래싱 모드는 아직 사용할 수 없습니다. 이곳에 조작 항목이 표시됩니다.

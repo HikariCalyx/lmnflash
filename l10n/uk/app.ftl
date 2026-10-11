@@ -475,6 +475,61 @@ unpack-done = Розпаковано файлів: { $count } ({ $size }).
 unpack-locate = Показати
 unpack-failed = Не вдалося розпакувати образ: { $error }
 
+# "Unisoc PAC" package tool (Mode 3).
+pac-title = Unisoc PAC
+pac-unpack-button = Розпакувати
+pac-repack-button = Запакувати
+pac-description = Витягує файли з пакета прошивки PAC Unisoc (Spreadtrum) і записує поруч із ними файл flash.cfg з його описом.
+pac-select-file = Вибрати PAC-файл…
+pac-listing = Читання пакета…
+pac-invalid = Цей файл не є PAC-пакетом Unisoc (немає заголовка PAC).
+pac-encrypted = Цей PAC-пакет зашифровано, тому витягти його файли неможливо.
+pac-failed = Не вдалося розпакувати пакет: { $error }
+pac-select-all = Вибрати всі
+pac-select-none = Зняти вибір
+pac-none-chosen = Виберіть принаймні один файл для розпакування.
+pac-search = Пошук файлів…
+pac-no-match = Жоден файл не відповідає «{ $query }».
+pac-partial = Пакет неповний ({ $found } з { $expected }), тому частина його файлів відсутня або обрізана.
+pac-incomplete = неповний
+# A script names the two download agents in its command, so both have to be part
+# of what the run writes before the option can be asked for.
+pac-spd-need-fdl = Виберіть обидва агенти завантаження (FDL і FDL2), щоб створити скрипти.
+# Also write the two `spd_dump` scripts next to the files: one flashes the whole
+# firmware over USB from the scattered files, the other erases the data that
+# belongs to the phone's owner. They describe what is written out, so they need
+# the package's own configuration XML.
+pac-spd-script = Створити скрипт дампа SPD
+pac-spd-written = Скрипти записано: { $files }
+pac-spd-failed = Не вдалося записати скрипти: { $error }
+pac-spd-no-config = Цей пакет не містить XML конфігурації, тому назви розділів невідомі.
+
+# Діалог «Перепакувати пакет» (режим 3): збирає пакет PAC із flash.cfg або
+# scatter-XML та файлів поряд із ним.
+pac-repack-title = Перепакувати пакет
+pac-repack-description = Зберіть пакет Unisoc PAC із flash.cfg або scatter-XML та файлів поряд із ним: кожен запис джерела зіставляється з потрібним йому файлом.
+pac-repack-select-source = Вибрати flash.cfg або scatter-XML…
+pac-repack-reading = Читання джерела…
+pac-repack-invalid = Цей файл — не flash.cfg і не scatter-XML.
+pac-repack-files = Знайдено файлів: { $resolved } з { $total }
+pac-repack-needs-file = файлу ще немає
+pac-repack-select-file = Вибрати файл
+pac-repack-leave-out = Виключити { $count } без файлу
+pac-repack-alias = Псевдонім продукту
+pac-repack-version = Версія продукту
+pac-repack-metadata = У scatter-XML не вказано версію продукту; введіть те, що має містити пакет.
+pac-repack-nothing = Виберіть принаймні один файл для запису.
+pac-repack-save = Зберегти пакет як…
+pac-repack-working = Запис пакета…
+pac-repack-done = Записано файлів: { $count } ({ $size }) у { $path }.
+pac-repack-failed = Не вдалося перепакувати: { $error }
+
+# Стовпці таблиці записів.
+pac-repack-col-part = Назва частини
+pac-repack-col-partition = Фактична назва розділу
+pac-repack-col-size = Розмір
+pac-repack-col-file = Назва файлу
+
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
 firmware-flash-multi-flashing = Перейти в режим множинного прошивання
 multi-flash-placeholder = Режим множинного прошивання ще недоступний. Його елементи керування з’являться тут.

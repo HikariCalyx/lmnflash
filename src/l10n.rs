@@ -737,6 +737,166 @@ mod tests {
         }
     }
 
+    /// The "Unisoc PAC" package tool: the tile that opens it, its dialog, and
+    /// the failure line, which carries the raw error.
+    #[test]
+    fn the_pac_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "pac-title",
+            "pac-unpack-button",
+            "pac-repack-button",
+            "pac-description",
+            "pac-select-file",
+            "pac-listing",
+            "pac-invalid",
+            "pac-encrypted",
+            "pac-select-all",
+            "pac-select-none",
+            "pac-none-chosen",
+            "pac-search",
+            "pac-incomplete",
+            "pac-spd-script",
+            "pac-spd-no-config",
+            "pac-spd-need-fdl",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            let failed = bundle.tr_with_args(
+                "pac-failed",
+                &[("error", "the file table is truncated".to_owned())],
+            );
+            assert!(
+                failed.contains("the file table is truncated"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+
+            let no_match =
+                bundle.tr_with_args("pac-no-match", &[("query", "fdl2".to_owned())]);
+            assert!(no_match.contains("fdl2"), "{language:?}: {no_match}");
+            assert!(!no_match.contains('\u{2068}'), "{language:?}: {no_match}");
+
+            let partial = bundle.tr_with_args(
+                "pac-partial",
+                &[
+                    ("found", "3.4 GB".to_owned()),
+                    ("expected", "7.3 GB".to_owned()),
+                ],
+            );
+            assert!(partial.contains("3.4 GB"), "{language:?}: {partial}");
+            assert!(partial.contains("7.3 GB"), "{language:?}: {partial}");
+            assert!(!partial.contains('\u{2068}'), "{language:?}: {partial}");
+
+            let written = bundle.tr_with_args(
+                "pac-spd-written",
+                &[("files", "HNR552T_spd_dump.cmd".to_owned())],
+            );
+            assert!(
+                written.contains("HNR552T_spd_dump.cmd"),
+                "{language:?}: {written}"
+            );
+            assert!(!written.contains('\u{2068}'), "{language:?}: {written}");
+
+            let scripts_failed = bundle.tr_with_args(
+                "pac-spd-failed",
+                &[("error", "no configuration XML".to_owned())],
+            );
+            assert!(
+                scripts_failed.contains("no configuration XML"),
+                "{language:?}: {scripts_failed}"
+            );
+            assert!(
+                !scripts_failed.contains('\u{2068}'),
+                "{language:?}: {scripts_failed}"
+            );
+        }
+    }
+
+    /// The "Repack Package" dialog: the source picker, the metadata it may have
+    /// to ask for, the record list, and the two lines that carry arguments —
+    /// how many records have a file, and what the run wrote.
+    #[test]
+    fn the_repack_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "pac-repack-title",
+            "pac-repack-description",
+            "pac-repack-select-source",
+            "pac-repack-reading",
+            "pac-repack-invalid",
+            "pac-repack-needs-file",
+            "pac-repack-select-file",
+            "pac-repack-alias",
+            "pac-repack-version",
+            "pac-repack-metadata",
+            "pac-repack-nothing",
+            "pac-repack-save",
+            "pac-repack-working",
+            "pac-repack-col-part",
+            "pac-repack-col-partition",
+            "pac-repack-col-size",
+            "pac-repack-col-file",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            let files = bundle.tr_with_args(
+                "pac-repack-files",
+                &[("resolved", "35".to_owned()), ("total", "40".to_owned())],
+            );
+            assert!(files.contains("35"), "{language:?}: {files}");
+            assert!(files.contains("40"), "{language:?}: {files}");
+            assert!(!files.contains('\u{2068}'), "{language:?}: {files}");
+
+            let leave_out =
+                bundle.tr_with_args("pac-repack-leave-out", &[("count", "5".to_owned())]);
+            assert!(leave_out.contains('5'), "{language:?}: {leave_out}");
+            assert!(!leave_out.contains('\u{2068}'), "{language:?}: {leave_out}");
+
+            let done = bundle.tr_with_args(
+                "pac-repack-done",
+                &[
+                    ("count", "40".to_owned()),
+                    ("size", "3.4 GB".to_owned()),
+                    ("path", "D:\\firmware\\ums9620.pac".to_owned()),
+                ],
+            );
+            assert!(done.contains("40"), "{language:?}: {done}");
+            assert!(done.contains("3.4 GB"), "{language:?}: {done}");
+            assert!(
+                done.contains("D:\\firmware\\ums9620.pac"),
+                "{language:?}: {done}"
+            );
+            assert!(!done.contains('\u{2068}'), "{language:?}: {done}");
+
+            let failed = bundle.tr_with_args(
+                "pac-repack-failed",
+                &[("error", "the record `BOOT` has no file".to_owned())],
+            );
+            assert!(
+                failed.contains("the record `BOOT` has no file"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+        }
+    }
+
     /// The Multi Flashing page is entered from the Firmware Flash dialog: its
     /// placeholder and its way out must be present in every locale.
     #[test]
