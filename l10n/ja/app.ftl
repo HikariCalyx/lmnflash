@@ -578,3 +578,16 @@ wireless-disconnected = { $device } から切断しました。
 wireless-disconnect-failed = 切断できませんでした: { $error }
 wireless-disconnect-all = すべて
 wireless-disconnected-all = すべてのワイヤレス機器から切断しました。
+
+# 「キャプティブポータルサーバーの修正」ダイアログ（モード 2）。
+flash-captive-portal-title = キャプティブポータルサーバーの修正
+flash-captive-portal-button = 今すぐ修正
+captive-portal-desc = 「接続済み、インターネットなし」と表示される端末のために、キャプティブポータルの確認先と NTP サーバーを応答するサーバーに向けます。端末は Android 5.0 以降が必要です。
+captive-portal-note = 修正は端末自体で実行されます。Android 10 以降では新しい設定を反映するために機内モードも切り替えるため、実行中はワイヤレスデバッグ接続が切断されます。USB 接続は影響を受けません。
+captive-portal-fix = 修正
+captive-portal-working = キャプティブポータルの修正を適用しています…
+captive-portal-done = キャプティブポータルサーバーと NTP サーバーを更新しました。
+captive-portal-disconnected = { $device } とのワイヤレスデバッグ接続を切断しました。端末がネットワークに戻ったら再度ペア設定してください。
+captive-portal-failed = 修正を適用できませんでした: { $error }
+captive-portal-unsupported = この端末は Android 5.0 より古いため、この修正には対応していません。
+captive-portal-manual-airplane = Android 9 以前では、新しい設定を反映するために端末で機内モードをオンにしてからオフにしてください。

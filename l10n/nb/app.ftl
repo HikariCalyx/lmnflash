@@ -578,3 +578,16 @@ wireless-disconnected = Koblet fra { $device }.
 wireless-disconnect-failed = Kunne ikke koble fra: { $error }
 wireless-disconnect-all = Alt
 wireless-disconnected-all = Koblet fra alle trådløse enheter.
+
+# «Reparer captive portal-server»-dialog (modus 2).
+flash-captive-portal-title = Reparer captive portal-server
+flash-captive-portal-button = Reparer nå
+captive-portal-desc = Retter enhetens captive portal-sjekk og NTP-server mot servere som svarer, for telefoner som viser «Tilkoblet, ingen Internett-tilgang». Enheten må kjøre Android 5.0 eller nyere.
+captive-portal-note = Reparasjonen kjører på enheten selv. På Android 10 og nyere slår enheten også flymodus av og på for å ta i bruk de nye innstillingene, så en trådløs feilsøkingsforbindelse brytes mens den kjører. En USB-forbindelse påvirkes ikke.
+captive-portal-fix = Reparer
+captive-portal-working = Bruker captive portal-reparasjonen…
+captive-portal-done = Captive portal-serveren og NTP-serveren er oppdatert.
+captive-portal-disconnected = Trådløs feilsøking til { $device } ble frakoblet; koble til på nytt når enheten er tilbake på nettverket.
+captive-portal-failed = Kunne ikke bruke reparasjonen: { $error }
+captive-portal-unsupported = Denne enheten kjører en Android eldre enn 5.0, som reparasjonen ikke støtter.
+captive-portal-manual-airplane = På Android 9 og eldre må du slå flymodus på og av igjen på enheten for at de nye innstillingene skal tre i kraft.

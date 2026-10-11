@@ -578,3 +578,16 @@ wireless-disconnected = Verbindung zu { $device } getrennt.
 wireless-disconnect-failed = Trennen fehlgeschlagen: { $error }
 wireless-disconnect-all = Alle
 wireless-disconnected-all = Verbindung zu allen drahtlosen Geräten getrennt.
+
+# Dialog "Captive-Portal-Server reparieren" (Modus 2).
+flash-captive-portal-title = Captive-Portal-Server reparieren
+flash-captive-portal-button = Jetzt reparieren
+captive-portal-desc = Richtet die Captive-Portal-Prüfung und den NTP-Server des Geräts auf Server aus, die antworten – für Telefone, die „Verbunden, kein Internet“ melden. Das Gerät muss Android 5.0 oder neuer ausführen.
+captive-portal-note = Die Reparatur läuft auf dem Gerät selbst. Ab Android 10 schaltet das Gerät außerdem den Flugmodus um, damit die neuen Einstellungen übernommen werden; eine Wireless-Debugging-Verbindung wird währenddessen getrennt. Eine USB-Verbindung ist nicht betroffen.
+captive-portal-fix = Reparieren
+captive-portal-working = Captive-Portal-Reparatur wird angewendet…
+captive-portal-done = Captive-Portal-Server und NTP-Server wurden aktualisiert.
+captive-portal-disconnected = Die Wireless-Debugging-Verbindung zu { $device } wurde getrennt; koppeln Sie erneut, sobald das Gerät wieder im Netzwerk ist.
+captive-portal-failed = Die Reparatur konnte nicht angewendet werden: { $error }
+captive-portal-unsupported = Dieses Gerät führt ein Android älter als 5.0 aus; diese Reparatur wird nicht unterstützt.
+captive-portal-manual-airplane = Unter Android 9 und älter schalten Sie den Flugmodus am Gerät ein und wieder aus, damit die neuen Einstellungen wirksam werden.

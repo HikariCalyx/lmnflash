@@ -580,3 +580,16 @@ wireless-disconnected = Disconnected from { $device }.
 wireless-disconnect-failed = Could not disconnect: { $error }
 wireless-disconnect-all = Everything
 wireless-disconnected-all = Disconnected from every wireless device.
+
+# "Fix Captive Portal Server" dialog (Mode 2).
+flash-captive-portal-title = Fix Captive Portal Server
+flash-captive-portal-button = Fix Now
+captive-portal-desc = Point the device's captive portal check and NTP server at servers that answer, for phones that report "Connected, no Internet". The device has to run Android 5.0 or newer.
+captive-portal-note = The fix runs on the device itself. On Android 10 and newer the device also cycles airplane mode to pick the new settings up, so a wireless debugging connection is dropped while it runs. A USB connection is not affected.
+captive-portal-fix = Fix
+captive-portal-working = Applying the captive portal fix…
+captive-portal-done = The captive portal server and the NTP server were updated.
+captive-portal-disconnected = Wireless debugging to { $device } was disconnected; pair again once the device is back on the network.
+captive-portal-failed = Could not apply the fix: { $error }
+captive-portal-unsupported = This device runs an Android older than 5.0, which this fix does not support.
+captive-portal-manual-airplane = On Android 9 and older, turn Airplane mode on and then off again on the device for the new settings to take effect.

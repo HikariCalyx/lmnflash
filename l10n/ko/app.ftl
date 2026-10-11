@@ -578,3 +578,16 @@ wireless-disconnected = { $device }에서 연결이 해제되었습니다.
 wireless-disconnect-failed = 연결 해제 실패: { $error }
 wireless-disconnect-all = 모두
 wireless-disconnected-all = 모든 무선 기기에서 연결이 해제되었습니다.
+
+# "캡티브 포털 서버 수정" 대화 상자(모드 2).
+flash-captive-portal-title = 캡티브 포털 서버 수정
+flash-captive-portal-button = 지금 수정
+captive-portal-desc = "인터넷에 연결되지 않음"으로 표시되는 휴대폰을 위해 캡티브 포털 확인 주소와 NTP 서버를 응답하는 서버로 지정합니다. 기기는 Android 5.0 이상이어야 합니다.
+captive-portal-note = 수정은 기기 자체에서 실행됩니다. Android 10 이상에서는 새 설정을 적용하기 위해 비행기 모드도 전환하므로 실행 중에는 무선 디버깅 연결이 끊어집니다. USB 연결은 영향을 받지 않습니다.
+captive-portal-fix = 수정
+captive-portal-working = 캡티브 포털 수정을 적용하는 중…
+captive-portal-done = 캡티브 포털 서버와 NTP 서버를 업데이트했습니다.
+captive-portal-disconnected = { $device }와의 무선 디버깅 연결을 해제했습니다. 기기가 네트워크에 다시 연결되면 다시 페어링하세요.
+captive-portal-failed = 수정을 적용할 수 없습니다: { $error }
+captive-portal-unsupported = 이 기기는 Android 5.0보다 오래된 버전을 실행하므로 이 수정을 지원하지 않습니다.
+captive-portal-manual-airplane = Android 9 이하에서는 새 설정을 적용하려면 기기에서 비행기 모드를 켰다가 다시 꺼 주세요.

@@ -578,3 +578,16 @@ wireless-disconnected = Afbrudt fra { $device }.
 wireless-disconnect-failed = Kunne ikke afbryde: { $error }
 wireless-disconnect-all = Alt
 wireless-disconnected-all = Afbrudt fra alle trådløse enheder.
+
+# "Ret captive portal-server"-dialog (tilstand 2).
+flash-captive-portal-title = Ret captive portal-server
+flash-captive-portal-button = Ret nu
+captive-portal-desc = Peg deviceets captive portal-tjek og NTP-server på servere, der svarer, til telefoner der viser "Forbundet, ingen internetadgang". Enheden skal køre Android 5.0 eller nyere.
+captive-portal-note = Rettelsen kører på selve enheden. På Android 10 og nyere skifter enheden også flytilstand for at tage de nye indstillinger i brug, så en trådløs fejlfindingsforbindelse afbrydes, mens den kører. En USB-forbindelse påvirkes ikke.
+captive-portal-fix = Ret
+captive-portal-working = Anvender rettelsen af captive portal…
+captive-portal-done = Captive portal-serveren og NTP-serveren er opdateret.
+captive-portal-disconnected = Trådløs fejlfinding til { $device } blev afbrudt; par igen, når enheden er tilbage på netværket.
+captive-portal-failed = Kunne ikke anvende rettelsen: { $error }
+captive-portal-unsupported = Denne enhed kører en Android ældre end 5.0, som rettelsen ikke understøtter.
+captive-portal-manual-airplane = På Android 9 og ældre skal du slå flytilstand til og derefter fra igen på enheden, før de nye indstillinger træder i kraft.

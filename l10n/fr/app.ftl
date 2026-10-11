@@ -578,3 +578,16 @@ wireless-disconnected = Déconnecté de { $device }.
 wireless-disconnect-failed = Échec de la déconnexion : { $error }
 wireless-disconnect-all = Tout
 wireless-disconnected-all = Déconnecté de tous les appareils sans fil.
+
+# Boîte de dialogue « Réparer le serveur du portail captif » (mode 2).
+flash-captive-portal-title = Réparer le serveur du portail captif
+flash-captive-portal-button = Réparer
+captive-portal-desc = Pointe la vérification du portail captif et le serveur NTP de l'appareil vers des serveurs qui répondent, pour les téléphones qui affichent « Connecté, sans Internet ». L'appareil doit exécuter Android 5.0 ou version ultérieure.
+captive-portal-note = La réparation s'exécute sur l'appareil lui-même. À partir d'Android 10, l'appareil bascule aussi le mode avion pour appliquer les nouveaux paramètres ; une connexion de débogage sans fil est donc coupée pendant l'opération. Une connexion USB n'est pas affectée.
+captive-portal-fix = Réparer
+captive-portal-working = Application de la réparation du portail captif…
+captive-portal-done = Le serveur du portail captif et le serveur NTP ont été mis à jour.
+captive-portal-disconnected = Le débogage sans fil vers { $device } a été déconnecté ; associez à nouveau l'appareil une fois reconnecté au réseau.
+captive-portal-failed = Impossible d'appliquer la réparation : { $error }
+captive-portal-unsupported = Cet appareil exécute une version d'Android antérieure à 5.0, que cette réparation ne prend pas en charge.
+captive-portal-manual-airplane = Sur Android 9 et versions antérieures, activez puis désactivez le mode avion sur l'appareil pour que les nouveaux paramètres prennent effet.

@@ -246,6 +246,45 @@ devices have to be on the same network, and that network has to pass mDNS
 between them. The dialog uses the same `adb` of Google's platform-tools as the
 bloatware feature, downloading it on first use.
 
+## Fix Captive Portal Server
+
+The **Fix Captive Portal Server** tile (修复网络连接受限) helps a phone that
+reports *"Connected, no Internet"* because the server it checks the connection
+against cannot be reached. It points the phone's captive-portal check and its
+NTP server at servers that answer — the setting that spells that out depends on
+the Android version:
+
+```sh
+# Android 7.1 and newer
+settings put global captive_portal_http_url  http://connect.rom.miui.com/generate_204
+settings put global captive_portal_https_url https://connect.rom.miui.com/generate_204
+
+# Android 6.0 – 7.0: one server, no URLs
+settings put global captive_portal_server connect.rom.miui.com
+
+# Android 5.0 – 5.1: detection is turned off instead
+settings put global captive_portal_mode 0
+
+# every supported version
+settings put global ntp_server time.asia.apple.com
+```
+
+The dialog lists the devices connected with USB debugging enabled; the one that
+is picked runs the fix. Android 5.0 is the oldest version with any of these
+settings, so anything older is reported as unsupported instead of being
+changed. On Android 10 and newer the connection is also cycled afterwards
+(`cmd connectivity airplane-mode enable`, a five-second wait, `disable`),
+because the connectivity service only re-reads its settings when the network
+comes up; on Android 9 and older the dialog asks the user to switch Airplane
+mode on and off again by hand, which has the same effect.
+
+The sequence is started **detached** on the phone (`nohup … & disown`), so the
+airplane-mode cycle cannot kill it by taking away the very connection the
+command came in on. When the device was reached over wireless debugging, the
+dialog drops that connection itself as soon as the job is started rather than
+waiting for it to time out; a USB connection is not affected and the phone
+reconnects to Wi-Fi once the cycle is over.
+
 ## Tablet Firmware Decrypt
 
 The **Firmware Decrypt** tab offers the host-side firmware-file tools as a grid

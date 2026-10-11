@@ -578,3 +578,16 @@ wireless-disconnected = Frånkopplad från { $device }.
 wireless-disconnect-failed = Kunde inte koppla från: { $error }
 wireless-disconnect-all = Alla
 wireless-disconnected-all = Frånkopplad från alla trådlösa enheter.
+
+# Dialogrutan "Reparera captive portal-servern" (läge 2).
+flash-captive-portal-title = Reparera captive portal-servern
+flash-captive-portal-button = Reparera nu
+captive-portal-desc = Riktar enhetens captive portal-kontroll och NTP-server mot servrar som svarar, för telefoner som visar "Ansluten, inget internet". Enheten måste köra Android 5.0 eller senare.
+captive-portal-note = Reparationen körs på enheten själv. I Android 10 och senare växlar enheten också flygplansläge för att ta in de nya inställningarna, så en trådlös felsökningsanslutning bryts medan den körs. En USB-anslutning påverkas inte.
+captive-portal-fix = Reparera
+captive-portal-working = Tillämpar captive portal-reparationen…
+captive-portal-done = Captive portal-servern och NTP-servern har uppdaterats.
+captive-portal-disconnected = Trådlös felsökning till { $device } kopplades från; parkoppla igen när enheten är tillbaka på nätverket.
+captive-portal-failed = Kunde inte tillämpa reparationen: { $error }
+captive-portal-unsupported = Den här enheten kör en Android äldre än 5.0, vilket reparationen inte stöder.
+captive-portal-manual-airplane = I Android 9 och äldre: slå på och sedan av flygplansläget på enheten för att de nya inställningarna ska börja gälla.

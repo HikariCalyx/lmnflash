@@ -737,6 +737,55 @@ mod tests {
         }
     }
 
+    /// The "Fix Captive Portal Server" dialog: the tile, the explanation and
+    /// the status lines, the last two of which carry the dropped connection
+    /// and the raw device error.
+    #[test]
+    fn the_captive_portal_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-captive-portal-title",
+            "flash-captive-portal-button",
+            "captive-portal-desc",
+            "captive-portal-note",
+            "captive-portal-fix",
+            "captive-portal-working",
+            "captive-portal-done",
+            "captive-portal-unsupported",
+            "captive-portal-manual-airplane",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            let disconnected = bundle.tr_with_args(
+                "captive-portal-disconnected",
+                &[("device", "192.168.1.5:5555".to_owned())],
+            );
+            assert!(
+                disconnected.contains("192.168.1.5:5555"),
+                "{language:?}: {disconnected}"
+            );
+            assert!(
+                !disconnected.contains('\u{2068}'),
+                "{language:?}: {disconnected}"
+            );
+
+            let failed = bundle.tr_with_args(
+                "captive-portal-failed",
+                &[("error", "device offline".to_owned())],
+            );
+            assert!(failed.contains("device offline"), "{language:?}: {failed}");
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+        }
+    }
+
     /// The Tablet Firmware Decrypt dialog and the tile that opens it: the
     /// heading, the directory/password controls and the two counter lines,
     /// which carry the succeeded/failed numbers.

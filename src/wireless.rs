@@ -409,6 +409,16 @@ fn is_network(serial: &str) -> bool {
     serial.contains(':')
 }
 
+/// Whether `serial` is a device reached over the network (wireless debugging)
+/// rather than over the cable.
+///
+/// A feature that takes the network away — the captive-portal fix cycles
+/// airplane mode — drops such a connection itself instead of waiting for it to
+/// time out.
+pub(crate) fn is_wireless(serial: &str) -> bool {
+    is_network(serial)
+}
+
 /// The host part of a `host:port` address.
 fn host(address: &str) -> &str {
     address.split(':').next().unwrap_or(address)

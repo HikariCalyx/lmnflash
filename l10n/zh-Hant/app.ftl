@@ -577,3 +577,16 @@ wireless-disconnected = 已中斷與 { $device } 的連線。
 wireless-disconnect-failed = 中斷連線失敗：{ $error }
 wireless-disconnect-all = 全部
 wireless-disconnected-all = 已中斷與所有無線裝置的連線。
+
+# "修復網路連線受限" 對話框（模式 2）。
+flash-captive-portal-title = 修復網路連線受限
+flash-captive-portal-button = 立即修復
+captive-portal-desc = 將裝置的網路連線檢查位址與 NTP 伺服器指向可存取的伺服器，適用於顯示「已連線，但無法連上網際網路」的手機。裝置需執行 Android 5.0 或更新版本。
+captive-portal-note = 修復會在裝置本身執行。在 Android 10 及更新版本上，裝置還會切換飛航模式以套用新設定，因此修復期間無線偵錯連線會中斷。USB 連線不受影響。
+captive-portal-fix = 修復
+captive-portal-working = 正在套用網路連線修復…
+captive-portal-done = 網路連線檢查伺服器與 NTP 伺服器已更新。
+captive-portal-disconnected = 已中斷與 { $device } 的無線偵錯連線；待裝置重新連上網路後請重新配對。
+captive-portal-failed = 無法套用修復：{ $error }
+captive-portal-unsupported = 此裝置執行低於 Android 5.0 的版本，不支援此修復。
+captive-portal-manual-airplane = 在 Android 9 及更舊版本上，請在裝置上開啟飛航模式再關閉，新設定才會生效。

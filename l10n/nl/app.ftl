@@ -578,3 +578,16 @@ wireless-disconnected = Verbinding met { $device } verbroken.
 wireless-disconnect-failed = Verbreken mislukt: { $error }
 wireless-disconnect-all = Alles
 wireless-disconnected-all = Verbinding met alle draadloze apparaten verbroken.
+
+# Dialoogvenster "Captive portal-server repareren" (modus 2).
+flash-captive-portal-title = Captive portal-server repareren
+flash-captive-portal-button = Nu repareren
+captive-portal-desc = Richt de captive portal-controle en de NTP-server van het apparaat op servers die antwoorden, voor telefoons die "Verbonden, geen internet" tonen. Het apparaat moet Android 5.0 of nieuwer draaien.
+captive-portal-note = De reparatie draait op het apparaat zelf. Vanaf Android 10 schakelt het apparaat ook de vliegtuigmodus om de nieuwe instellingen toe te passen, waardoor een draadloze foutopsporingsverbinding tijdens de reparatie wordt verbroken. Een USB-verbinding wordt niet beïnvloed.
+captive-portal-fix = Repareren
+captive-portal-working = Captive portal-reparatie wordt toegepast…
+captive-portal-done = De captive portal-server en de NTP-server zijn bijgewerkt.
+captive-portal-disconnected = Draadloze foutopsporing naar { $device } is verbroken; koppel opnieuw zodra het apparaat weer op het netwerk is.
+captive-portal-failed = De reparatie kon niet worden toegepast: { $error }
+captive-portal-unsupported = Dit apparaat draait een Android ouder dan 5.0, wat deze reparatie niet ondersteunt.
+captive-portal-manual-airplane = Zet op Android 9 en ouder de vliegtuigmodus op het apparaat aan en weer uit om de nieuwe instellingen toe te passen.

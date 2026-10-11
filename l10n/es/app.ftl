@@ -578,3 +578,16 @@ wireless-disconnected = Desconectado de { $device }.
 wireless-disconnect-failed = No se pudo desconectar: { $error }
 wireless-disconnect-all = Todo
 wireless-disconnected-all = Desconectado de todos los dispositivos inalámbricos.
+
+# Diálogo "Reparar el servidor del portal cautivo" (modo 2).
+flash-captive-portal-title = Reparar el servidor del portal cautivo
+flash-captive-portal-button = Reparar ahora
+captive-portal-desc = Apunta la comprobación del portal cautivo y el servidor NTP del dispositivo a servidores que respondan, para teléfonos que muestran «Conectado, sin Internet». El dispositivo debe ejecutar Android 5.0 o posterior.
+captive-portal-note = La reparación se ejecuta en el propio dispositivo. En Android 10 y posteriores el dispositivo también activa y desactiva el modo avión para aplicar los nuevos ajustes, por lo que la conexión de depuración inalámbrica se corta mientras se ejecuta. Una conexión USB no se ve afectada.
+captive-portal-fix = Reparar
+captive-portal-working = Aplicando la reparación del portal cautivo…
+captive-portal-done = Se actualizaron el servidor del portal cautivo y el servidor NTP.
+captive-portal-disconnected = Se desconectó la depuración inalámbrica de { $device }; vuelve a emparejar cuando el dispositivo esté de nuevo en la red.
+captive-portal-failed = No se pudo aplicar la reparación: { $error }
+captive-portal-unsupported = Este dispositivo ejecuta un Android anterior a 5.0, que esta reparación no admite.
+captive-portal-manual-airplane = En Android 9 y anteriores, activa y desactiva el modo avión en el dispositivo para que los nuevos ajustes surtan efecto.

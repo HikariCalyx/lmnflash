@@ -578,3 +578,16 @@ wireless-disconnected = Disconnesso da { $device }.
 wireless-disconnect-failed = Impossibile disconnettersi: { $error }
 wireless-disconnect-all = Tutto
 wireless-disconnected-all = Disconnesso da tutti i dispositivi wireless.
+
+# Finestra "Ripara il server del portale captive" (modalità 2).
+flash-captive-portal-title = Ripara il server del portale captive
+flash-captive-portal-button = Ripara ora
+captive-portal-desc = Indirizza il controllo del portale captive e il server NTP del dispositivo verso server che rispondono, per i telefoni che mostrano "Connesso, nessun accesso a Internet". Il dispositivo deve eseguire Android 5.0 o versione successiva.
+captive-portal-note = La riparazione viene eseguita sul dispositivo stesso. Da Android 10 in poi il dispositivo attiva anche la modalità aereo per applicare le nuove impostazioni, quindi la connessione di debug wireless cade durante l'operazione. Una connessione USB non è interessata.
+captive-portal-fix = Ripara
+captive-portal-working = Applicazione della riparazione del portale captive…
+captive-portal-done = Il server del portale captive e il server NTP sono stati aggiornati.
+captive-portal-disconnected = Il debug wireless verso { $device } è stato disconnesso; esegui di nuovo l'associazione quando il dispositivo torna in rete.
+captive-portal-failed = Impossibile applicare la riparazione: { $error }
+captive-portal-unsupported = Questo dispositivo esegue una versione di Android precedente alla 5.0, che questa riparazione non supporta.
+captive-portal-manual-airplane = Su Android 9 e precedenti, attiva e disattiva la modalità aereo sul dispositivo per applicare le nuove impostazioni.

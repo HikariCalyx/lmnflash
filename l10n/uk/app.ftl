@@ -578,3 +578,16 @@ wireless-disconnected = Відключено від { $device }.
 wireless-disconnect-failed = Не вдалося відключитися: { $error }
 wireless-disconnect-all = Усі
 wireless-disconnected-all = Відключено від усіх бездротових пристроїв.
+
+# Діалог «Виправлення сервера captive portal» (режим 2).
+flash-captive-portal-title = Виправлення сервера captive portal
+flash-captive-portal-button = Виправити
+captive-portal-desc = Спрямовує перевірку captive portal і сервер NTP пристрою на сервери, що відповідають, — для телефонів, які показують «Підключено, немає інтернету». Пристрій має працювати на Android 5.0 або новішому.
+captive-portal-note = Виправлення виконується на самому пристрої. На Android 10 і новіших пристрій також перемикає авіарежим, щоб застосувати нові налаштування, тому під час виконання з'єднання бездротового налагодження розривається. З'єднання через USB не зачіпається.
+captive-portal-fix = Виправити
+captive-portal-working = Застосування виправлення captive portal…
+captive-portal-done = Сервер captive portal і сервер NTP оновлено.
+captive-portal-disconnected = Бездротове налагодження з { $device } відключено; спаруйте пристрій знову, коли він повернеться в мережу.
+captive-portal-failed = Не вдалося застосувати виправлення: { $error }
+captive-portal-unsupported = Цей пристрій працює на Android, старішому за 5.0, виправлення не підтримується.
+captive-portal-manual-airplane = На Android 9 і старіших увімкніть і знову вимкніть авіарежим на пристрої, щоб нові налаштування набули чинності.

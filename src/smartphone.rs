@@ -24,16 +24,18 @@ pub(crate) enum SmartphoneFeature {
     InstallDriver,
     RemoveBloatware,
     WirelessDebugging,
+    FixCaptivePortal,
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
         Self::InstallDriver,
         Self::RemoveBloatware,
         Self::WirelessDebugging,
+        Self::FixCaptivePortal,
     ];
 
     fn title_id(self) -> &'static str {
@@ -44,6 +46,7 @@ impl SmartphoneFeature {
             Self::InstallDriver => "flash-driver-title",
             Self::RemoveBloatware => "flash-bloatware-title",
             Self::WirelessDebugging => "flash-wireless-title",
+            Self::FixCaptivePortal => "flash-captive-portal-title",
         }
     }
 
@@ -106,6 +109,9 @@ impl SmartphoneFeature {
             // Wireless debugging is a phone feature: the connection is paired
             // over Wi-Fi instead of over the cable.
             Self::WirelessDebugging => vec![("flash-wireless-button", pressed())],
+            // The captive-portal fix talks to a device over ADB, wired or
+            // wireless alike.
+            Self::FixCaptivePortal => vec![("flash-captive-portal-button", pressed())],
         }
     }
 }

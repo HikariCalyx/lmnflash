@@ -578,3 +578,16 @@ wireless-disconnected = Yhteys laitteeseen { $device } katkaistu.
 wireless-disconnect-failed = Yhteyttä ei voitu katkaista: { $error }
 wireless-disconnect-all = Kaikki
 wireless-disconnected-all = Yhteys kaikkiin langattomiin laitteisiin katkaistu.
+
+# "Korjaa captive portal -palvelin" -valintaikkuna (tila 2).
+flash-captive-portal-title = Korjaa captive portal -palvelin
+flash-captive-portal-button = Korjaa nyt
+captive-portal-desc = Ohjaa laitteen captive portal -tarkistuksen ja NTP-palvelimen palvelimiin, jotka vastaavat – puhelimille, jotka näyttävät "Yhdistetty, ei internetyhteyttä". Laitteessa on oltava Android 5.0 tai uudempi.
+captive-portal-note = Korjaus ajetaan itse laitteessa. Android 10:ssä ja uudemmissa laite vaihtaa myös lentotilan, jotta uudet asetukset tulevat voimaan, joten langaton virheenkorjausyhteys katkeaa korjauksen aikana. USB-yhteys ei kärsi.
+captive-portal-fix = Korjaa
+captive-portal-working = Otetaan captive portal -korjausta käyttöön…
+captive-portal-done = Captive portal -palvelin ja NTP-palvelin päivitettiin.
+captive-portal-disconnected = Langaton virheenkorjausyhteys laitteeseen { $device } katkaistiin; muodosta pariliitos uudelleen, kun laite on taas verkossa.
+captive-portal-failed = Korjausta ei voitu ottaa käyttöön: { $error }
+captive-portal-unsupported = Tässä laitteessa on Android 5.0:a vanhempi versio, jota korjaus ei tue.
+captive-portal-manual-airplane = Android 9:ssä ja vanhemmissa laita lentotila päälle ja pois laitteesta, jotta uudet asetukset tulevat voimaan.

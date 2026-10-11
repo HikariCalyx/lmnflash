@@ -8,6 +8,8 @@ mod bloatware;
 mod bootloader;
 mod browser;
 mod bulk;
+mod captive_portal;
+mod captive_portal_dialog;
 mod carrier;
 mod compat_iced;
 mod config;
@@ -664,6 +666,7 @@ struct SmartphoneFlashState {
     driver: DriverState,
     bloatware: BloatwareState,
     wireless: WirelessState,
+    captive_portal: CaptivePortalState,
     multi_flash: MultiFlashState,
 }
 
@@ -1043,6 +1046,58 @@ enum DisconnectOutcome {
     Done(wireless::DisconnectTarget),
     /// It could not be, and this is what `adb` said.
     Failed(String),
+}
+
+/// State of the "Fix Captive Portal Server" feature (Mode 2).
+///
+/// The fix points the device's captive-portal check and NTP server at servers
+/// that answer (see [`captive_portal`]); the steps themselves run detached on
+/// the device, because the last of them cycles the network connection the
+/// command came in on.
+#[derive(Default)]
+struct CaptivePortalState {
+    /// Whether the modal is open.
+    open: bool,
+    /// `true` while the platform-tools are prepared and `adb devices` runs.
+    listing: bool,
+    /// Failure of that step (its download, or `adb` itself).
+    list_error: Option<String>,
+    /// Devices `adb devices` reported.
+    devices: Vec<debloat::AdbDevice>,
+    /// Serial of the device the fix runs on.
+    selected: Option<String>,
+    /// `true` while the fix is applied.
+    fixing: bool,
+    /// How the last fix ended.
+    result: Option<Result<captive_portal::FixReport, captive_portal::FixError>>,
+}
+
+impl CaptivePortalState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.listing || self.fixing
+    }
+
+    /// Whether the fix can be started: a device was chosen, nothing runs, and
+    /// the last attempt did not already succeed (a failure can be retried).
+    fn ready_to_fix(&self) -> bool {
+        self.selected.is_some()
+            && !self.busy()
+            && !matches!(self.result, Some(Ok(_)))
+    }
+
+    /// Label of the selected device (serial and model), so the dialog can
+    /// show which phone it is working on.
+    fn selected_label(&self) -> Option<String> {
+        let serial = self.selected.as_ref()?;
+
+        Some(
+            self.devices
+                .iter()
+                .find(|device| &device.serial == serial)
+                .map_or_else(|| serial.clone(), debloat::AdbDevice::label),
+        )
+    }
 }
 /// Which "Install Driver" dialog is currently on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2077,6 +2132,21 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     WirelessBackdropPressed,
+    /// Fix Captive Portal Server: the devices `adb devices` lists were read.
+    CaptivePortalDevicesFetched(Result<Vec<debloat::AdbDevice>, String>),
+    /// Fix Captive Portal Server: look for devices again.
+    CaptivePortalRescan,
+    /// Fix Captive Portal Server: the device to fix was chosen.
+    CaptivePortalDeviceSelected(String),
+    /// Fix Captive Portal Server: apply the fix to the chosen device.
+    CaptivePortalFix,
+    /// Fix Captive Portal Server: the fix finished.
+    CaptivePortalFixed(Result<captive_portal::FixReport, captive_portal::FixError>),
+    /// Fix Captive Portal Server: close the dialog.
+    CaptivePortalCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    CaptivePortalBackdropPressed,
     /// Unpack Image: ask for the image file to unpack.
     UnpackPickImageRequested,
     /// Unpack Image: the file picker closed (`None` = cancelled).
@@ -2243,6 +2313,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let tablet = &state.flash.tablet_unlock;
     let bloatware = &state.flash.bloatware;
     let wireless = &state.flash.wireless;
+    let portal = &state.flash.captive_portal;
     let unpack = &state.unpack;
     let pac = &state.pac;
     let repack = &state.pac_repack;
@@ -2271,6 +2342,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || bloatware.checking
         || bloatware.removing
         || wireless.busy()
+        || portal.busy()
         || unpack.listing
         || unpack.working
         || pac.listing
@@ -2419,6 +2491,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::DriverCancel
             | Message::BloatwareCancel
             | Message::WirelessCancel
+            | Message::CaptivePortalCancel
             | Message::UnpackCancel
             | Message::PacCancel
             | Message::PacRepackCancel
@@ -2479,6 +2552,9 @@ const OVERLAY_BLOATWARE: u8 = 0xB0;
 /// method it shows. It shares the RETCN device picker's nibble, since the two
 /// are never open at once.
 const OVERLAY_WIRELESS: u8 = 0xC1;
+/// The "Fix Captive Portal Server" dialog; its low nibble is the step it shows
+/// (device selection, the chosen device, the running fix with its result).
+const OVERLAY_CAPTIVE_PORTAL: u8 = 0xC2;
 /// The "Unpack Image" dialog; its low nibble is the step it shows (the setup
 /// form, or the running extraction and its result).
 const OVERLAY_UNPACK: u8 = 0xD0;
@@ -2618,6 +2694,21 @@ fn overlay_key(state: &State) -> u8 {
         // The card only changes when the pairing method does; the QR code, the
         // code field and the status update while it stays on screen.
         return OVERLAY_WIRELESS + wireless_step(state.flash.wireless.method);
+    }
+
+    if captive_portal_dialog::is_open(state) {
+        // The device selection, the chosen device it will work on, and the
+        // running fix with its result, in that order of precedence.
+        let portal = &state.flash.captive_portal;
+        let step = if portal.fixing || portal.result.is_some() {
+            2
+        } else if portal.selected.is_some() {
+            1
+        } else {
+            0
+        };
+
+        return OVERLAY_CAPTIVE_PORTAL + step;
     }
 
     if unpack::is_open(state) {
@@ -2825,6 +2916,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
             SmartphoneFeature::WirelessDebugging => start_wireless_dialog(state),
+            SmartphoneFeature::FixCaptivePortal => start_captive_portal_dialog(state),
         },
         Message::DecryptFeaturePressed(feature) => match feature {
             decrypt_mode::DecryptFeature::TabletDecrypt => start_decrypt_dialog(state),
@@ -3974,6 +4066,83 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::WirelessBackdropPressed => Task::none(),
+        Message::CaptivePortalDevicesFetched(result) => {
+            let portal = &mut state.flash.captive_portal;
+
+            if !portal.listing {
+                return Task::none();
+            }
+
+            portal.listing = false;
+
+            match result {
+                Ok(devices) => {
+                    portal.devices = devices;
+                    portal.list_error = None;
+                }
+                Err(error) => {
+                    portal.devices.clear();
+                    portal.list_error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::CaptivePortalRescan => {
+            if state.flash.captive_portal.busy() {
+                return Task::none();
+            }
+
+            state.flash.captive_portal = CaptivePortalState {
+                open: true,
+                listing: true,
+                ..CaptivePortalState::default()
+            };
+
+            start_captive_portal_devices()
+        }
+        Message::CaptivePortalDeviceSelected(serial) => {
+            let portal = &mut state.flash.captive_portal;
+
+            if portal.busy() {
+                return Task::none();
+            }
+
+            portal.selected = Some(serial);
+            portal.result = None;
+            Task::none()
+        }
+        Message::CaptivePortalFix => {
+            let Some(serial) = state.flash.captive_portal.selected.clone() else {
+                return Task::none();
+            };
+
+            start_captive_portal_fix(state, serial)
+        }
+        Message::CaptivePortalFixed(result) => {
+            let portal = &mut state.flash.captive_portal;
+
+            if !portal.fixing {
+                return Task::none();
+            }
+
+            // The job runs detached on the device, so its result only says
+            // that it was started — which is all the phone is asked for.
+            portal.fixing = false;
+            portal.result = Some(result);
+            Task::none()
+        }
+        Message::CaptivePortalCancel => {
+            // Never close the dialog while a fix runs: the start of the job is
+            // what reports back, and the dialog would have nowhere to show it.
+            if state.flash.captive_portal.busy() {
+                return Task::none();
+            }
+
+            state.flash.captive_portal = CaptivePortalState::default();
+            Task::none()
+        }
+        Message::CaptivePortalBackdropPressed => Task::none(),
         Message::UnpackPickImageRequested => {
             if state.unpack.busy() {
                 return Task::none();
@@ -6981,6 +7150,54 @@ fn start_wireless_devices() -> Task<Message> {
     )
 }
 
+/// Opens the "Fix Captive Portal Server" dialog and looks for a device.
+fn start_captive_portal_dialog(state: &mut State) -> Task<Message> {
+    state.flash.captive_portal = CaptivePortalState {
+        open: true,
+        listing: true,
+        ..CaptivePortalState::default()
+    };
+
+    start_captive_portal_devices()
+}
+
+/// Lists the devices `adb devices` reports (downloading `adb` on first use).
+fn start_captive_portal_devices() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(debloat::list_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::CaptivePortalDevicesFetched,
+    )
+}
+
+/// Applies the captive-portal fix to `serial` on a worker thread.
+fn start_captive_portal_fix(state: &mut State, serial: String) -> Task<Message> {
+    let portal = &mut state.flash.captive_portal;
+
+    if !portal.ready_to_fix() {
+        return Task::none();
+    }
+
+    portal.fixing = true;
+    portal.result = None;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || captive_portal::fix(&serial))
+                .await
+                .unwrap_or_else(|error| {
+                    Err(captive_portal::FixError::Failed(format!(
+                        "background task failed: {error}"
+                    )))
+                })
+        },
+        Message::CaptivePortalFixed,
+    )
+}
+
 /// Adds a discovered service to a list, or updates the entry it is already in
 /// (a phone re-announces a service with the same mDNS name).
 fn upsert_wireless_service(
@@ -8499,6 +8716,13 @@ fn view(state: &State) -> Element<'_, Message> {
     // Connect ADB Wireless Debugging dialog (QR code, or pairing code) drawn
     // over the whole window while it is open.
     if let Some(overlay) = wireless_dialog::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // Fix Captive Portal Server dialog (device selection, the note about the
+    // network being reset, the running fix) drawn over the whole window while
+    // it is open.
+    if let Some(overlay) = captive_portal_dialog::overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
