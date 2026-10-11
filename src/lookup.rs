@@ -628,15 +628,22 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
 
             match &state.lookup.bulk.status {
                 BulkStatus::Running { current, total } => {
+                    // The batch can take minutes, so it spins along with its
+                    // progress line.
                     content = content.push(
-                        text(l10n.tr_with_args(
-                            "bulk-progress",
-                            &[
-                                ("current", current.to_string()),
-                                ("total", total.to_string()),
-                            ],
-                        ))
-                        .size(14.0),
+                        row![
+                            crate::guided::spinner(state.anim_tick),
+                            text(l10n.tr_with_args(
+                                "bulk-progress",
+                                &[
+                                    ("current", current.to_string()),
+                                    ("total", total.to_string()),
+                                ],
+                            ))
+                            .size(14.0),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
                     );
                 }
                 BulkStatus::Error(error) => {
@@ -672,6 +679,20 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
         }
     };
 
+    // Switching the mode swaps the form under the selector. The form is drawn
+    // posed — slid in from the side the user is moving towards, and faded in
+    // (the veil for that is added above the content by `crate::view`) — so the
+    // change is eased instead of abrupt. The selector itself is left alone: it
+    // is what the user just picked from.
+    let mode_content: Element<'_, Message> = match state
+        .lookup_transition
+        .as_ref()
+        .map(crate::anim::Transition::pose)
+    {
+        Some(pose) => crate::anim::animated(mode_content, pose),
+        None => mode_content,
+    };
+
     column![dropdown, mode_content]
         .spacing(12)
         .align_x(Alignment::Center)
@@ -687,7 +708,17 @@ fn push_lookup_status<'a>(
     match &state.lookup.status {
         LookupStatus::Idle => {}
         LookupStatus::Fetching => {
-            content = content.push(text(l10n.tr("lookup-fetching")).size(14.0));
+            // A request can take a while, so it spins instead of leaving the
+            // form looking idle (the app redraws at frame rate while a spinner
+            // is on screen).
+            content = content.push(
+                row![
+                    crate::guided::spinner(state.anim_tick),
+                    text(l10n.tr("lookup-fetching")).size(14.0),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
         }
         LookupStatus::Error(error) => {
             content = content.push(text(error.clone()).size(14.0).style(iced::widget::text::danger));

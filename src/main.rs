@@ -1687,6 +1687,10 @@ struct State {
     /// In-flight fade + slide of the login page, started when the login flow
     /// moves to another step (see [`login_step`]).
     login_transition: Option<anim::Transition>,
+    /// In-flight fade + slide of the lookup form, started when the lookup mode
+    /// changes (see [`lookup_step`]). The selector above the form is left out:
+    /// the user just picked from it.
+    lookup_transition: Option<anim::Transition>,
     /// The close of a dialog, held back until it has finished animating out;
     /// `Some` while it is leaving.
     pending_close: Option<Message>,
@@ -1718,6 +1722,7 @@ impl Default for State {
             content_transition_covers_chrome: false,
             overlay_transition: None,
             login_transition: None,
+            lookup_transition: None,
             pending_close: None,
         }
     }
@@ -2355,6 +2360,10 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || pac.working
         || repack.reading
         || repack.working
+        // A firmware lookup shows a spinner while it runs, and the form eases
+        // from one status to the next; the multi-IMEI batch spins as well.
+        || matches!(state.lookup.status, LookupStatus::Fetching)
+        || matches!(state.lookup.bulk.status, BulkStatus::Running { .. })
         // The decrypt dialog only has text while it works, but its spinner
         // ticks along with the others.
         || matches!(state.decrypt.status, DecryptStatus::Working);
@@ -2376,6 +2385,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let transition = if state.content_transition.is_some()
         || state.overlay_transition.is_some()
         || state.login_transition.is_some()
+        || state.lookup_transition.is_some()
         || state.pending_close.is_some()
     {
         iced::time::every(anim::FRAME).map(|_| Message::TransitionTick)
@@ -2413,6 +2423,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
     let before = overlay_key(state);
     let login_before = login_step(state);
+    let lookup_before = lookup_step(state);
 
     // The user closing the dialog is held back for the length of the exit
     // transition, so the dialog can be seen to leave; the close itself runs
@@ -2436,6 +2447,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     // The login flow eases from one step to the next (asking for the URL, the
     // browser/WebView wait, the result) instead of swapping the page.
     start_login_transition(state, login_before, login_step(state));
+
+    // The lookup form does the same when the mode above it changes.
+    start_lookup_transition(state, lookup_before, lookup_step(state));
 
     // A dialog that appeared, or whose card changed, eases in. A dialog that
     // closed without the user asking for it just disappears.
@@ -2831,6 +2845,54 @@ fn start_login_transition(state: &mut State, before: u8, after: u8) {
     state.login_transition = Some(anim::Transition::settle(from, anim::content_rest()));
 }
 
+/// The lookup form currently shown, as a step number, used to tell which way
+/// the user is moving through it (and therefore which way the form should
+/// slide in).
+///
+/// Both what the selector picks (the mode) and what the request did (the
+/// status below the form) count, so switching the mode, a request starting,
+/// and its result each ease the form the way the login steps do. The mode is
+/// the higher digit, so the numbers still follow [`LookupMode::ALL`], and a
+/// later mode or a later status means "forward" (the form comes in from the
+/// right).
+fn lookup_step(state: &State) -> u8 {
+    let mode = LookupMode::ALL
+        .iter()
+        .position(|&mode| mode == state.lookup.mode)
+        .unwrap_or(0) as u8;
+
+    let status = match state.lookup.status {
+        LookupStatus::Idle => 0,
+        LookupStatus::Fetching => 1,
+        // A result and an error are both the end of the request, so they take
+        // the form to the same (last) step.
+        LookupStatus::Done(_) | LookupStatus::Error(_) => 2,
+    };
+
+    mode * 4 + status
+}
+
+/// Plays the transition that matches a change of the lookup mode or status.
+///
+/// Only the form under the selector moves: the user just picked from that
+/// selector, so it stays where it is while the form eases in behind it.
+fn start_lookup_transition(state: &mut State, before: u8, after: u8) {
+    if after == before {
+        return;
+    }
+
+    // As with the login steps, a change that comes before the previous one
+    // settled carries that movement on instead of jumping back to the start of
+    // the slide.
+    let running = state
+        .lookup_transition
+        .as_ref()
+        .map(|transition| transition.pose());
+    let from = running.unwrap_or_else(|| anim::content_start(after > before));
+
+    state.lookup_transition = Some(anim::Transition::settle(from, anim::content_rest()));
+}
+
 fn handle(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::ModeSelected(mode) => {
@@ -2859,6 +2921,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             anim::tick(&mut state.content_transition);
             anim::tick(&mut state.overlay_transition);
             anim::tick(&mut state.login_transition);
+            anim::tick(&mut state.lookup_transition);
 
             // A finished transition is followed by ordinary ones again
             // (the Multi Flashing page is the only full-window one so far).
@@ -8635,6 +8698,20 @@ fn view(state: &State) -> Element<'_, Message> {
             .map(anim::Transition::pose),
         _ => None,
     };
+
+    // A change of the lookup mode — or of the status below the form: asking
+    // for a firmware shows a spinner, and its result takes over the form — is
+    // a change of the form one layer below the login page: the form is posed
+    // where it is drawn (see `lookup`), and only its veil is added here, so
+    // the selector itself keeps its place while the form fades in.
+    let lookup_pose = match state.mode {
+        Mode::Mode1 => state
+            .lookup_transition
+            .as_ref()
+            .map(anim::Transition::pose),
+        _ => None,
+    };
+
     let content = match login_pose {
         Some(pose) => anim::animated(content, pose),
         None => content,
@@ -8655,6 +8732,13 @@ fn view(state: &State) -> Element<'_, Message> {
     // and below the language selector pushed next, so the chrome never
     // flickers with the login page.
     if let Some(pose) = login_pose {
+        content_layers.push(anim::veil(anim::window_background(state.dark), pose.veil));
+    }
+
+    // The lookup form's veil goes in the same place, so a mode (or a status of
+    // the request below it) that changes while the login page is settled still
+    // fades in from the background.
+    if let Some(pose) = lookup_pose {
         content_layers.push(anim::veil(anim::window_background(state.dark), pose.veil));
     }
 
@@ -9041,5 +9125,108 @@ mod tests {
             .expect("going back animates")
             .pose();
         assert!(back.slide.x < 0.0, "{}", back.slide.x);
+    }
+
+    /// The lookup form eases in when the mode above it changes, in the
+    /// direction the user is moving through the mode list.
+    #[test]
+    fn the_lookup_modes_animate_between_each_other() {
+        let mut state = State::default();
+        assert!(state.lookup_transition.is_none());
+
+        // Moving down the list brings the next form in from the right.
+        let _ = update(
+            &mut state,
+            Message::LookupModeSelected(LookupMode::RetcnSmartphone),
+        );
+        assert_eq!(state.lookup.mode, LookupMode::RetcnSmartphone);
+
+        let forward = state
+            .lookup_transition
+            .as_ref()
+            .expect("the next form animates")
+            .pose();
+        assert!(forward.slide.x > 0.0, "{}", forward.slide.x);
+        assert!(forward.veil > 0.0);
+
+        // Picking the mode that is already on screen changes nothing.
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.lookup_transition.is_none());
+
+        let _ = update(
+            &mut state,
+            Message::LookupModeSelected(LookupMode::RetcnSmartphone),
+        );
+        assert!(state.lookup_transition.is_none());
+
+        // Going back up the list slides the other way.
+        let _ = update(
+            &mut state,
+            Message::LookupModeSelected(LookupMode::RowSmartphone),
+        );
+        assert_eq!(state.lookup.mode, LookupMode::RowSmartphone);
+
+        let back = state
+            .lookup_transition
+            .as_ref()
+            .expect("going back animates")
+            .pose();
+        assert!(back.slide.x < 0.0, "{}", back.slide.x);
+    }
+
+    /// A firmware lookup is a step of the same movement: the form eases on to
+    /// the spinner while the request runs, and on to its result (or its error)
+    /// when the answer arrives.
+    #[test]
+    fn the_lookup_status_animates_the_form() {
+        let mut state = State::default();
+        state.login = LoginStatus::LoggedIn {
+            token: "token".to_owned(),
+            full_name: None,
+        };
+        // A valid IMEI (right length and check digit), so the request starts
+        // instead of reporting the input back.
+        state.lookup.imei_input = "490154203237518".to_owned();
+
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.lookup_transition.is_none());
+
+        // Asking for the firmware takes the form on to the next step.
+        let _ = update(&mut state, Message::LookupRequested);
+        assert!(matches!(state.lookup.status, LookupStatus::Fetching));
+
+        let fetching = state
+            .lookup_transition
+            .as_ref()
+            .expect("fetching animates")
+            .pose();
+        assert!(fetching.slide.x > 0.0, "{}", fetching.slide.x);
+
+        // The answer is the step after it, so the result eases in instead of
+        // being swapped in behind the spinner.
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.lookup_transition.is_none());
+
+        let _ = update(
+            &mut state,
+            Message::LookupFinished(Err(firmware::FirmwareError::Other(
+                "no build for this IMEI".to_owned(),
+            ))),
+        );
+        assert!(matches!(state.lookup.status, LookupStatus::Error(_)));
+
+        let answered = state
+            .lookup_transition
+            .as_ref()
+            .expect("the answer animates")
+            .pose();
+        assert!(answered.slide.x > 0.0, "{}", answered.slide.x);
+        assert!(answered.veil > 0.0);
     }
 }
