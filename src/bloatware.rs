@@ -10,12 +10,13 @@
 
 use iced::widget::text::{Shaping, Wrapping};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, row,
-    scrollable, text_input, Column, Space,
+    button, column, container, mouse_area, row, scrollable, text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::debloat::{self, AdbDeviceState, RemovalOutcome};
 use crate::guided::spinner;
 use crate::text;
@@ -273,7 +274,7 @@ fn checklist(state: &State) -> Element<'_, Message> {
         // out of the card (the card itself scrolls as well).
         content = content.push(
             scrollable(Column::with_children(rows).spacing(6))
-                .id(iced::widget::scrollable::Id::new(LIST_SCROLL_ID))
+                .id(iced::widget::Id::new(LIST_SCROLL_ID))
                 .height(LIST_HEIGHT)
                 .width(Fill),
         );

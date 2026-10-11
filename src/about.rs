@@ -5,10 +5,12 @@
 //! fixed-size card, so a long credits list cannot grow the window.
 
 use iced::widget::{
-    button, container, horizontal_rule, mouse_area, scrollable, stack, Column, Space,
+    button, container, mouse_area, scrollable, stack,
 };
-use iced::{Alignment, Element, Fill, Length};
+use iced::{Alignment, Fill, Length};
 
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::text;
 use crate::{Message, State};
 
@@ -27,7 +29,7 @@ pub(crate) fn about_button<'a>() -> Element<'a, Message> {
 
 /// Draws the About button as a circle using the primary button's colours, so
 /// it reads on both the light and the dark theme.
-fn about_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+fn about_button_style(theme: &crate::fluent::Theme, status: button::Status) -> button::Style {
     let mut style = button::primary(theme, status);
 
     style.border = iced::Border {
@@ -51,8 +53,8 @@ fn link_button<'a>(url: String) -> Element<'a, Message> {
 /// The hyperlink look: no background, border or shadow, with the text in a
 /// colour that reads as clickable on both themes (iced's palette has no link
 /// colour, so the two are picked by hand like the other status colours).
-fn link_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
-    let color = if theme.extended_palette().is_dark {
+fn link_button_style(theme: &crate::fluent::Theme, status: button::Status) -> button::Style {
+    let color = if theme.is_dark() {
         iced::Color::from_rgb8(0x6C, 0xB4, 0xFF)
     } else {
         iced::Color::from_rgb8(0x0B, 0x5F, 0xCC)
@@ -65,11 +67,11 @@ fn link_button_style(theme: &iced::Theme, status: button::Status) -> button::Sty
         _ => color,
     };
 
+    // A link has no button chrome: the default style is an empty background,
+    // border and shadow, and only the text colour is overridden.
     button::Style {
         text_color,
-        // A link has no button chrome: borrow the empty background, border and
-        // shadow of the built-in text-only button style.
-        ..button::text(theme, button::Status::Active)
+        ..button::Style::default()
     }
 }
 

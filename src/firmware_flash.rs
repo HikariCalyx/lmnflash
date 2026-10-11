@@ -13,13 +13,15 @@
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, pick_list,
-    progress_bar, row, scrollable, Space,
+    button, column, container, mouse_area, pick_list, progress_bar, row,
+    scrollable,
 };
 use iced::widget::text::Shaping;
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::fastboot_info::{self, SecureState};
 use crate::flash_engine::{Engine, RebootMode};
 use crate::flashfile::{EraseGroup, FlashPart, LoadError};
@@ -45,8 +47,8 @@ const OUTPUT_SIZE: f32 = 13.0;
 /// A progress bar at the height used everywhere in this dialog.
 fn bar<'a>(fraction: f32) -> Element<'a, Message> {
     progress_bar(0.0..=1.0, fraction)
-        .height(BAR_HEIGHT)
-        .width(Fill)
+        .girth(BAR_HEIGHT)
+        .length(Fill)
         .into()
 }
 
@@ -279,8 +281,14 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         .find(|option| option.value == flash.engine)
         .cloned()
         .unwrap_or_else(|| options[0].clone());
-    let engine_picker: iced::widget::PickList<'_, Labeled<Engine>, Vec<Labeled<Engine>>, Labeled<Engine>, Message> =
-        pick_list(options, Some(selected), |option| {
+    let engine_picker: iced::widget::PickList<
+        '_,
+        Labeled<Engine>,
+        Vec<Labeled<Engine>>,
+        Labeled<Engine>,
+        Message,
+        crate::fluent::Theme,
+    > = pick_list(options, Some(selected), |option| {
             Message::FirmwareFlashEngineSelected(option.value)
         })
         .text_shaping(Shaping::Advanced)
@@ -299,7 +307,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
 
     // The picker takes the room the buttons do not, so they end up at the
     // right of the combobox.
-    let mut tool_row: iced::widget::Row<'_, Message> = iced::widget::Row::new()
+    let mut tool_row: Row<'_, Message> = Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
         .push(text(l10n.tr("firmware-flash-tool")).size(13.0))
@@ -451,6 +459,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
             Vec<Labeled<RebootMode>>,
             Labeled<RebootMode>,
             Message,
+            crate::fluent::Theme,
         > = pick_list(modes, None, |mode| {
             Message::FirmwareFlashRebootSelected(mode.value)
         })
@@ -561,12 +570,12 @@ fn current_slot_known(state: &State) -> bool {
 /// white in a light theme — and then to the plain text colour, which read as a
 /// chosen value but still left the field looking like an empty input rather
 /// than the button it sits next to.)
-fn reboot_menu_style(theme: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
+fn reboot_menu_style(theme: &crate::fluent::Theme, status: pick_list::Status) -> pick_list::Style {
     let button_status = match status {
         pick_list::Status::Active => button::Status::Active,
         // A button has no "open" state of its own; an open list is still being
         // hovered by the pointer.
-        pick_list::Status::Hovered | pick_list::Status::Opened => button::Status::Hovered,
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => button::Status::Hovered,
     };
     let button = button::primary(theme, button_status);
 
@@ -939,7 +948,7 @@ fn running_section(state: &State) -> Element<'_, Message> {
                 .align_y(Alignment::Center),
                 container(
                     scrollable(lines)
-                        .id(iced::widget::scrollable::Id::new(LOG_SCROLL_ID))
+                        .id(iced::widget::Id::new(LOG_SCROLL_ID))
                         .width(Fill)
                         .height(180),
                 )
@@ -1170,8 +1179,14 @@ fn device_picker(state: &State) -> Element<'_, Message> {
                 .cloned()
         });
 
-    let picker: iced::widget::PickList<'_, Labeled<String>, Vec<Labeled<String>>, Labeled<String>, Message> =
-        pick_list(options, selected, |option| {
+    let picker: iced::widget::PickList<
+        '_,
+        Labeled<String>,
+        Vec<Labeled<String>>,
+        Labeled<String>,
+        Message,
+        crate::fluent::Theme,
+    > = pick_list(options, selected, |option| {
             Message::FirmwareFlashDeviceSelected(option.value)
         })
         .text_shaping(Shaping::Advanced)

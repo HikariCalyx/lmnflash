@@ -12,11 +12,13 @@
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, row, scrollable, Space,
+    button, column, container, mouse_area, row, scrollable,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::fastboot_info::FactoryResetBlocker;
 use crate::guided::spinner;
 use crate::text;

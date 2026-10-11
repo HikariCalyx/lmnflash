@@ -4,9 +4,11 @@
 //! The feature's flow state lives in `crate` (`State::flash`); this module only
 //! describes the grid and which messages its buttons send.
 
-use iced::widget::{button, column, container, scrollable, Row};
-use iced::{Alignment, Element, Fill};
+use iced::widget::{button, column, container, scrollable};
+use iced::{Alignment, Fill};
 
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::text;
 use crate::{driver_install, Message, State};
 

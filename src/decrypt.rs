@@ -21,10 +21,12 @@ use cbc::Decryptor;
 use iced::widget::text::Shaping;
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, row, scrollable, text_input,
-    Space,
+    button, column, container, mouse_area, row, scrollable, text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
+
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};

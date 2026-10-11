@@ -9,11 +9,12 @@
 //! that state is presented and which messages its widgets send.
 
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, row, scrollable,
-    text_input, Space,
+    button, column, container, mouse_area, row, scrollable, text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::text;
 use crate::{BootloaderDialog, Message, State};
 
@@ -21,11 +22,11 @@ use crate::{BootloaderDialog, Message, State};
 /// lines (e.g. "Device ID copied to the clipboard.") so they stand out on the
 /// dark dialog background. On a light one that green washes out, so the
 /// theme's own success colour is used there instead.
-pub(crate) fn bright_success(theme: &iced::Theme) -> iced::widget::text::Style {
-    let color = if theme.extended_palette().is_dark {
+pub(crate) fn bright_success(theme: &crate::fluent::Theme) -> iced::widget::text::Style {
+    let color = if theme.is_dark() {
         iced::Color::from_rgb8(0x46, 0xE8, 0x8E)
     } else {
-        theme.extended_palette().success.strong.color
+        theme.tokens().status_success_foreground3
     };
 
     iced::widget::text::Style { color: Some(color) }
@@ -35,8 +36,8 @@ pub(crate) fn bright_success(theme: &iced::Theme) -> iced::widget::text::Style {
 /// bootloader") so it reads as a caution rather than an outright error. On a
 /// light background the bright orange is hard to read, so a darker one is used
 /// there — iced's palette has no warning colour to borrow.
-pub(crate) fn warning_orange(theme: &iced::Theme) -> iced::widget::text::Style {
-    let color = if theme.extended_palette().is_dark {
+pub(crate) fn warning_orange(theme: &crate::fluent::Theme) -> iced::widget::text::Style {
+    let color = if theme.is_dark() {
         iced::Color::from_rgb8(0xFF, 0xA5, 0x00)
     } else {
         iced::Color::from_rgb8(0xB4, 0x53, 0x09)
@@ -45,24 +46,14 @@ pub(crate) fn warning_orange(theme: &iced::Theme) -> iced::widget::text::Style {
     iced::widget::text::Style { color: Some(color) }
 }
 
-/// The rounded-box card style used by the dialogs, but with a much darker
-/// background so the popup clearly stands out from the page behind it.
-/// (On light themes the standard card colour is kept.)
-pub(crate) fn darker_card(theme: &iced::Theme) -> iced::widget::container::Style {
-    let mut style = iced::widget::container::rounded_box(theme);
-    let background = theme.palette().background;
-
-    if background.r + background.g + background.b < 1.5 {
-        let factor = 0.35;
-        style.background = Some(iced::Background::Color(iced::Color {
-            r: background.r * factor,
-            g: background.g * factor,
-            b: background.b * factor,
-            a: background.a,
-        }));
-    }
-
-    style
+/// The rounded-box card style used by the dialogs.
+///
+/// Under the Fluent theme the card surface already stands out from the page in
+/// both modes — a white card on the light grey page, a dark grey card on the
+/// near-black page — so this is the plain rounded box (the name is kept from
+/// the previous palette, whose dark card had to be darkened by hand).
+pub(crate) fn darker_card(theme: &crate::fluent::Theme) -> iced::widget::container::Style {
+    iced::widget::container::rounded_box(theme)
 }
 /// Whether the Bootloader Unlock dialog is open (in any of its steps).
 pub(crate) fn is_open(state: &State) -> bool {

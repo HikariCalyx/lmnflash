@@ -12,13 +12,14 @@
 //! classification apply in both flows.
 
 use iced::widget::{
-    button, canvas, column, container, horizontal_rule, mouse_area, row,
-    scrollable, text_input, Space,
+    button, canvas, column, container, mouse_area, row, scrollable, text_input,
 };
 use iced::widget::text::Wrapping;
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card, device_picker_card, warning_orange};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::text;
 use crate::{GuidedStep, Message, State};
 
@@ -257,7 +258,7 @@ fn read_card(state: &State) -> Element<'_, Message> {
     if bootloader.checking {
         content = content.push(text(l10n.tr("flash-bootloader-checking")).size(13.0));
     } else if let Some(eligible) = bootloader.eligible {
-        let (id, style): (&str, fn(&iced::Theme) -> iced::widget::text::Style) =
+        let (id, style): (&str, fn(&crate::fluent::Theme) -> iced::widget::text::Style) =
             if eligible {
                 ("flash-bootloader-eligible", bright_success)
             } else {
@@ -443,14 +444,14 @@ struct Spinner {
     phase: f32,
 }
 
-impl<Message> canvas::Program<Message> for Spinner {
+impl<Message> canvas::Program<Message, crate::fluent::Theme> for Spinner {
     type State = ();
 
     fn draw(
         &self,
         _state: &Self::State,
         renderer: &iced::Renderer,
-        theme: &iced::Theme,
+        theme: &crate::fluent::Theme,
         bounds: iced::Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
@@ -458,7 +459,10 @@ impl<Message> canvas::Program<Message> for Spinner {
 
         let mut frame = canvas::Frame::new(renderer, bounds.size());
 
-        let base = theme.palette().text;
+        // `canvas::Program` is generic over the theme in iced 0.14, so the
+        // spinner reads the accent colour from the Fluent theme it is drawn
+        // with.
+        let base = theme.tokens().neutral_foreground1;
         let center = frame.center();
         let size = bounds.width.min(bounds.height);
         let radius = size * 0.35;

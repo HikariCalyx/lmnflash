@@ -7,12 +7,13 @@
 
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, mouse_area, pick_list, row, stack, text_editor, text_input, Column,
-    Space,
+    button, column, container, mouse_area, pick_list, row, stack, text_editor, text_input,
 };
-use iced::{Alignment, Element, Fill, Length};
+use iced::{Alignment, Fill, Length};
 
 use crate::bulk::bulk_summary;
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::text;
 use crate::{
     browser_login_available, firmware, l10n, protocol, BulkStatus, Click, DevicePicker,
@@ -312,6 +313,7 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                 Vec<Labeled<firmware::Platform>>,
                 Labeled<firmware::Platform>,
                 Message,
+                crate::fluent::Theme,
             > = pick_list(platform_options, Some(selected_platform), |option| {
                 Message::RetcnPlatformSelected(option.value)
             })
@@ -334,6 +336,7 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                 Vec<Labeled<SimCount>>,
                 Labeled<SimCount>,
                 Message,
+                crate::fluent::Theme,
             > = pick_list(sim_options, Some(selected_sim), |option| {
                 Message::RetcnSimCountSelected(option.value)
             })
@@ -486,6 +489,7 @@ fn lookup_view<'a>(state: &'a State) -> Element<'a, Message> {
                 Vec<Labeled<firmware::Category>>,
                 Labeled<firmware::Category>,
                 Message,
+                crate::fluent::Theme,
             > = pick_list(category_options, Some(selected_category), |option| {
                 Message::ModelCategorySelected(option.value)
             })

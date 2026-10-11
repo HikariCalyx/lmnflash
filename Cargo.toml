@@ -7,7 +7,20 @@ edition = "2024"
 # `advanced` exposes `iced::advanced` (the `Widget` trait and the renderer's
 # layer/transformation API), which the feature-switch transitions in
 # `src/anim.rs` draw through.
-iced = { version = "0.13", features = ["tokio", "system", "image", "canvas", "advanced"] }
+#
+# iced 0.14 removed the `system` feature (system fonts and advanced shaping
+# are now always available), so it is no longer listed here.
+iced = { version = "0.14", features = ["tokio", "image", "canvas", "advanced"] }
+
+# The Fluent 2 theme used by the whole UI. iced 0.14 lets a theme be its own
+# type (`Theme` implements the `Base` trait and every widget `Catalog`), so the
+# crate's `Theme` becomes the application's theme type.
+#
+# Vendored under `vendor/iced-fluent-theme` (MIT): the upstream crate does not
+# implement `text_editor::Catalog`, which iced 0.14 requires to use the
+# `text_editor` widget (the Bulk IMEI input), and the orphan rule prevents us
+# from adding it from here. The vendored copy adds it.
+iced-fluent-theme = { path = "vendor/iced-fluent-theme" }
 fluent = "0.16"
 unic-langid = "0.9"
 wry = "0.50"

@@ -8,6 +8,7 @@ mod bloatware;
 mod bootloader;
 mod bulk;
 mod carrier;
+mod compat_iced;
 mod config;
 mod debloat;
 mod decrypt;
@@ -21,6 +22,7 @@ mod firmware_flash;
 mod flash_engine;
 mod flash_script;
 mod flashfile;
+mod fluent;
 mod guided;
 mod image_unpack;
 mod instance;
@@ -45,15 +47,27 @@ mod unpack;
 mod webview;
 
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, pick_list, row, stack, text_editor,
-    Space,
+    button, column, container, mouse_area, pick_list, row, stack, text_editor,
 };
 use iced::widget::text::Shaping;
-use iced::{Alignment, Element, Fill, Font, Size, Task};
+use iced::{Alignment, Fill, Font, Size, Task};
 
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use smartphone::SmartphoneFeature;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The application's element type.
+///
+/// In iced 0.14 a theme is a *type* — it implements [`iced::theme::Base`] and
+/// provides the widget `Catalog` implementations — so the Fluent theme is part
+/// of every widget's type. This alias keeps a bare `Element<'_, Message>`
+/// meaning the Fluent-themed element everywhere.
+pub(crate) type Element<'a, M = Message> = ::iced::Element<'a, M, fluent::Theme>;
+
+/// A Fluent-themed [`iced::widget::Text`] (see [`Element`]).
+pub(crate) type Text<'a> = ::iced::widget::Text<'a, fluent::Theme>;
 
 /// A `text` label rendered with advanced text shaping.
 ///
@@ -62,11 +76,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// so text renders correctly regardless of the OS language.
 fn text<'a>(
     fragment: impl iced::widget::text::IntoFragment<'a>,
-) -> iced::widget::Text<'a> {
+) -> Text<'a> {
     iced::widget::text(fragment).shaping(Shaping::Advanced)
 }
 
-pub fn main() -> iced::Result {
+pub fn main() -> ::iced::Result {
     // When started with `--login-dialog`, this process only shows the WebView
     // login dialog and exits (winit allows one event loop per process).
     if let Some(code) = webview::run_dialog_process_if_requested() {
@@ -100,33 +114,66 @@ pub fn main() -> iced::Result {
 
     let icon = iced::window::icon::from_file_data(include_bytes!("icon.ico"), None).ok();
 
-    iced::application(|state: &State| state.l10n.tr("app-title"), update, view)
-        .default_font(system_ui_font())
-        .window(iced::window::Settings {
-            icon,
-            // The app answers close requests itself (see
-            // `Message::WindowCloseRequested`), so a Multi Flashing run can
-            // refuse to be cut short.
-            exit_on_close_request: false,
-            ..iced::window::Settings::default()
-        })
-        .window_size(Size::new(720.0, 720.0))
-        .centered()
-        .subscription(subscription)
-        .run_with(move || {
-            let mut state = State::initial();
-            // Only the primary instance receives forwarded callbacks.
-            state.receives_callbacks = receiver.is_some();
+    // iced 0.14 boots the application through a `Fn` closure (it may be called
+    // more than once), so the callback receiver is handed over through a cell.
+    let receiver = Arc::new(std::sync::Mutex::new(receiver));
 
-            // Live as long as the process: a later instance forwards the
-            // `softwarefix://` callback here.
-            let callbacks = match receiver {
-                Some(receiver) => Task::run(receiver, Message::LoginCallback),
+    let application = iced::application(
+        move || {
+            let mut state = State::initial();
+
+            // Only the primary instance receives forwarded callbacks. The
+            // receiver lives as long as the process: a later instance forwards
+            // the `softwarefix://` callback here.
+            let callbacks = match receiver.lock().expect("boot runs once").take() {
+                Some(receiver) => {
+                    state.receives_callbacks = true;
+                    Task::run(receiver, Message::LoginCallback)
+                }
                 None => Task::none(),
             };
 
-            (state, callbacks)
-        })
+            // Ask for the OS colour scheme so the Fluent theme matches it from
+            // the first frame on.
+            let theme = iced::system::theme().map(Message::SystemTheme);
+
+            (state, Task::batch([callbacks, theme]))
+        },
+        update,
+        view,
+    )
+    .title(|state: &State| state.l10n.tr("app-title"))
+    .default_font(system_ui_font())
+    .theme(app_theme)
+    .window(iced::window::Settings {
+        icon,
+        // The app answers close requests itself (see
+        // `Message::WindowCloseRequested`), so a Multi Flashing run can
+        // refuse to be cut short.
+        exit_on_close_request: false,
+        ..iced::window::Settings::default()
+    })
+    .window_size(Size::new(720.0, 720.0))
+    .centered()
+    .subscription(subscription);
+
+    // The Fluent theme styles its text with `Inter` (see
+    // `iced_fluent_theme::font`), and ships the face, so it has to be
+    // registered here or every label the theme styles would fall back to an
+    // arbitrary system font. Glyphs Inter does not cover — CJK, for one —
+    // still fall back through the system font database, and `default_font`
+    // above stays the CJK-aware system UI font for everything the app styles
+    // itself.
+    let application = iced_fluent_theme::font::load()
+        .into_iter()
+        .fold(application, |application, font| application.font(font));
+
+    application.run()
+}
+
+/// The application theme: the Fluent variant matching the OS colour scheme.
+fn app_theme(state: &State) -> fluent::Theme {
+    fluent::theme_for(state.dark)
 }
 
 /// True for Traditional-Chinese OS locales (Taiwan, Hong Kong, Macau, or an
@@ -1443,6 +1490,9 @@ struct State {
     /// Monotonic UI animation tick, advanced by a time subscription while a
     /// busy indicator (spinner) is visible.
     anim_tick: u64,
+    /// Whether the OS colour scheme is dark, which selects the Fluent theme
+    /// variant. Reported at startup and on every system theme change.
+    dark: bool,
     /// In-flight fade + slide of the tab content, started when the user
     /// switches to another feature (Mode 1/2/3).
     content_transition: Option<anim::Transition>,
@@ -1479,6 +1529,7 @@ impl Default for State {
             flash: SmartphoneFlashState::default(),
             about_open: false,
             anim_tick: 0,
+            dark: false,
             content_transition: None,
             content_transition_covers_chrome: false,
             overlay_transition: None,
@@ -1559,6 +1610,8 @@ fn default_language() -> l10n::Language {
 #[derive(Debug, Clone)]
 enum Message {
     ModeSelected(Mode),
+    /// The OS colour scheme was reported (at startup) or changed.
+    SystemTheme(iced::theme::Mode),
     /// The round "i" button beside the language selector was pressed.
     AboutPressed,
     /// The About dialog was dismissed (its button or the backdrop).
@@ -2092,7 +2145,18 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let close_requests =
         iced::window::close_requests().map(Message::WindowCloseRequested);
 
-    iced::Subscription::batch([ticks, countdown, transition, close_requests])
+    // The Fluent theme follows the OS light/dark setting; the subscription
+    // also fires once at startup (iced reports the current mode).
+    let system_theme =
+        iced::system::theme_changes().map(Message::SystemTheme);
+
+    iced::Subscription::batch([
+        ticks,
+        countdown,
+        transition,
+        close_requests,
+        system_theme,
+    ])
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -2461,6 +2525,10 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::AnimTick => {
             state.anim_tick = state.anim_tick.wrapping_add(1);
+            Task::none()
+        }
+        Message::SystemTheme(mode) => {
+            state.dark = mode == iced::theme::Mode::Dark;
             Task::none()
         }
         Message::TransitionTick => {
@@ -4036,8 +4104,8 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             // The table of the source that was replaced is left where it was
             // scrolled to: another firmware starts at its first column.
-            iced::widget::scrollable::scroll_to(
-                iced::widget::scrollable::Id::new(pac_repack::TABLE_ID),
+            iced::widget::operation::scroll_to(
+                iced::widget::Id::new(pac_repack::TABLE_ID),
                 iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
             )
         }
@@ -6820,8 +6888,8 @@ fn push_flash_log(log: &mut Vec<String>, line: String) {
 /// Pins the flashing log to its last line. A build without the log on screen
 /// has no widget with that id, and the operation is then a no-op.
 fn scroll_flash_log_to_end() -> Task<Message> {
-    iced::widget::scrollable::snap_to(
-        iced::widget::scrollable::Id::new(firmware_flash::LOG_SCROLL_ID),
+    iced::widget::operation::snap_to(
+        iced::widget::Id::new(firmware_flash::LOG_SCROLL_ID),
         iced::widget::scrollable::RelativeOffset::END,
     )
 }
@@ -7717,7 +7785,7 @@ fn view(state: &State) -> Element<'_, Message> {
             let pose = transition.pose();
             vec![
                 anim::animated(content, pose),
-                anim::veil(anim::window_background(), pose.veil),
+                anim::veil(anim::window_background(state.dark), pose.veil),
             ]
         }
         _ => vec![content],
@@ -7793,7 +7861,7 @@ fn view(state: &State) -> Element<'_, Message> {
 
             iced::widget::Stack::with_children(vec![
                 anim::animated(base, pose),
-                anim::veil(anim::window_background(), pose.veil),
+                anim::veil(anim::window_background(state.dark), pose.veil),
             ])
             .into()
         }

@@ -9,11 +9,13 @@
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, row, scrollable, text_input, Space,
+    button, column, container, mouse_area, row, scrollable, text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::firmware::Platform;
 use crate::guided::spinner;
 use crate::l10n;

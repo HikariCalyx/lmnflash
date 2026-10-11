@@ -14,11 +14,13 @@
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, row, scrollable, Space,
+    button, column, container, mouse_area, row, scrollable,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::darker_card;
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::text;
 use crate::{Message, State};
 

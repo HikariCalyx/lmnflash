@@ -10,12 +10,14 @@
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, column, container, horizontal_rule, mouse_area, progress_bar, row,
-    scrollable, text_input, Space,
+    button, column, container, mouse_area, progress_bar, row, scrollable,
+    text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::driver_install::{self, DriverError};
 use crate::guided::spinner;
 use crate::l10n;
@@ -216,8 +218,8 @@ fn strings() -> Strings {
 /// A progress bar at the height used by the dialogs.
 fn bar<'a>(fraction: f32) -> Element<'a, Message> {
     progress_bar(0.0..=1.0, fraction)
-        .height(BAR_HEIGHT)
-        .width(Fill)
+        .girth(BAR_HEIGHT)
+        .length(Fill)
         .into()
 }
 

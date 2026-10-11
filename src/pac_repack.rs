@@ -12,12 +12,13 @@
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::{IntoFragment, Shaping, Wrapping};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, progress_bar, row, scrollable,
-    text_input, Space,
+    button, column, container, mouse_area, progress_bar, row, scrollable, text_input,
 };
-use iced::{Alignment, Element, Fill, Length, Vector};
+use iced::{Alignment, Fill, Length, Vector};
 
 use crate::anim;
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::bootloader::{bright_success, darker_card, warning_orange};
 use crate::firmware::human_size;
 use crate::guided::spinner;
@@ -452,7 +453,7 @@ fn table_section<'a>(
     // the horizontal one (`Message::PacRepackScrolled`).
     section = section.push(
         scrollable(rows)
-            .id(iced::widget::scrollable::Id::new(TABLE_ID))
+            .id(iced::widget::Id::new(TABLE_ID))
             .direction(Direction::Both {
                 vertical: Scrollbar::default(),
                 horizontal: Scrollbar::default(),
@@ -518,7 +519,7 @@ fn record_row<'a>(
 
 /// A table entry: the data lines up in columns, so it is written in the
 /// platform's monospace font.
-fn value_text<'a>(value: impl IntoFragment<'a>) -> iced::widget::Text<'a> {
+fn value_text<'a>(value: impl IntoFragment<'a>) -> Text<'a> {
     text(value).size(ENTRY_SIZE).font(output_font())
 }
 
@@ -648,8 +649,8 @@ fn error_text<'a>(l10n: &l10n::Bundle, error: &BuildError) -> Element<'a, Messag
 /// A progress bar at the height used by the dialogs.
 fn bar<'a>(fraction: f32) -> Element<'a, Message> {
     progress_bar(0.0..=1.0, fraction)
-        .height(BAR_HEIGHT)
-        .width(Fill)
+        .girth(BAR_HEIGHT)
+        .length(Fill)
         .into()
 }
 

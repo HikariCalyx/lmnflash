@@ -8,12 +8,13 @@
 
 use iced::widget::text::{Shaping, Wrapping};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, mouse_area, progress_bar, row, scrollable,
-    text_input, Space,
+    button, column, container, mouse_area, progress_bar, row, scrollable, text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Fill};
 
 use crate::bootloader::{bright_success, darker_card, warning_orange};
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 use crate::firmware::human_size;
 use crate::guided::spinner;
 use crate::l10n;
@@ -466,7 +467,7 @@ fn package_section<'a>(
                         .padding([0.0, LIST_BAR_GUTTER])
                         .width(Fill),
                 )
-                .id(iced::widget::scrollable::Id::new(LIST_ID))
+                .id(iced::widget::Id::new(LIST_ID))
                 .height(Fill)
                 .width(Fill),
             )
@@ -526,8 +527,8 @@ fn error_text<'a>(l10n: &l10n::Bundle, error: &PacError) -> Element<'a, Message>
 /// A progress bar at the height used by the dialogs.
 fn bar<'a>(fraction: f32) -> Element<'a, Message> {
     progress_bar(0.0..=1.0, fraction)
-        .height(BAR_HEIGHT)
-        .width(Fill)
+        .girth(BAR_HEIGHT)
+        .length(Fill)
         .into()
 }
 

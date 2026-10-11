@@ -29,13 +29,14 @@ use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{
     layout, mouse, renderer, Clipboard, Layout, Renderer, Shell, Widget,
 };
-use iced::widget::{container, Space};
+use iced::widget::container;
 use iced::{
-    Background, Color, Element, Fill, Length, Rectangle, Size, Transformation,
-    Vector,
+    Background, Color, Fill, Length, Rectangle, Size, Transformation, Vector,
 };
 
 use crate::Message;
+use crate::compat_iced as iced;
+use crate::compat_iced::*;
 
 /// How long a transition takes to settle into place.
 const SETTLE_MS: f32 = 200.0;
@@ -167,11 +168,10 @@ fn side(forward: bool) -> Vector {
 /// empty area of the UI.
 ///
 /// A veil that fades content in from the background has to use exactly this
-/// colour; anything else would be visible as a tint. The app does not choose a
-/// theme, so this is the same [`iced::Theme::default`] the application itself
-/// uses (which follows the OS light/dark setting).
-pub(crate) fn window_background() -> Color {
-    iced::Theme::default().extended_palette().background.base.color
+/// colour; anything else would be visible as a tint. It is the Fluent page
+/// background of the theme variant the OS colour scheme selects.
+pub(crate) fn window_background(dark: bool) -> Color {
+    crate::fluent::window_background(&crate::fluent::theme_for(dark))
 }
 
 /// A transition that eases an element from one [`Pose`] to another.
@@ -317,18 +317,18 @@ struct Animated<'a> {
     pose: Pose,
 }
 
-impl Widget<Message, iced::Theme, iced::Renderer> for Animated<'_> {
+impl Widget<Message, crate::fluent::Theme, iced::Renderer> for Animated<'_> {
     fn size(&self) -> Size<Length> {
         self.content.as_widget().size()
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        self.content.as_widget().layout(
+        self.content.as_widget_mut().layout(
             &mut tree.children[0],
             renderer,
             limits,
@@ -339,7 +339,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Animated<'_> {
         &self,
         tree: &Tree,
         renderer: &mut iced::Renderer,
-        theme: &iced::Theme,
+        theme: &crate::fluent::Theme,
         style: &renderer::Style,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
@@ -396,13 +396,13 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Animated<'_> {
     }
 
     fn operate(
-        &self,
+        &mut self,
         tree: &mut Tree,
         layout: Layout<'_>,
         renderer: &iced::Renderer,
         operation: &mut dyn Operation,
     ) {
-        self.content.as_widget().operate(
+        self.content.as_widget_mut().operate(
             &mut tree.children[0],
             layout,
             renderer,
@@ -410,18 +410,18 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Animated<'_> {
         );
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut Tree,
-        event: iced::Event,
+        event: &iced::Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> iced::event::Status {
-        self.content.as_widget_mut().on_event(
+    ) {
+        self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
             layout,
@@ -430,7 +430,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Animated<'_> {
             clipboard,
             shell,
             viewport,
-        )
+        );
     }
 
     fn mouse_interaction(
@@ -453,15 +453,18 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Animated<'_> {
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &iced::Renderer,
+        viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<iced::advanced::overlay::Element<'b, Message, iced::Theme, iced::Renderer>>
-    {
+    ) -> Option<
+        iced::advanced::overlay::Element<'b, Message, crate::fluent::Theme, iced::Renderer>,
+    > {
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             layout,
             renderer,
+            viewport,
             translation,
         )
     }
