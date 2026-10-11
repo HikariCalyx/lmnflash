@@ -222,6 +222,30 @@ factory reset — the dialog says so afterwards. A device that has not accepted
 this computer's debugging key yet is reported as unauthorized until the "Allow
 USB debugging?" prompt is accepted on it; **Refresh** re-scans the USB bus.
 
+## Connect ADB Wireless Debugging
+
+The **Connect ADB Wireless Debugging** tile pairs this computer with a phone
+that has Android's **wireless debugging** on, so the phone can be reached over
+Wi-Fi instead of the cable. The phone is the one that serves the pairing; the
+dialog only has to hand it the pairing code, and there are two ways to do that:
+
+* **QR code** — the dialog shows a QR code carrying a random service name and
+  password, in the format Android's *"Pair device with QR code"* screen reads.
+  Scanning it makes the phone announce its pairing service under that name,
+  which the dialog finds over mDNS and pairs with — nothing has to be typed.
+* **Pairing code** — the phone's *"Pair device with pairing code"* screen shows
+  a six-digit code. The dialog lists the phones that are offering a pairing
+  (`<ip>:<port>`), and pairs with the chosen one once the code is entered.
+
+Pairing is a one-time step: afterwards `adb` connects on its own whenever the
+phone is on the network, and the dialog reports the device it finds. The
+**Disconnect** menu drops the connection again (`adb disconnect`): it lists
+every wireless device `adb` reports — so a phone connected in an earlier session
+can be dropped as well — and its last entry drops all of them at once. Both
+devices have to be on the same network, and that network has to pass mDNS
+between them. The dialog uses the same `adb` of Google's platform-tools as the
+bloatware feature, downloading it on first use.
+
 ## Tablet Firmware Decrypt
 
 The **Firmware Decrypt** tab offers the host-side firmware-file tools as a grid

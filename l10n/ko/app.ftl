@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = 확인
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = 선택한 ZIP 아카이브는 유효한 펌웨어 패키지가 아닙니다(flashfile.xml이 없음)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = ADB 무선 연결
+flash-wireless-button = 연결
+wireless-desc = Android의 무선 디버깅으로 휴대폰을 Wi-Fi로 연결합니다. 먼저 QR 코드를 스캔하거나 휴대폰에 표시된 페어링 코드를 입력하여 이 컴퓨터와 페어링하세요. 두 기기가 같은 네트워크에 있어야 합니다.
+wireless-method-qr = QR 코드
+wireless-method-code = 페어링 코드
+wireless-qr-desc = 휴대폰에서 개발자 옵션을 열고 무선 디버깅을 선택한 뒤 "QR 코드로 기기 페어링"을 누르세요. 그런 다음 아래 코드를 스캔하세요.
+wireless-qr-regenerate = 새 QR 코드
+wireless-qr-waiting = 휴대폰이 QR 코드를 스캔하기를 기다리는 중…
+wireless-code-desc = 휴대폰에서 개발자 옵션을 열고 무선 디버깅을 선택한 뒤 "페어링 코드로 기기 페어링"을 누르세요. 그런 다음 아래에서 휴대폰을 선택하고 표시된 6자리 코드를 입력하세요.
+wireless-code-device = 휴대폰
+wireless-code-placeholder = 6자리 페어링 코드
+wireless-no-service = 페어링을 제공하는 휴대폰이 없습니다. 이 대화 상자를 열어 두고 휴대폰에서 페어링을 시작하세요.
+wireless-pair = 페어링
+wireless-code-required = 먼저 휴대폰에 표시된 페어링 코드를 입력하세요.
+wireless-working = 휴대폰과 페어링하는 중…
+wireless-connected = { $device }에 연결되었습니다.
+wireless-paired = 휴대폰이 페어링되었습니다. 무선 디버깅에 연결할 수 있게 되면 자동으로 연결됩니다.
+wireless-failed = 페어링 실패: { $error }
+wireless-mdns-failed = 네트워크에서 휴대폰을 검색할 수 없습니다: { $error }
+wireless-disconnect = 연결 해제
+wireless-disconnecting = 휴대폰에서 연결을 해제하는 중…
+wireless-disconnected = { $device }에서 연결이 해제되었습니다.
+wireless-disconnect-failed = 연결 해제 실패: { $error }
+wireless-disconnect-all = 모두
+wireless-disconnected-all = 모든 무선 기기에서 연결이 해제되었습니다.

@@ -23,15 +23,17 @@ pub(crate) enum SmartphoneFeature {
     FirmwareFlash,
     InstallDriver,
     RemoveBloatware,
+    WirelessDebugging,
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
         Self::InstallDriver,
         Self::RemoveBloatware,
+        Self::WirelessDebugging,
     ];
 
     fn title_id(self) -> &'static str {
@@ -41,6 +43,7 @@ impl SmartphoneFeature {
             Self::FirmwareFlash => "flash-firmware-title",
             Self::InstallDriver => "flash-driver-title",
             Self::RemoveBloatware => "flash-bloatware-title",
+            Self::WirelessDebugging => "flash-wireless-title",
         }
     }
 
@@ -100,6 +103,9 @@ impl SmartphoneFeature {
             // Removing preinstalled apps works on any Android device that has
             // USB debugging on, phones and tablets alike.
             Self::RemoveBloatware => vec![("flash-bloatware-button", pressed())],
+            // Wireless debugging is a phone feature: the connection is paired
+            // over Wi-Fi instead of over the cable.
+            Self::WirelessDebugging => vec![("flash-wireless-button", pressed())],
         }
     }
 }

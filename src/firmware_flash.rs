@@ -465,7 +465,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         })
         .placeholder(l10n.tr("firmware-flash-reboot"))
         .text_shaping(Shaping::Advanced)
-        .style(reboot_menu_style)
+        .style(menu_style)
         .width(Fill);
 
         reboot.into()
@@ -559,18 +559,22 @@ fn current_slot_known(state: &State) -> bool {
         .is_some_and(|variables| variables.current_slot.is_some())
 }
 
-/// The Reboot dropdown is a menu of one-shot actions sitting in the same row as
-/// two buttons, so it is drawn like them: it borrows the style of a primary
-/// button — the class a plain `button(..)` uses — instead of the pick list's
-/// own field, which is nearly white on a light theme and disappears against
-/// the white dialog.
+/// The style of a dropdown that is a menu of one-shot actions sitting in the
+/// same row as buttons, so it is drawn like them: it borrows the style of a
+/// primary button — the class a plain `button(..)` uses — instead of the pick
+/// list's own field, which is nearly white on a light theme and disappears
+/// against the white dialog. It is used by the Reboot dropdown here and by the
+/// "Disconnect" one in [`crate::wireless_dialog`].
 ///
 /// (The first attempt only recoloured the placeholder, to
 /// `primary.strong.text` — the colour that goes *on* a primary button, i.e.
 /// white in a light theme — and then to the plain text colour, which read as a
 /// chosen value but still left the field looking like an empty input rather
 /// than the button it sits next to.)
-fn reboot_menu_style(theme: &crate::fluent::Theme, status: pick_list::Status) -> pick_list::Style {
+pub(crate) fn menu_style(
+    theme: &crate::fluent::Theme,
+    status: pick_list::Status,
+) -> pick_list::Style {
     let button_status = match status {
         pick_list::Status::Active => button::Status::Active,
         // A button has no "open" state of its own; an open list is still being
@@ -582,8 +586,8 @@ fn reboot_menu_style(theme: &crate::fluent::Theme, status: pick_list::Status) ->
     let mut style = pick_list::default(theme, status);
     style.background = button.background.unwrap_or(style.background);
     style.text_color = button.text_color;
-    // The control always shows its `Reboot` placeholder instead of a selection,
-    // so that is the text that has to read like a button label.
+    // The control always shows its placeholder instead of a selection, so that
+    // is the text that has to read like a button label.
     style.placeholder_color = button.text_color;
     style.handle_color = button.text_color;
     style.border = button.border;

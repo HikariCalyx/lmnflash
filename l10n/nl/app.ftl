@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Het geselecteerde ZIP-archief is geen geldig firmwarepakket (geen flashfile.xml erin)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Draadloze ADB-verbinding maken
+flash-wireless-button = Verbinden
+wireless-desc = Verbind een telefoon via wifi met de draadloze foutopsporing van Android. Koppel hem eerst aan deze computer door een QR-code te scannen of de koppelingscode in te voeren die de telefoon toont. Beide apparaten moeten op hetzelfde netwerk zitten.
+wireless-method-qr = QR-code
+wireless-method-code = Koppelingscode
+wireless-qr-desc = Open op de telefoon Ontwikkelaarsopties en dan Draadloze foutopsporing en tik op "Apparaat koppelen met QR-code". Scan daarna de code hieronder.
+wireless-qr-regenerate = Nieuwe QR-code
+wireless-qr-waiting = Wachten tot de telefoon de QR-code scant…
+wireless-code-desc = Open op de telefoon Ontwikkelaarsopties en dan Draadloze foutopsporing en tik op "Apparaat koppelen met koppelingscode". Kies daarna de telefoon hieronder en voer de zescijferige code in die hij toont.
+wireless-code-device = Telefoon
+wireless-code-placeholder = Koppelingscode van 6 cijfers
+wireless-no-service = Geen enkele telefoon biedt koppeling aan. Laat dit venster open en start de koppeling op de telefoon.
+wireless-pair = Koppelen
+wireless-code-required = Voer eerst de koppelingscode in die de telefoon toont.
+wireless-working = Koppelen met de telefoon…
+wireless-connected = Verbonden met { $device }.
+wireless-paired = De telefoon is gekoppeld. Hij maakt verbinding zodra de draadloze foutopsporing bereikbaar is.
+wireless-failed = Koppelen mislukt: { $error }
+wireless-mdns-failed = Kon het netwerk niet doorzoeken naar de telefoon: { $error }
+wireless-disconnect = Verbreken
+wireless-disconnecting = Verbinding met de telefoon verbreken…
+wireless-disconnected = Verbinding met { $device } verbroken.
+wireless-disconnect-failed = Verbreken mislukt: { $error }
+wireless-disconnect-all = Alles
+wireless-disconnected-all = Verbinding met alle draadloze apparaten verbroken.

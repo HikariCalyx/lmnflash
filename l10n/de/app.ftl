@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Das ausgewählte ZIP-Archiv ist kein gültiges Firmware-Paket (keine flashfile.xml enthalten)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = ADB-Funkverbindung herstellen
+flash-wireless-button = Verbinden
+wireless-desc = Verbinde ein Telefon über WLAN mit Androids drahtloser Fehlersuche. Koppele es zuerst mit diesem Computer, indem du einen QR-Code scannst oder den Kopplungscode eingibst, den das Telefon anzeigt. Beide Geräte müssen sich im selben Netzwerk befinden.
+wireless-method-qr = QR-Code
+wireless-method-code = Kopplungscode
+wireless-qr-desc = Öffne auf dem Telefon die Entwickleroptionen, dann Drahtlose Fehlersuche, und tippe auf „Gerät über QR-Code koppeln“. Scanne dann den Code unten.
+wireless-qr-regenerate = Neuer QR-Code
+wireless-qr-waiting = Warte darauf, dass das Telefon den QR-Code scannt…
+wireless-code-desc = Öffne auf dem Telefon die Entwickleroptionen, dann Drahtlose Fehlersuche, und tippe auf „Gerät über Kopplungscode koppeln“. Wähle dann unten das Telefon und gib den sechsstelligen Code ein, den es anzeigt.
+wireless-code-device = Telefon
+wireless-code-placeholder = 6-stelliger Kopplungscode
+wireless-no-service = Kein Telefon bietet eine Kopplung an. Lass diesen Dialog offen und starte die Kopplung auf dem Telefon.
+wireless-pair = Koppeln
+wireless-code-required = Gib zuerst den Kopplungscode ein, den das Telefon anzeigt.
+wireless-working = Kopplung mit dem Telefon…
+wireless-connected = Verbunden mit { $device }.
+wireless-paired = Das Telefon ist gekoppelt. Es verbindet sich, sobald die drahtlose Fehlersuche erreichbar ist.
+wireless-failed = Kopplung fehlgeschlagen: { $error }
+wireless-mdns-failed = Das Netzwerk konnte nicht nach dem Telefon durchsucht werden: { $error }
+wireless-disconnect = Trennen
+wireless-disconnecting = Verbindung zum Telefon wird getrennt…
+wireless-disconnected = Verbindung zu { $device } getrennt.
+wireless-disconnect-failed = Trennen fehlgeschlagen: { $error }
+wireless-disconnect-all = Alle
+wireless-disconnected-all = Verbindung zu allen drahtlosen Geräten getrennt.

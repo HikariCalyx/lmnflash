@@ -543,3 +543,30 @@ multi-flash-close-prompt-ok = 确定
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = 所选的 ZIP 压缩包不是有效的固件包（其中没有 flashfile.xml）
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = 连接 ADB 无线调试
+flash-wireless-button = 连接
+wireless-desc = 通过 Android 的无线调试以 Wi-Fi 连接手机。请先用本机与手机配对：扫描二维码，或输入手机上显示的配对码。两台设备必须处于同一网络。
+wireless-method-qr = 二维码
+wireless-method-code = 配对码
+wireless-qr-desc = 在手机上打开“开发者选项”，再打开“无线调试”，点按“使用二维码配对设备”，然后扫描下方的二维码。
+wireless-qr-regenerate = 重新生成二维码
+wireless-qr-waiting = 正在等待手机扫描二维码…
+wireless-code-desc = 在手机上打开“开发者选项”，再打开“无线调试”，点按“使用配对码配对设备”，然后在下方的列表中选择手机，并输入它显示的六位配对码。
+wireless-code-device = 手机
+wireless-code-placeholder = 六位配对码
+wireless-no-service = 当前没有手机提供配对。请保持此对话框打开，并在手机上开始配对。
+wireless-pair = 配对
+wireless-code-required = 请先输入手机上显示的配对码。
+wireless-working = 正在与手机配对…
+wireless-connected = 已连接到 { $device }。
+wireless-paired = 手机已配对。当无线调试可访问时便会自动连接。
+wireless-failed = 配对失败：{ $error }
+wireless-mdns-failed = 无法在网络中搜索手机：{ $error }
+wireless-disconnect = 断开连接
+wireless-disconnecting = 正在断开与手机的连接…
+wireless-disconnected = 已断开与 { $device } 的连接。
+wireless-disconnect-failed = 断开连接失败：{ $error }
+wireless-disconnect-all = 全部
+wireless-disconnected-all = 已断开与所有无线设备的连接。

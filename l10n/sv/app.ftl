@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Den valda ZIP-filen är inte ett giltigt fastvarupaket (ingen flashfile.xml i den)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Anslut trådlös ADB
+flash-wireless-button = Anslut
+wireless-desc = Anslut en telefon över Wi-Fi med Androids trådlösa felsökning. Para först ihop den med den här datorn genom att skanna en QR-kod eller ange parkoden som telefonen visar. Båda enheterna måste vara på samma nätverk.
+wireless-method-qr = QR-kod
+wireless-method-code = Parkod
+wireless-qr-desc = Öppna Utvecklaralternativ på telefonen, sedan Trådlös felsökning, och tryck på "Para ihop enhet med QR-kod". Skanna sedan koden nedan.
+wireless-qr-regenerate = Ny QR-kod
+wireless-qr-waiting = Väntar på att telefonen ska skanna QR-koden…
+wireless-code-desc = Öppna Utvecklaralternativ på telefonen, sedan Trådlös felsökning, och tryck på "Para ihop enhet med parkod". Välj sedan telefonen nedan och ange den sexsiffriga koden den visar.
+wireless-code-device = Telefon
+wireless-code-placeholder = 6-siffrig parkod
+wireless-no-service = Ingen telefon erbjuder ihopparning. Låt den här dialogrutan vara öppen och starta ihopparningen på telefonen.
+wireless-pair = Para ihop
+wireless-code-required = Ange parkoden som telefonen visar först.
+wireless-working = Parar ihop med telefonen…
+wireless-connected = Ansluten till { $device }.
+wireless-paired = Telefonen är ihopparad. Den ansluter när trådlös felsökning går att nå.
+wireless-failed = Ihopparningen misslyckades: { $error }
+wireless-mdns-failed = Kunde inte söka efter telefonen på nätverket: { $error }
+wireless-disconnect = Koppla från
+wireless-disconnecting = Kopplar från telefonen…
+wireless-disconnected = Frånkopplad från { $device }.
+wireless-disconnect-failed = Kunde inte koppla från: { $error }
+wireless-disconnect-all = Alla
+wireless-disconnected-all = Frånkopplad från alla trådlösa enheter.

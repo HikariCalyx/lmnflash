@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = 選択した ZIP アーカイブは有効なファームウェアパッケージではありません（flashfile.xml が含まれていません）
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = ADB ワイヤレス接続
+flash-wireless-button = 接続
+wireless-desc = Android のワイヤレスデバッグでスマートフォンを Wi-Fi 経由で接続します。まず QR コードをスキャンするか、スマートフォンに表示されたペア設定コードを入力して、このコンピューターとペア設定してください。両方の機器が同じネットワークにある必要があります。
+wireless-method-qr = QR コード
+wireless-method-code = ペア設定コード
+wireless-qr-desc = スマートフォンで開発者向けオプションを開き、ワイヤレスデバッグを選び、「QR コードでデバイスをペア設定」をタップします。その後、下のコードをスキャンしてください。
+wireless-qr-regenerate = QR コードを再生成
+wireless-qr-waiting = スマートフォンが QR コードをスキャンするのを待っています…
+wireless-code-desc = スマートフォンで開発者向けオプションを開き、ワイヤレスデバッグを選び、「ペア設定コードでデバイスをペア設定」をタップします。その後、下のスマートフォンを選び、表示された 6 桁のコードを入力してください。
+wireless-code-device = スマートフォン
+wireless-code-placeholder = 6 桁のペア設定コード
+wireless-no-service = ペア設定を提供しているスマートフォンがありません。このダイアログを開いたまま、スマートフォン側でペア設定を開始してください。
+wireless-pair = ペア設定
+wireless-code-required = 先にスマートフォンに表示されたペア設定コードを入力してください。
+wireless-working = スマートフォンとペア設定しています…
+wireless-connected = { $device } に接続しました。
+wireless-paired = ペア設定が完了しました。ワイヤレスデバッグに到達できるようになると接続されます。
+wireless-failed = ペア設定に失敗しました: { $error }
+wireless-mdns-failed = ネットワークでスマートフォンを検索できませんでした: { $error }
+wireless-disconnect = 切断
+wireless-disconnecting = スマートフォンから切断しています…
+wireless-disconnected = { $device } から切断しました。
+wireless-disconnect-failed = 切断できませんでした: { $error }
+wireless-disconnect-all = すべて
+wireless-disconnected-all = すべてのワイヤレス機器から切断しました。

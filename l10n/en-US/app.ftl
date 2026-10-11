@@ -546,3 +546,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = The selected ZIP archive is not a valid firmware package (no flashfile.xml inside)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Connect ADB Wireless Debugging
+flash-wireless-button = Connect
+wireless-desc = Connect a phone over Wi-Fi with Android's wireless debugging. Pair it with this computer first, by scanning a QR code or by entering the pairing code the phone shows. Both devices have to be on the same network.
+wireless-method-qr = QR code
+wireless-method-code = Pairing code
+wireless-qr-desc = On the phone, open Developer options, then Wireless debugging, and tap "Pair device with QR code". Then scan the code below.
+wireless-qr-regenerate = New QR Code
+wireless-qr-waiting = Waiting for the phone to scan the QR code…
+wireless-code-desc = On the phone, open Developer options, then Wireless debugging, and tap "Pair device with pairing code". Then pick the phone below and enter the six-digit code it shows.
+wireless-code-device = Phone
+wireless-code-placeholder = 6-digit pairing code
+wireless-no-service = No phone is offering to pair. Keep this dialog open and start the pairing on the phone.
+wireless-pair = Pair
+wireless-code-required = Enter the pairing code the phone shows first.
+wireless-working = Pairing with the phone…
+wireless-connected = Connected to { $device }.
+wireless-paired = The phone is paired. It will connect once wireless debugging is reachable.
+wireless-failed = Pairing failed: { $error }
+wireless-mdns-failed = Could not search the network for the phone: { $error }
+wireless-disconnect = Disconnect
+wireless-disconnecting = Disconnecting from the phone…
+wireless-disconnected = Disconnected from { $device }.
+wireless-disconnect-failed = Could not disconnect: { $error }
+wireless-disconnect-all = Everything
+wireless-disconnected-all = Disconnected from every wireless device.

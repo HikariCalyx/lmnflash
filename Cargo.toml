@@ -51,6 +51,14 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 # `flashfile.xml` carries an MD5 for every image file.
 md5 = "0.7"
 
+# Wireless ADB pairing ("Connect ADB Wireless Debugging"): the QR code the
+# phone's "Pair device with QR code" screen scans, and the mDNS browse that
+# finds the pairing/connect services it then announces. The QR code is only
+# *encoded* here — it is drawn by the canvas widget — so the image and SVG
+# renderer backends the crate ships by default are left out.
+qrcode = { version = "0.14", default-features = false }
+mdns-sd = "0.21"
+
 # Native folder picker backend on Linux. GTK3 only: rfd 0.17 forbids
 # enabling `gtk3` and `xdg-portal` at the same time, and GTK3 is already
 # a dependency of the Linux webview dialog anyway.

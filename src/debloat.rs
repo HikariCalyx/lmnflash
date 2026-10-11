@@ -14,8 +14,6 @@
 //! (or a factory reset) brings it back, and the system partition is never
 //! touched.
 
-use std::process::Stdio;
-
 use crate::platform_tools;
 
 /// A preinstalled app the feature offers to remove.
@@ -454,53 +452,16 @@ pub fn ensure_adb() -> Result<(), String> {
     platform_tools::install().map(|_| ())
 }
 
-/// Runs `adb` with `args` and returns its standard output.
-///
-/// Only the exit status decides between success and failure: `adb` writes its
-/// daemon-start messages to stderr even when the command worked.
-fn run_adb(args: &[&str]) -> Result<String, String> {
-    let mut command = platform_tools::adb_command();
-    command.args(args).stdin(Stdio::null());
-
-    // A GUI application must not flash a console window on screen.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-
-    let program = command.get_program().to_string_lossy().to_string();
-
-    let output = command
-        .output()
-        .map_err(|error| format!("could not run {program}: {error}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
-    if !output.status.success() {
-        let printed = if stderr.trim().is_empty() {
-            stdout
-        } else {
-            stderr
-        };
-
-        return Err(printed.trim().to_owned());
-    }
-
-    Ok(stdout)
-}
-
 /// Lists the devices `adb devices` reports, making sure `adb` is there first.
 pub fn list_devices() -> Result<Vec<AdbDevice>, String> {
     ensure_adb()?;
 
-    Ok(parse_devices(&run_adb(&["devices", "-l"])?))
+    Ok(parse_devices(&platform_tools::run_adb(&["devices", "-l"])?))
 }
 
 /// The bloatware packages installed on `serial`.
 pub fn list_installed(serial: &str) -> Result<Vec<Bloatware>, String> {
-    let output = run_adb(&["-s", serial, "shell", "pm", "list", "packages"])?;
+    let output = platform_tools::run_adb(&["-s", serial, "shell", "pm", "list", "packages"])?;
 
     Ok(installed(&parse_packages(&output)))
 }
@@ -520,7 +481,7 @@ pub fn remove(serial: &str, apps: &[Bloatware]) -> Vec<RemovalOutcome> {
 
 /// Uninstalls one package for user 0.
 fn uninstall(serial: &str, package: &str) -> Result<(), String> {
-    let output = run_adb(&[
+    let output = platform_tools::run_adb(&[
         "-s",
         serial,
         "shell",

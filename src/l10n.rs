@@ -638,6 +638,99 @@ mod tests {
         }
     }
 
+    /// The "Connect ADB Wireless Debugging" dialog: the tile, the two pairing
+    /// methods with their instructions, and the status lines — the last three
+    /// carry the connected device, or the raw ADB error.
+    #[test]
+    fn the_wireless_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-wireless-title",
+            "flash-wireless-button",
+            "wireless-desc",
+            "wireless-method-qr",
+            "wireless-method-code",
+            "wireless-qr-desc",
+            "wireless-qr-regenerate",
+            "wireless-qr-waiting",
+            "wireless-code-desc",
+            "wireless-code-device",
+            "wireless-code-placeholder",
+            "wireless-no-service",
+            "wireless-pair",
+            "wireless-code-required",
+            "wireless-working",
+            "wireless-paired",
+            "wireless-disconnect",
+            "wireless-disconnecting",
+            "wireless-disconnect-all",
+            "wireless-disconnected-all",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            let connected = bundle.tr_with_args(
+                "wireless-connected",
+                &[("device", "192.168.1.5:5555".to_owned())],
+            );
+            assert!(
+                connected.contains("192.168.1.5:5555"),
+                "{language:?}: {connected}"
+            );
+            assert!(!connected.contains('\u{2068}'), "{language:?}: {connected}");
+
+            let failed = bundle.tr_with_args(
+                "wireless-failed",
+                &[("error", "failed to authenticate".to_owned())],
+            );
+            assert!(
+                failed.contains("failed to authenticate"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+
+            let mdns = bundle.tr_with_args(
+                "wireless-mdns-failed",
+                &[("error", "no such device".to_owned())],
+            );
+            assert!(mdns.contains("no such device"), "{language:?}: {mdns}");
+            assert!(!mdns.contains('\u{2068}'), "{language:?}: {mdns}");
+
+            let disconnected = bundle.tr_with_args(
+                "wireless-disconnected",
+                &[("device", "192.168.1.5:5555".to_owned())],
+            );
+            assert!(
+                disconnected.contains("192.168.1.5:5555"),
+                "{language:?}: {disconnected}"
+            );
+            assert!(
+                !disconnected.contains('\u{2068}'),
+                "{language:?}: {disconnected}"
+            );
+
+            let disconnect_failed = bundle.tr_with_args(
+                "wireless-disconnect-failed",
+                &[("error", "no such device".to_owned())],
+            );
+            assert!(
+                disconnect_failed.contains("no such device"),
+                "{language:?}: {disconnect_failed}"
+            );
+            assert!(
+                !disconnect_failed.contains('\u{2068}'),
+                "{language:?}: {disconnect_failed}"
+            );
+        }
+    }
+
     /// The Tablet Firmware Decrypt dialog and the tile that opens it: the
     /// heading, the directory/password controls and the two counter lines,
     /// which carry the succeeded/failed numbers.

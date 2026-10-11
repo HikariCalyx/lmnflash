@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = ОК
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Выбранный ZIP-архив не является допустимым пакетом прошивки (внутри нет flashfile.xml)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Подключение ADB по Wi-Fi
+flash-wireless-button = Подключить
+wireless-desc = Подключите телефон по Wi-Fi через отладку по беспроводной сети Android. Сначала сопряжите его с этим компьютером: отсканируйте QR-код или введите код сопряжения, показанный на телефоне. Оба устройства должны быть в одной сети.
+wireless-method-qr = QR-код
+wireless-method-code = Код сопряжения
+wireless-qr-desc = На телефоне откройте «Для разработчиков», затем «Отладка по Wi-Fi» и нажмите «Сопряжение с устройством по QR-коду». Затем отсканируйте код ниже.
+wireless-qr-regenerate = Новый QR-код
+wireless-qr-waiting = Ожидание сканирования QR-кода телефоном…
+wireless-code-desc = На телефоне откройте «Для разработчиков», затем «Отладка по Wi-Fi» и нажмите «Сопряжение с устройством по коду». Затем выберите телефон ниже и введите шестизначный код, который он показывает.
+wireless-code-device = Телефон
+wireless-code-placeholder = 6-значный код сопряжения
+wireless-no-service = Ни один телефон не предлагает сопряжение. Оставьте это окно открытым и начните сопряжение на телефоне.
+wireless-pair = Сопрячь
+wireless-code-required = Сначала введите код сопряжения, показанный на телефоне.
+wireless-working = Сопряжение с телефоном…
+wireless-connected = Подключено к { $device }.
+wireless-paired = Телефон сопряжён. Подключение произойдёт, когда отладка по Wi-Fi станет доступна.
+wireless-failed = Не удалось сопрячь: { $error }
+wireless-mdns-failed = Не удалось найти телефон в сети: { $error }
+wireless-disconnect = Отключить
+wireless-disconnecting = Отключение от телефона…
+wireless-disconnected = Отключено от { $device }.
+wireless-disconnect-failed = Не удалось отключиться: { $error }
+wireless-disconnect-all = Все
+wireless-disconnected-all = Отключено от всех беспроводных устройств.

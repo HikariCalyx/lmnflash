@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = L'archive ZIP sélectionnée n'est pas un paquet de firmware valide (aucun flashfile.xml à l'intérieur)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Connecter le débogage sans fil ADB
+flash-wireless-button = Connecter
+wireless-desc = Connectez un téléphone en Wi-Fi avec le débogage sans fil d'Android. Associez-le d'abord à cet ordinateur en scannant un code QR ou en saisissant le code d'association affiché par le téléphone. Les deux appareils doivent être sur le même réseau.
+wireless-method-qr = Code QR
+wireless-method-code = Code d'association
+wireless-qr-desc = Sur le téléphone, ouvrez Options pour les développeurs, puis Débogage sans fil, et touchez « Associer l'appareil avec un code QR ». Scannez ensuite le code ci-dessous.
+wireless-qr-regenerate = Nouveau code QR
+wireless-qr-waiting = En attente du scan du code QR par le téléphone…
+wireless-code-desc = Sur le téléphone, ouvrez Options pour les développeurs, puis Débogage sans fil, et touchez « Associer l'appareil avec un code d'association ». Choisissez ensuite le téléphone ci-dessous et saisissez le code à six chiffres qu'il affiche.
+wireless-code-device = Téléphone
+wireless-code-placeholder = Code d'association à 6 chiffres
+wireless-no-service = Aucun téléphone ne propose d'association. Laissez cette boîte de dialogue ouverte et lancez l'association sur le téléphone.
+wireless-pair = Associer
+wireless-code-required = Saisissez d'abord le code d'association affiché par le téléphone.
+wireless-working = Association avec le téléphone…
+wireless-connected = Connecté à { $device }.
+wireless-paired = Le téléphone est associé. Il se connectera dès que le débogage sans fil sera joignable.
+wireless-failed = Échec de l'association : { $error }
+wireless-mdns-failed = Impossible de rechercher le téléphone sur le réseau : { $error }
+wireless-disconnect = Déconnecter
+wireless-disconnecting = Déconnexion du téléphone…
+wireless-disconnected = Déconnecté de { $device }.
+wireless-disconnect-failed = Échec de la déconnexion : { $error }
+wireless-disconnect-all = Tout
+wireless-disconnected-all = Déconnecté de tous les appareils sans fil.

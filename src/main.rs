@@ -45,6 +45,8 @@ mod tablet_unlock;
 mod telemetry;
 mod unpack;
 mod webview;
+mod wireless;
+mod wireless_dialog;
 
 use iced::widget::{
     button, column, container, mouse_area, pick_list, row, stack, text_editor,
@@ -655,6 +657,7 @@ struct SmartphoneFlashState {
     firmware: FirmwareFlashState,
     driver: DriverState,
     bloatware: BloatwareState,
+    wireless: WirelessState,
     multi_flash: MultiFlashState,
 }
 
@@ -918,6 +921,123 @@ impl BloatwareState {
     }
 }
 
+/// How the "Connect ADB Wireless Debugging" dialog pairs with the phone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum WirelessMethod {
+    /// Show a QR code for the phone's "Pair device with QR code" screen.
+    #[default]
+    Qr,
+    /// Take the six-digit code the phone's "Pair device with pairing code"
+    /// screen shows.
+    Code,
+}
+
+/// State of the "Connect ADB Wireless Debugging" feature (Mode 2).
+///
+/// The flow is the same for both methods: a pairing code reaches the phone (it
+/// scans the QR code, or the user copies the six digits), the phone announces
+/// its mDNS pairing service, and `adb pair` finishes the job. The two ways
+/// differ only in where the code comes from.
+#[derive(Default)]
+struct WirelessState {
+    /// Whether the modal is open.
+    open: bool,
+    /// Which pairing method the dialog shows.
+    method: WirelessMethod,
+    /// The code the QR code carries. A fresh one is made for every attempt:
+    /// the phone adopts the service name and password from what it scans.
+    pairing_code: Option<wireless::PairingCode>,
+    /// The QR code of `pairing_code`, encoded once instead of per frame.
+    qr: Option<wireless::QrImage>,
+    /// The running network discovery, kept so it can be stopped when the
+    /// dialog closes.
+    discovery: Option<wireless::Discovery>,
+    /// Id of the running discovery, so answers of an abandoned browse are
+    /// dropped.
+    job: u64,
+    /// The pairing services the phones on the network announce.
+    pairing_services: Vec<wireless::AdbService>,
+    /// The connect services the phones on the network announce.
+    connect_services: Vec<wireless::AdbService>,
+    /// The wireless devices `adb` already has connected (`192.168.1.5:5555`),
+    /// so "Disconnect" knows about a phone that was connected before this
+    /// dialog was opened.
+    devices: Vec<String>,
+    /// The pairing service the manual flow works with (its mDNS full name).
+    chosen: Option<String>,
+    /// What the user typed into the pairing-code field.
+    code_input: String,
+    /// `true` while `adb pair` and the connect that follows it run.
+    working: bool,
+    /// `true` while `adb disconnect` runs.
+    disconnecting: bool,
+    /// How the last pairing attempt ended.
+    result: Option<Result<wireless::PairOutcome, String>>,
+    /// How the last disconnect ended.
+    disconnect_result: Option<DisconnectOutcome>,
+    /// Why the network discovery could not be started.
+    discover_error: Option<String>,
+}
+
+impl WirelessState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.working || self.disconnecting
+    }
+
+    /// The pairing service a phone announced after scanning the QR code that
+    /// is on screen, if any.
+    fn scanned(&self) -> Option<&wireless::AdbService> {
+        let code = self.pairing_code.as_ref()?;
+
+        self.pairing_services
+            .iter()
+            .find(|service| wireless::matches(code, &service.fullname))
+    }
+
+    /// The pairing service the manual flow will use.
+    fn manual_service(&self) -> Option<&wireless::AdbService> {
+        let chosen = self.chosen.as_ref()?;
+
+        self.pairing_services
+            .iter()
+            .find(|service| &service.fullname == chosen)
+    }
+
+    /// Whether the pairing-code flow can start: a phone to talk to, and the
+    /// code that proves the user can see its screen.
+    fn ready_to_pair(&self) -> bool {
+        !self.busy()
+            && self.manual_service().is_some()
+            && !self.code_input.trim().is_empty()
+    }
+
+    /// The first connect service: a phone with wireless debugging on announces
+    /// one, so it can be connected to without pairing again.
+    fn connect_service(&self) -> Option<&wireless::AdbService> {
+        self.connect_services.first()
+    }
+
+    /// What the "Disconnect" menu offers: every wireless device `adb` lists,
+    /// and last the entry that drops all of them.
+    fn disconnect_options(&self) -> Vec<wireless::DisconnectTarget> {
+        self.devices
+            .iter()
+            .cloned()
+            .map(wireless::DisconnectTarget::Device)
+            .chain(std::iter::once(wireless::DisconnectTarget::Everything))
+            .collect()
+    }
+}
+
+/// How the wireless dialog's last disconnect ended.
+#[derive(Debug, Clone)]
+enum DisconnectOutcome {
+    /// The target was disconnected.
+    Done(wireless::DisconnectTarget),
+    /// It could not be, and this is what `adb` said.
+    Failed(String),
+}
 /// Which "Install Driver" dialog is currently on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum DriverDialog {
@@ -1914,6 +2034,37 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     BloatwareBackdropPressed,
+    /// Connect ADB Wireless Debugging: the pairing method was switched.
+    WirelessMethodSelected(WirelessMethod),
+    /// Connect ADB Wireless Debugging: a fresh QR code was asked for.
+    WirelessCodeRegenerated,
+    /// Connect ADB Wireless Debugging: the pairing service to work with was
+    /// picked from the list.
+    WirelessServiceSelected(String),
+    /// Connect ADB Wireless Debugging: the pairing code was edited.
+    WirelessCodeChanged(String),
+    /// Connect ADB Wireless Debugging: pair with the chosen phone by hand.
+    WirelessPairRequested,
+    /// Connect ADB Wireless Debugging: drop the selected wireless connection
+    /// (one phone, or every one of them).
+    WirelessDisconnectSelected(wireless::DisconnectTarget),
+    /// Connect ADB Wireless Debugging: the network discovery reported
+    /// something (the id tells a browse that was replaced apart).
+    WirelessDiscovered(u64, wireless::DiscoverEvent),
+    /// Connect ADB Wireless Debugging: the pairing, and the connect that
+    /// follows it, finished.
+    WirelessFinished(Result<wireless::PairOutcome, String>),
+    /// Connect ADB Wireless Debugging: `adb disconnect` finished (the target
+    /// is carried back so the status line can name it).
+    WirelessDisconnected(wireless::DisconnectTarget, Result<(), String>),
+    /// Connect ADB Wireless Debugging: the wireless devices `adb` lists as
+    /// connected were read.
+    WirelessDevicesFetched(Vec<String>),
+    /// Connect ADB Wireless Debugging: close the dialog.
+    WirelessCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    WirelessBackdropPressed,
     /// Unpack Image: ask for the image file to unpack.
     UnpackPickImageRequested,
     /// Unpack Image: the file picker closed (`None` = cancelled).
@@ -2079,6 +2230,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let driver = &state.flash.driver;
     let tablet = &state.flash.tablet_unlock;
     let bloatware = &state.flash.bloatware;
+    let wireless = &state.flash.wireless;
     let unpack = &state.unpack;
     let pac = &state.pac;
     let repack = &state.pac_repack;
@@ -2106,6 +2258,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || bloatware.preparing
         || bloatware.checking
         || bloatware.removing
+        || wireless.busy()
         || unpack.listing
         || unpack.working
         || pac.listing
@@ -2247,6 +2400,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::FirmwareFlashMultiFlashing
             | Message::DriverCancel
             | Message::BloatwareCancel
+            | Message::WirelessCancel
             | Message::UnpackCancel
             | Message::PacCancel
             | Message::PacRepackCancel
@@ -2303,6 +2457,10 @@ const OVERLAY_DRIVER: u8 = 0xA0;
 /// The "Remove System Bloatware" dialog; its low nibble is the step it shows
 /// (device list, package check, checklist, removal).
 const OVERLAY_BLOATWARE: u8 = 0xB0;
+/// The "Connect ADB Wireless Debugging" dialog; its low nibble is the pairing
+/// method it shows. It shares the RETCN device picker's nibble, since the two
+/// are never open at once.
+const OVERLAY_WIRELESS: u8 = 0xC1;
 /// The "Unpack Image" dialog; its low nibble is the step it shows (the setup
 /// form, or the running extraction and its result).
 const OVERLAY_UNPACK: u8 = 0xD0;
@@ -2438,6 +2596,12 @@ fn overlay_key(state: &State) -> u8 {
         return OVERLAY_BLOATWARE + step;
     }
 
+    if wireless_dialog::is_open(state) {
+        // The card only changes when the pairing method does; the QR code, the
+        // code field and the status update while it stays on screen.
+        return OVERLAY_WIRELESS + wireless_step(state.flash.wireless.method);
+    }
+
     if unpack::is_open(state) {
         // The setup form, and the running extraction with its result.
         let unpack = &state.unpack;
@@ -2498,6 +2662,14 @@ fn guided_step(step: GuidedStep) -> u8 {
         GuidedStep::Read => 1,
         GuidedStep::Request => 2,
         GuidedStep::Key => 3,
+    }
+}
+
+/// The card the wireless dialog shows for a pairing method, as a step number.
+fn wireless_step(method: WirelessMethod) -> u8 {
+    match method {
+        WirelessMethod::Qr => 0,
+        WirelessMethod::Code => 1,
     }
 }
 
@@ -2596,6 +2768,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
+            SmartphoneFeature::WirelessDebugging => start_wireless_dialog(state),
         },
         Message::DecryptFeaturePressed(feature) => match feature {
             decrypt_mode::DecryptFeature::TabletDecrypt => start_decrypt_dialog(state),
@@ -3588,6 +3761,163 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::BloatwareBackdropPressed => Task::none(),
+        Message::WirelessMethodSelected(method) => {
+            let wireless = &mut state.flash.wireless;
+
+            // The status belongs to the method that produced it.
+            wireless.method = method;
+            wireless.result = None;
+            wireless.disconnect_result = None;
+            Task::none()
+        }
+        Message::WirelessCodeRegenerated => {
+            if state.flash.wireless.busy() {
+                return Task::none();
+            }
+
+            regenerate_wireless_code(state);
+            Task::none()
+        }
+        Message::WirelessServiceSelected(fullname) => {
+            state.flash.wireless.chosen = Some(fullname);
+            Task::none()
+        }
+        Message::WirelessCodeChanged(value) => {
+            state.flash.wireless.code_input = value;
+            Task::none()
+        }
+        Message::WirelessPairRequested => {
+            let wireless = &state.flash.wireless;
+
+            let Some(service) = wireless.manual_service() else {
+                return Task::none();
+            };
+
+            let address = service.address_port();
+            let code = wireless.code_input.trim().to_owned();
+
+            if code.is_empty() {
+                return Task::none();
+            }
+
+            start_wireless_pair(state, address, code)
+        }
+        Message::WirelessDiscovered(job, event) => {
+            let wireless = &mut state.flash.wireless;
+
+            if !wireless.open || wireless.job != job {
+                return Task::none();
+            }
+
+            match event {
+                wireless::DiscoverEvent::Found(service) => match service.kind {
+                    wireless::ServiceKind::Pairing => {
+                        upsert_wireless_service(&mut wireless.pairing_services, service)
+                    }
+                    wireless::ServiceKind::Connect => {
+                        upsert_wireless_service(&mut wireless.connect_services, service)
+                    }
+                },
+                wireless::DiscoverEvent::Lost(kind, fullname) => {
+                    let services = match kind {
+                        wireless::ServiceKind::Pairing => &mut wireless.pairing_services,
+                        wireless::ServiceKind::Connect => &mut wireless.connect_services,
+                    };
+
+                    services.retain(|service| service.fullname != fullname);
+                }
+                wireless::DiscoverEvent::Failed(error) => {
+                    wireless.discover_error = Some(error);
+                    return Task::none();
+                }
+            }
+
+            // A single phone offering a pairing is the one the user means, so
+            // it is chosen for them.
+            if wireless.chosen.is_none() {
+                if let [only] = wireless.pairing_services.as_slice() {
+                    wireless.chosen = Some(only.fullname.clone());
+                }
+            }
+
+            // The phone that scanned the QR code announces the pairing service
+            // the code named, so pairing needs no further click. A phone whose
+            // name does not match scanned somebody else's code.
+            if wireless.method != WirelessMethod::Qr
+                || wireless.busy()
+                || wireless.result.is_some()
+            {
+                return Task::none();
+            }
+
+            let attempt = wireless
+                .scanned()
+                .zip(wireless.pairing_code.as_ref())
+                .map(|(service, code)| (service.address_port(), code.password.clone()));
+
+            let Some((address, password)) = attempt else {
+                return Task::none();
+            };
+
+            start_wireless_pair(state, address, password)
+        }
+        Message::WirelessFinished(result) => {
+            let wireless = &mut state.flash.wireless;
+
+            wireless.working = false;
+            wireless.disconnect_result = None;
+
+            // A connected phone can be dropped right away; the listing is
+            // refreshed from `adb` straight after, and that is what the menu is
+            // built from either way.
+            if let Ok(wireless::PairOutcome::Connected(device)) = &result {
+                let serial = device.serial.clone();
+
+                if !wireless.devices.contains(&serial) {
+                    wireless.devices.push(serial);
+                }
+            }
+
+            wireless.result = Some(result);
+
+            // The new connection changes what "Disconnect" can drop.
+            start_wireless_devices()
+        }
+        Message::WirelessDisconnectSelected(target) => start_wireless_disconnect(state, target),
+        Message::WirelessDisconnected(target, result) => {
+            let wireless = &mut state.flash.wireless;
+
+            wireless.disconnecting = false;
+            wireless.result = None;
+            wireless.disconnect_result = Some(match result {
+                Ok(()) => DisconnectOutcome::Done(target),
+                Err(error) => DisconnectOutcome::Failed(error),
+            });
+
+            // The listing decides what is left to drop.
+            start_wireless_devices()
+        }
+        Message::WirelessDevicesFetched(devices) => {
+            let wireless = &mut state.flash.wireless;
+
+            if !wireless.open {
+                return Task::none();
+            }
+
+            wireless.devices = devices;
+            Task::none()
+        }
+        Message::WirelessCancel => {
+            // Never close the dialog while a pairing runs, so the phone is not
+            // left with a job nobody is watching.
+            if state.flash.wireless.busy() {
+                return Task::none();
+            }
+
+            stop_wireless(state);
+            Task::none()
+        }
+        Message::WirelessBackdropPressed => Task::none(),
         Message::UnpackPickImageRequested => {
             if state.unpack.busy() {
                 return Task::none();
@@ -6439,6 +6769,158 @@ fn start_bloatware_check(state: &mut State, serial: String) -> Task<Message> {
     )
 }
 
+/// Opens the "Connect ADB Wireless Debugging" dialog and starts looking for
+/// the phones' pairing and connect services.
+fn start_wireless_dialog(state: &mut State) -> Task<Message> {
+    let job = state.flash.wireless.job.wrapping_add(1);
+
+    stop_wireless(state);
+    state.flash.wireless = WirelessState {
+        open: true,
+        job,
+        ..WirelessState::default()
+    };
+
+    // The QR code is what tells the phone which service to announce, so it is
+    // made with the dialog.
+    regenerate_wireless_code(state);
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    if let Some(discovery) = wireless::start(emit) {
+        state.flash.wireless.discovery = Some(discovery);
+    }
+
+    let discovery = Task::run(receiver, move |event| {
+        Message::WirelessDiscovered(job, event)
+    });
+
+    // What `adb` already has connected decides whether "Disconnect" is
+    // available from the first frame on, so it is read along with the
+    // discovery.
+    Task::batch([discovery, start_wireless_devices()])
+}
+
+/// Stops the wireless dialog's network discovery and closes it.
+fn stop_wireless(state: &mut State) {
+    if let Some(discovery) = state.flash.wireless.discovery.take() {
+        discovery.stop();
+    }
+
+    state.flash.wireless = WirelessState::default();
+}
+
+/// Puts a fresh pairing code, and the QR code carrying it, into the state.
+fn regenerate_wireless_code(state: &mut State) {
+    let code = wireless::PairingCode::new();
+    let qr = wireless::QrImage::encode(&code.payload());
+
+    let wireless = &mut state.flash.wireless;
+    wireless.pairing_code = Some(code);
+    wireless.qr = qr;
+    wireless.result = None;
+    wireless.disconnect_result = None;
+}
+
+/// Pairs with the phone at `address` using `code`, on a worker thread.
+fn start_wireless_pair(state: &mut State, address: String, code: String) -> Task<Message> {
+    let wireless = &mut state.flash.wireless;
+
+    if wireless.busy() {
+        return Task::none();
+    }
+
+    // The connect service the phone announces while wireless debugging is on.
+    // `adb` also connects on its own through mDNS, so this only makes the
+    // connection come about a little sooner.
+    let connect = wireless
+        .connect_service()
+        .map(wireless::AdbService::address_port);
+
+    wireless.working = true;
+    wireless.result = None;
+    wireless.disconnect_result = None;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                wireless::pair_and_connect(&address, &code, connect.as_deref())
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        Message::WirelessFinished,
+    )
+}
+
+/// Drops the selected wireless connection on a worker thread.
+///
+/// A pick from the menu cannot be refused by greying it out (iced has no
+/// `on_select` that can be turned off), so a pick while a job runs is dropped
+/// here instead.
+fn start_wireless_disconnect(
+    state: &mut State,
+    target: wireless::DisconnectTarget,
+) -> Task<Message> {
+    let wireless = &mut state.flash.wireless;
+
+    if wireless.busy() {
+        return Task::none();
+    }
+
+    wireless.disconnecting = true;
+    wireless.result = None;
+    wireless.disconnect_result = None;
+
+    // The target is echoed back, so the status line can name what was dropped
+    // without the state having to remember it.
+    let echoed = target.clone();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || wireless::disconnect(&target))
+                .await
+                .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        move |result| Message::WirelessDisconnected(echoed.clone(), result),
+    )
+}
+
+/// Reads the wireless devices `adb` already has connected, so "Disconnect"
+/// knows about a phone that was connected before this dialog was opened (or by
+/// another tool).
+///
+/// `adb` is only asked when it is installed: opening the dialog must not start
+/// the platform-tools download.
+fn start_wireless_devices() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(wireless::connected_devices)
+                .await
+                .unwrap_or_default()
+        },
+        Message::WirelessDevicesFetched,
+    )
+}
+
+/// Adds a discovered service to a list, or updates the entry it is already in
+/// (a phone re-announces a service with the same mDNS name).
+fn upsert_wireless_service(
+    services: &mut Vec<wireless::AdbService>,
+    service: wireless::AdbService,
+) {
+    match services
+        .iter_mut()
+        .find(|existing| existing.fullname == service.fullname)
+    {
+        Some(existing) => *existing = service,
+        None => services.push(service),
+    }
+}
+
 /// Removes the checked apps from the selected device, one after another.
 fn start_bloatware_remove(state: &mut State) -> Task<Message> {
     let bloatware = &mut state.flash.bloatware;
@@ -7914,6 +8396,12 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // Connect ADB Wireless Debugging dialog (QR code, or pairing code) drawn
+    // over the whole window while it is open.
+    if let Some(overlay) = wireless_dialog::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // Unpack Image dialog (image and output selection, contents, progress)
     // drawn over the whole window while it is open.
     if let Some(overlay) = unpack::overlay(state) {
@@ -8027,6 +8515,32 @@ mod tests {
         assert_eq!(detect_category("  XT2125-4 "), Some((firmware::Category::Phone, None)));
         assert_eq!(detect_category(""), None);
         assert_eq!(detect_category("XYZ123"), None);
+    }
+
+    /// The "Disconnect" menu offers every wireless device `adb` lists, and last
+    /// the entry that drops all of them.
+    #[test]
+    fn the_disconnect_menu_lists_every_device_and_everything() {
+        let mut wireless = WirelessState::default();
+
+        // Nothing connected: dropping everything is still the one thing the
+        // menu can offer.
+        assert_eq!(
+            wireless.disconnect_options(),
+            [wireless::DisconnectTarget::Everything]
+        );
+
+        wireless.devices.push("192.168.1.5:5555".to_owned());
+        wireless.devices.push("192.168.1.9:37000".to_owned());
+
+        assert_eq!(
+            wireless.disconnect_options(),
+            [
+                wireless::DisconnectTarget::Device("192.168.1.5:5555".to_owned()),
+                wireless::DisconnectTarget::Device("192.168.1.9:37000".to_owned()),
+                wireless::DisconnectTarget::Everything,
+            ]
+        );
     }
 
     /// A card that is still moving when the next one takes its place has to be

@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Den valgte ZIP-fil er ikke en gyldig firmwarepakke (ingen flashfile.xml i den)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Trådløs ADB-forbindelse
+flash-wireless-button = Forbind
+wireless-desc = Forbind en telefon over Wi-Fi med Androids trådløse fejlfinding. Par den først med denne computer ved at scanne en QR-kode eller indtaste parringskoden, telefonen viser. Begge enheder skal være på samme netværk.
+wireless-method-qr = QR-kode
+wireless-method-code = Parringskode
+wireless-qr-desc = Åbn Udviklerindstillinger på telefonen, derefter Trådløs fejlfinding, og tryk på "Par enhed med QR-kode". Scan derefter koden nedenfor.
+wireless-qr-regenerate = Ny QR-kode
+wireless-qr-waiting = Venter på, at telefonen scanner QR-koden…
+wireless-code-desc = Åbn Udviklerindstillinger på telefonen, derefter Trådløs fejlfinding, og tryk på "Par enhed med parringskode". Vælg derefter telefonen nedenfor, og indtast den sekscifrede kode, den viser.
+wireless-code-device = Telefon
+wireless-code-placeholder = 6-cifret parringskode
+wireless-no-service = Ingen telefon tilbyder parring. Lad dialogen være åben, og start parringen på telefonen.
+wireless-pair = Par
+wireless-code-required = Indtast først den parringskode, telefonen viser.
+wireless-working = Parring med telefonen…
+wireless-connected = Forbundet til { $device }.
+wireless-paired = Telefonen er parret. Den opretter forbindelse, når trådløs fejlfinding kan nås.
+wireless-failed = Parring mislykkedes: { $error }
+wireless-mdns-failed = Kunne ikke søge efter telefonen på netværket: { $error }
+wireless-disconnect = Afbryd
+wireless-disconnecting = Afbryder forbindelsen til telefonen…
+wireless-disconnected = Afbrudt fra { $device }.
+wireless-disconnect-failed = Kunne ikke afbryde: { $error }
+wireless-disconnect-all = Alt
+wireless-disconnected-all = Afbrudt fra alle trådløse enheder.

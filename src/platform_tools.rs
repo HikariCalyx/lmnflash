@@ -13,7 +13,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::config;
@@ -89,6 +89,45 @@ pub fn adb_present() -> bool {
 /// Linux platform-tools are x86_64, exactly like the shipped `mfastboot`).
 pub fn adb_command() -> Command {
     emulator().command(&adb())
+}
+
+/// Runs `adb` with `args` and returns its standard output.
+///
+/// Only the exit status decides between success and failure: `adb` writes its
+/// daemon-start messages to stderr even when the command worked. The "Remove
+/// System Bloatware" and "Connect ADB Wireless Debugging" features both talk
+/// to the phone through this.
+pub fn run_adb(args: &[&str]) -> Result<String, String> {
+    let mut command = adb_command();
+    command.args(args).stdin(Stdio::null());
+
+    // A GUI application must not flash a console window on screen.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+
+    let program = command.get_program().to_string_lossy().to_string();
+
+    let output = command
+        .output()
+        .map_err(|error| format!("could not run {program}: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    if !output.status.success() {
+        let printed = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
+
+        return Err(printed.trim().to_owned());
+    }
+
+    Ok(stdout)
 }
 
 /// The directory the archive is unpacked into.

@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Den valgte ZIP-filen er ikke en gyldig fastvarepakke (ingen flashfile.xml inni)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Koble til trådløs ADB
+flash-wireless-button = Koble til
+wireless-desc = Koble en telefon til over Wi-Fi med Androids trådløse feilsøking. Kombiner den først med denne datamaskinen ved å skanne en QR-kode eller skrive inn paringskoden telefonen viser. Begge enhetene må være på samme nettverk.
+wireless-method-qr = QR-kode
+wireless-method-code = Paringskode
+wireless-qr-desc = Åpne Utvikleralternativer på telefonen, deretter Trådløs feilsøking, og trykk på «Koble enhet til med QR-kode». Skann deretter koden nedenfor.
+wireless-qr-regenerate = Ny QR-kode
+wireless-qr-waiting = Venter på at telefonen skal skanne QR-koden…
+wireless-code-desc = Åpne Utvikleralternativer på telefonen, deretter Trådløs feilsøking, og trykk på «Koble enhet til med paringskode». Velg deretter telefonen nedenfor og skriv inn den sekssifrede koden den viser.
+wireless-code-device = Telefon
+wireless-code-placeholder = 6-sifret paringskode
+wireless-no-service = Ingen telefon tilbyr paring. La denne dialogen stå åpen og start paringen på telefonen.
+wireless-pair = Koble sammen
+wireless-code-required = Skriv inn paringskoden telefonen viser først.
+wireless-working = Kobler sammen med telefonen…
+wireless-connected = Koblet til { $device }.
+wireless-paired = Telefonen er sammenkoblet. Den kobler til når trådløs feilsøking er tilgjengelig.
+wireless-failed = Paring mislyktes: { $error }
+wireless-mdns-failed = Kunne ikke søke etter telefonen på nettverket: { $error }
+wireless-disconnect = Koble fra
+wireless-disconnecting = Kobler fra telefonen…
+wireless-disconnected = Koblet fra { $device }.
+wireless-disconnect-failed = Kunne ikke koble fra: { $error }
+wireless-disconnect-all = Alt
+wireless-disconnected-all = Koblet fra alle trådløse enheter.

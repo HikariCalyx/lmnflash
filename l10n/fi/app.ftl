@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Valittu ZIP-tiedosto ei ole kelvollinen laiteohjelmistopaketti (ei flashfile.xml-tiedostoa)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Yhdistä ADB langattomasti
+flash-wireless-button = Yhdistä
+wireless-desc = Yhdistä puhelin Wi-Fi-verkon kautta Androin langattomaan virheenkorjaukseen. Muodosta ensin pari tämän tietokoneen kanssa skannaamalla QR-koodi tai syöttämällä puhelimen näyttämä pariliitokoodi. Molempien laitteiden on oltava samassa verkossa.
+wireless-method-qr = QR-koodi
+wireless-method-code = Pariliitokoodi
+wireless-qr-desc = Avaa puhelimessa Kehittäjäasetukset ja sitten Langaton virheenkorjaus ja napauta "Muodosta laite pari QR-koodilla". Skannaa sitten alla oleva koodi.
+wireless-qr-regenerate = Uusi QR-koodi
+wireless-qr-waiting = Odotetaan, että puhelin skannaa QR-koodin…
+wireless-code-desc = Avaa puhelimessa Kehittäjäasetukset ja sitten Langaton virheenkorjaus ja napauta "Muodosta laite pari pariliitokoodilla". Valitse sitten puhelin alta ja syötä sen näyttämä kuusinumeroinen koodi.
+wireless-code-device = Puhelin
+wireless-code-placeholder = 6-numeroinen pariliitokoodi
+wireless-no-service = Mikään puhelin ei tarjoa pariliitosta. Pidä tämä valintaikkuna auki ja aloita pariliitos puhelimessa.
+wireless-pair = Muodosta pari
+wireless-code-required = Syötä ensin puhelimen näyttämä pariliitokoodi.
+wireless-working = Muodostetaan pariliitosta puhelimen kanssa…
+wireless-connected = Yhdistetty laitteeseen { $device }.
+wireless-paired = Puhelin on liitetty pariksi. Se yhdistää, kun langaton virheenkorjaus on tavoitettavissa.
+wireless-failed = Pariliitos epäonnistui: { $error }
+wireless-mdns-failed = Puhelinta ei voitu etsiä verkosta: { $error }
+wireless-disconnect = Katkaise
+wireless-disconnecting = Katkaistaan yhteyttä puhelimeen…
+wireless-disconnected = Yhteys laitteeseen { $device } katkaistu.
+wireless-disconnect-failed = Yhteyttä ei voitu katkaista: { $error }
+wireless-disconnect-all = Kaikki
+wireless-disconnected-all = Yhteys kaikkiin langattomiin laitteisiin katkaistu.

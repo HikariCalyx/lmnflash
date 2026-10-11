@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = Aceptar
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = El archivo ZIP seleccionado no es un paquete de firmware válido (no contiene flashfile.xml)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Conectar depuración inalámbrica ADB
+flash-wireless-button = Conectar
+wireless-desc = Conecta un teléfono por Wi-Fi con la depuración inalámbrica de Android. Emparéjalo antes con este equipo escaneando un código QR o introduciendo el código de emparejamiento que muestra el teléfono. Ambos dispositivos deben estar en la misma red.
+wireless-method-qr = Código QR
+wireless-method-code = Código de emparejamiento
+wireless-qr-desc = En el teléfono, abre Opciones de desarrollador y luego Depuración inalámbrica, y toca "Emparejar dispositivo con código QR". Después escanea el código de abajo.
+wireless-qr-regenerate = Nuevo código QR
+wireless-qr-waiting = Esperando a que el teléfono escanee el código QR…
+wireless-code-desc = En el teléfono, abre Opciones de desarrollador y luego Depuración inalámbrica, y toca "Emparejar dispositivo con código de emparejamiento". Después elige el teléfono abajo e introduce el código de seis dígitos que muestra.
+wireless-code-device = Teléfono
+wireless-code-placeholder = Código de emparejamiento de 6 dígitos
+wireless-no-service = Ningún teléfono ofrece emparejamiento. Mantén este cuadro de diálogo abierto e inicia el emparejamiento en el teléfono.
+wireless-pair = Emparejar
+wireless-code-required = Introduce primero el código de emparejamiento que muestra el teléfono.
+wireless-working = Emparejando con el teléfono…
+wireless-connected = Conectado a { $device }.
+wireless-paired = El teléfono está emparejado. Se conectará cuando la depuración inalámbrica sea accesible.
+wireless-failed = El emparejamiento falló: { $error }
+wireless-mdns-failed = No se pudo buscar el teléfono en la red: { $error }
+wireless-disconnect = Desconectar
+wireless-disconnecting = Desconectando del teléfono…
+wireless-disconnected = Desconectado de { $device }.
+wireless-disconnect-failed = No se pudo desconectar: { $error }
+wireless-disconnect-all = Todo
+wireless-disconnected-all = Desconectado de todos los dispositivos inalámbricos.

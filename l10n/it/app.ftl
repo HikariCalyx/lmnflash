@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = OK
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = L'archivio ZIP selezionato non è un pacchetto firmware valido (nessun flashfile.xml all'interno)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Connetti debug wireless ADB
+flash-wireless-button = Connetti
+wireless-desc = Collega un telefono via Wi-Fi con il debug wireless di Android. Prima abbinalo a questo computer scansionando un codice QR o inserendo il codice di abbinamento mostrato dal telefono. Entrambi i dispositivi devono essere sulla stessa rete.
+wireless-method-qr = Codice QR
+wireless-method-code = Codice di abbinamento
+wireless-qr-desc = Sul telefono, apri Opzioni sviluppatore, poi Debug wireless, e tocca "Abbina dispositivo con codice QR". Poi scansiona il codice qui sotto.
+wireless-qr-regenerate = Nuovo codice QR
+wireless-qr-waiting = In attesa che il telefono scansionisca il codice QR…
+wireless-code-desc = Sul telefono, apri Opzioni sviluppatore, poi Debug wireless, e tocca "Abbina dispositivo con codice di abbinamento". Poi scegli il telefono qui sotto e inserisci il codice a sei cifre che mostra.
+wireless-code-device = Telefono
+wireless-code-placeholder = Codice di abbinamento a 6 cifre
+wireless-no-service = Nessun telefono offre l'abbinamento. Lascia aperta questa finestra e avvia l'abbinamento sul telefono.
+wireless-pair = Abbina
+wireless-code-required = Inserisci prima il codice di abbinamento mostrato dal telefono.
+wireless-working = Abbinamento con il telefono…
+wireless-connected = Connesso a { $device }.
+wireless-paired = Il telefono è abbinato. Si connetterà quando il debug wireless sarà raggiungibile.
+wireless-failed = Abbinamento non riuscito: { $error }
+wireless-mdns-failed = Impossibile cercare il telefono sulla rete: { $error }
+wireless-disconnect = Disconnetti
+wireless-disconnecting = Disconnessione dal telefono…
+wireless-disconnected = Disconnesso da { $device }.
+wireless-disconnect-failed = Impossibile disconnettersi: { $error }
+wireless-disconnect-all = Tutto
+wireless-disconnected-all = Disconnesso da tutti i dispositivi wireless.

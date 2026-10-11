@@ -544,3 +544,30 @@ multi-flash-close-prompt-ok = ОК
 
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Вибраний ZIP-архів не є дійсним пакетом прошивки (усередині немає flashfile.xml)
+
+# "Connect ADB Wireless Debugging" dialog (Mode 2).
+flash-wireless-title = Підключення ADB через Wi-Fi
+flash-wireless-button = Підключити
+wireless-desc = Підключіть телефон через Wi-Fi за допомогою бездротового налагодження Android. Спершу спаруйте його з цим комп'ютером: відскануйте QR-код або введіть код пару, показаний на телефоні. Обидва пристрої мають бути в одній мережі.
+wireless-method-qr = QR-код
+wireless-method-code = Код пару
+wireless-qr-desc = На телефоні відкрийте «Для розробників», потім «Налагодження по Wi-Fi» і торкніться «Парування пристрою за QR-кодом». Потім відскануйте код нижче.
+wireless-qr-regenerate = Новий QR-код
+wireless-qr-waiting = Очікування, поки телефон відсканує QR-код…
+wireless-code-desc = На телефоні відкрийте «Для розробників», потім «Налагодження по Wi-Fi» і торкніться «Парування пристрою за кодом». Потім виберіть телефон нижче та введіть шестизначний код, який він показує.
+wireless-code-device = Телефон
+wireless-code-placeholder = 6-значний код пару
+wireless-no-service = Жоден телефон не пропонує парування. Залиште це вікно відкритим і почніть парування на телефоні.
+wireless-pair = Спарувати
+wireless-code-required = Спершу введіть код пару, показаний на телефоні.
+wireless-working = Парування з телефоном…
+wireless-connected = Підключено до { $device }.
+wireless-paired = Телефон спаровано. Він підключиться, коли бездротове налагодження стане доступним.
+wireless-failed = Не вдалося спарувати: { $error }
+wireless-mdns-failed = Не вдалося знайти телефон у мережі: { $error }
+wireless-disconnect = Відключити
+wireless-disconnecting = Відключення від телефону…
+wireless-disconnected = Відключено від { $device }.
+wireless-disconnect-failed = Не вдалося відключитися: { $error }
+wireless-disconnect-all = Усі
+wireless-disconnected-all = Відключено від усіх бездротових пристроїв.
