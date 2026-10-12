@@ -80,6 +80,13 @@ gtk = "0.18"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
 
+# macOS: the `softwarefix://` callback arrives as a `kAEGetURL` Apple Event,
+# which iced/winit provides no API for, so `src/protocol.rs` handles it with a
+# small `NSAppleEventManager` handler of its own. Already in the tree (wry and
+# winit use it), so depending on it directly downloads nothing new.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 [build-dependencies]
 embed-resource = "2"
 

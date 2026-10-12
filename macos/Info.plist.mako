@@ -32,6 +32,23 @@ version = semver.Version.parse(cargo_toml["package"]["version"])
 		<array>
 			<string>MacOSX</string>
 		</array>
+		<!-- The scheme the official Motorola/Lenovo "Software Fix" handles and
+		     whose callback `src/protocol.rs` takes over: declaring it here is
+		     what lets LaunchServices offer LMN Flash for `softwarefix://`
+		     links (and point the scheme at the bundle at runtime). -->
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleTypeRole</key>
+				<string>Viewer</string>
+				<key>CFBundleURLName</key>
+				<string>com.hikaricalyx.lmnflash.softwarefix</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>softwarefix</string>
+				</array>
+			</dict>
+		</array>
 		<key>CFBundleVersion</key>
 		<string>1</string>
 		<key>LSMinimumSystemVersion</key>

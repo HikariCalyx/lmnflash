@@ -198,8 +198,8 @@ pub(crate) fn firmware_lookup_view(state: &State) -> Element<'_, Message> {
 
 /// The `softwarefix://` handler row of the Manual Login page.
 ///
-/// Returns `None` on platforms without registry-based protocol handling, so
-/// the whole section disappears there.
+/// Returns `None` on platforms without URL protocol handling, so the whole
+/// section disappears there.
 fn protocol_section(state: &State) -> Option<Element<'_, Message>> {
     let l10n = &state.l10n;
 

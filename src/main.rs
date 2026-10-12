@@ -115,6 +115,14 @@ pub fn main() -> ::iced::Result {
         instance::Endpoint::Disabled => None,
     };
 
+    // macOS does not start a second copy for a `softwarefix://` link: the
+    // running application receives the URL in an Apple Event, which only this
+    // process can handle (see `protocol`). Installing the handler this early
+    // means a cold start — LaunchServices opening the application *because* of
+    // the link — is caught as well. It is `None` on the platforms that forward
+    // the callback instead.
+    let events = protocol::listen_for_callbacks();
+
     // Warm the WebView2 availability cache before the first frame. The probe
     // spawns `reg.exe`; without this the render that first shows the
     // Bootloader Unlock chooser (whose "Guided" button is gated on it) would
@@ -129,29 +137,35 @@ pub fn main() -> ::iced::Result {
     let icon = iced::window::icon::from_file_data(include_bytes!("icon.ico"), None).ok();
 
     // iced 0.14 boots the application through a `Fn` closure (it may be called
-    // more than once), so the callback receiver is handed over through a cell.
-    let receiver = Arc::new(std::sync::Mutex::new(receiver));
+    // more than once), so the callback receivers are handed over through a cell.
+    let receiver = Arc::new(std::sync::Mutex::new(Some((receiver, events))));
 
     let application = iced::application(
         move || {
             let mut state = State::initial();
 
-            // Only the primary instance receives forwarded callbacks. The
-            // receiver lives as long as the process: a later instance forwards
-            // the `softwarefix://` callback here.
-            let callbacks = match receiver.lock().expect("boot runs once").take() {
-                Some(receiver) => {
-                    state.receives_callbacks = true;
-                    Task::run(receiver, Message::LoginCallback)
-                }
-                None => Task::none(),
-            };
+            // Only the primary instance receives forwarded callbacks, and only
+            // macOS receives them inside the process. Either receiver lives as
+            // long as the process: a later instance (or the browser) hands the
+            // `softwarefix://` callback over here.
+            let (instance, events) = receiver
+                .lock()
+                .expect("boot runs once")
+                .take()
+                .unwrap_or((None, None));
+
+            let mut callbacks = Vec::new();
+
+            for receiver in [instance, events].into_iter().flatten() {
+                state.receives_callbacks = true;
+                callbacks.push(Task::run(receiver, Message::LoginCallback));
+            }
 
             // Ask for the OS colour scheme so the Fluent theme matches it from
             // the first frame on.
             let theme = iced::system::theme().map(Message::SystemTheme);
 
-            (state, Task::batch([callbacks, theme]))
+            (state, Task::batch([Task::batch(callbacks), theme]))
         },
         update,
         view,
@@ -1985,8 +1999,8 @@ struct State {
     l10n: l10n::Bundle,
     client_uuid: String,
     login: LoginStatus,
-    /// How `softwarefix://` links are handled on this machine (Windows only;
-    /// `Handler::Unsupported` elsewhere).
+    /// How `softwarefix://` links are handled on this machine
+    /// (`Handler::Unsupported` where the platform has no such handling).
     protocol: protocol::Handler,
     /// The last `softwarefix://` registration failure, shown on the Manual
     /// Login page.

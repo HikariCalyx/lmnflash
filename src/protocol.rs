@@ -3,9 +3,9 @@
 //! The official Motorola/Lenovo "Software Fix" registers the `softwarefix://`
 //! scheme so the browser can hand its OAuth callback back to it. LMN Flash
 //! uses the same callback (see [`crate::login::extract_login`]), so it can
-//! take the scheme over — but on Windows only when the user asks for it: at
-//! startup the scheme is registered **only when nothing else handles it**, and
-//! the Manual Login page offers a toggle otherwise.
+//! take the scheme over — but only when the user asks for it: at startup the
+//! scheme is registered **only when nothing else handles it**, and the Manual
+//! Login page offers a toggle otherwise.
 //!
 //! * **Windows** — a per-user registry class
 //!   (`HKCU\Software\Classes\softwarefix`), so no administrator rights are
@@ -17,10 +17,18 @@
 //!   `xdg-mime default … x-scheme-handler/softwarefix`. The entry runs the
 //!   executable with the URL as an argument, which
 //!   [`callback_arg`] picks up.
-//! * **macOS** — not registered. LaunchServices would open the application,
-//!   but the URL arrives as an `kAEGetURL` Apple Event that iced exposes no
-//!   API for (its `Event` enum has no URL variant), so the callback would be
-//!   silently dropped; the manual paste flow is the fallback there.
+//! * **macOS** — a LaunchServices registration
+//!   (`LSSetDefaultHandlerForURLScheme`) for the scheme the bundle declares in
+//!   its `Info.plist` (`CFBundleURLTypes`, see `macos/Info.plist.mako`), so the
+//!   application has to run from its bundle. The URL then arrives as a
+//!   `kAEGetURL` Apple Event sent to the **running** application — iced exposes
+//!   no API for it, so the event is handled here (see
+//!   [`listen_for_callbacks`]) and no second process is started. The
+//!   registration names the bundle identifier rather than a path, so a moved
+//!   application stays registered; LaunchServices has no way to forget a
+//!   handler though, which is what [`restore`] has to work around.
+
+use iced::futures::channel::mpsc::UnboundedReceiver;
 
 /// The URL scheme handled by the official Software Fix program.
 const SCHEME: &str = "softwarefix";
@@ -28,19 +36,20 @@ const SCHEME: &str = "softwarefix";
 /// Which program currently handles `softwarefix://` links.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Handler {
-    /// The platform has no runtime URL protocol handling (macOS).
+    /// The platform has no runtime URL protocol handling at all (neither
+    /// Windows, Linux nor macOS).
     Unsupported,
     /// Nothing is registered for the scheme.
     None,
     /// LMN Flash itself handles the scheme.
     Ours,
-    /// Another program handles the scheme; carries its command line (Windows)
-    /// or desktop entry id (Linux).
+    /// Another program handles the scheme; carries its command line (Windows),
+    /// desktop entry id (Linux) or bundle identifier (macOS).
     Other(String),
 }
 
 impl Handler {
-    /// The program a "foreign" handler command line names, for display.
+    /// The program a "foreign" handler names, for display.
     pub fn program(&self) -> Option<String> {
         match self {
             Handler::Other(command) => Some(command_program(command)),
@@ -446,7 +455,355 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+/// macOS registration through LaunchServices and the Apple Event that carries
+/// the clicked URL.
+///
+/// Declaring the scheme in the bundle's `Info.plist` (`CFBundleURLTypes`, see
+/// `macos/Info.plist.mako`) is what makes LaunchServices offer LMN Flash for
+/// `softwarefix://` links at all; pointing the scheme *at* the bundle is the
+/// runtime call in [`register`]. The URL then arrives as an Apple Event
+/// (`kInternetEventClass` / `kAEGetURL`) sent to the running application, which
+/// [`listen_for_callbacks`] receives — no second process is involved.
+#[cfg(target_os = "macos")]
+mod platform {
+    use super::{Handler, SCHEME};
+    use std::ffi::{c_char, c_void};
+    use std::sync::Mutex;
+
+    use iced::futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol};
+    use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+
+    /// `kCFStringEncodingUTF8`.
+    const UTF8: u32 = 0x0800_0100;
+
+    /// `kInternetEventClass` and `kAEGetURL`: the class and the id of the
+    /// Apple Event macOS sends when a URL scheme is opened. Both are the
+    /// four-character code `'GURL'`.
+    const AE_GET_URL: u32 = u32::from_be_bytes(*b"GURL");
+
+    /// `keyDirectObject`: the Apple Event parameter carrying the URL.
+    const KEY_DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
+
+    type CFStringRef = *const c_void;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFBundleGetMainBundle() -> *const c_void;
+        /// Borrowed: the bundle keeps its identifier alive.
+        fn CFBundleGetIdentifier(bundle: *const c_void) -> CFStringRef;
+        fn CFStringCreateWithCString(
+            allocator: *const c_void,
+            value: *const c_char,
+            encoding: u32,
+        ) -> CFStringRef;
+        fn CFStringGetLength(string: CFStringRef) -> isize;
+        fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
+        fn CFStringGetCString(
+            string: CFStringRef,
+            buffer: *mut c_char,
+            size: isize,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(value: *const c_void);
+    }
+
+    #[link(name = "CoreServices", kind = "framework")]
+    unsafe extern "C" {
+        /// Owned: the caller has to release the returned string.
+        fn LSCopyDefaultHandlerForURLScheme(scheme: CFStringRef) -> CFStringRef;
+        fn LSSetDefaultHandlerForURLScheme(scheme: CFStringRef, handler: CFStringRef) -> i32;
+    }
+
+    /// A `CFString` this process created, released when it is dropped.
+    struct OwnedString(CFStringRef);
+
+    impl OwnedString {
+        /// Wraps a Rust string in a `CFString`.
+        fn new(value: &str) -> Option<Self> {
+            let value = std::ffi::CString::new(value).ok()?;
+            let string =
+                unsafe { CFStringCreateWithCString(std::ptr::null(), value.as_ptr(), UTF8) };
+
+            (!string.is_null()).then_some(Self(string))
+        }
+    }
+
+    impl Drop for OwnedString {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.0) };
+        }
+    }
+
+    /// Copies a `CFString` (borrowed or owned) into a Rust string.
+    fn string_from_cf(string: CFStringRef) -> Option<String> {
+        if string.is_null() {
+            return None;
+        }
+
+        let length = unsafe { CFStringGetLength(string) };
+        // The conversion can need more bytes than there are characters, so ask
+        // for the worst case (plus the terminator both calls use).
+        let size = unsafe { CFStringGetMaximumSizeForEncoding(length, UTF8) } + 1;
+        let mut buffer = vec![0u8; usize::try_from(size).ok()?];
+
+        if unsafe { CFStringGetCString(string, buffer.as_mut_ptr().cast(), size, UTF8) } == 0 {
+            return None;
+        }
+
+        let end = buffer
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(buffer.len());
+
+        String::from_utf8(buffer[..end].to_vec()).ok()
+    }
+
+    /// The bundle identifier this application is registered under, if it runs
+    /// from a bundle.
+    fn our_handler() -> Option<String> {
+        let bundle = unsafe { CFBundleGetMainBundle() };
+
+        if bundle.is_null() {
+            return None;
+        }
+
+        string_from_cf(unsafe { CFBundleGetIdentifier(bundle) })
+    }
+
+    /// The bundle identifier LaunchServices opens `softwarefix://` links with.
+    fn default_handler() -> Option<String> {
+        let scheme = OwnedString::new(SCHEME)?;
+        let handler = unsafe { LSCopyDefaultHandlerForURLScheme(scheme.0) };
+
+        if handler.is_null() {
+            return None;
+        }
+
+        // Returned owned, so it is released once the copy has been made.
+        let handler = OwnedString(handler);
+
+        string_from_cf(handler.0)
+    }
+
+    /// Points the scheme at a bundle identifier.
+    fn set_handler(identifier: &str) -> Result<(), String> {
+        let scheme = OwnedString::new(SCHEME)
+            .ok_or_else(|| "could not create the scheme string".to_string())?;
+        let handler = OwnedString::new(identifier)
+            .ok_or_else(|| "could not create the handler string".to_string())?;
+        let status = unsafe { LSSetDefaultHandlerForURLScheme(scheme.0, handler.0) };
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(format!("LaunchServices error {status}"))
+        }
+    }
+
+    pub(super) fn current() -> Handler {
+        match default_handler() {
+            // The registration names a bundle identifier rather than a path, so
+            // an application that was moved is still recognized as ours.
+            Some(identifier) if Some(&identifier) == our_handler().as_ref() => Handler::Ours,
+            Some(identifier) => Handler::Other(identifier),
+            None => Handler::None,
+        }
+    }
+
+    pub(super) fn register() -> Result<(), String> {
+        let identifier = our_handler()
+            .ok_or_else(|| "no bundle identifier: run LMNFlash.app".to_string())?;
+
+        // Remember the handler we are about to replace. Recorded once, like the
+        // other registrations, so re-registering cannot overwrite the backup
+        // with our own identifier.
+        if crate::config::load_protocol_backup().is_none() {
+            let previous = default_handler().filter(|handler| handler != &identifier);
+            crate::config::save_protocol_backup(previous.as_deref())?;
+        }
+
+        set_handler(&identifier)
+    }
+
+    pub(super) fn restore() -> Result<(), String> {
+        match crate::config::load_protocol_backup() {
+            Some(previous) => set_handler(&previous)?,
+            // LaunchServices can only point a scheme at another handler, never
+            // back at nothing: with no handler remembered there is nothing to
+            // restore, and our own registration has to stay.
+            None if current() == Handler::Ours => {
+                return Err("macOS cannot unregister a URL handler; pick another program \
+                            for softwarefix:// links in System Settings instead"
+                    .to_string());
+            }
+            None => {}
+        }
+
+        crate::config::clear_protocol_backup()
+    }
+
+    /// Where the Apple Event handler pushes the URLs it receives.
+    ///
+    /// Filled in by [`listen_for_callbacks`] before the event loop starts; a
+    /// callback arriving before that has nowhere to go and is dropped.
+    static CALLBACKS: Mutex<Option<UnboundedSender<String>>> = Mutex::new(None);
+
+    // The `NSAppleEventManager` target for `kAEGetURL`, the event macOS sends
+    // when a `softwarefix://` link is opened: whatever the browser (or Finder)
+    // hands to the scheme ends up in `handleGetURLEvent:`.
+    //
+    // The descriptors are only talked to through `msg_send!` because objc2
+    // binds `NSAppleEventManager` and its descriptor type behind the
+    // `objc2-core-services` feature, which would pull in a second C-API crate
+    // for these three calls.
+    define_class!(
+        // SAFETY: `NSObject` has no subclassing requirements, and the class
+        // declares no instance variables of its own.
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "LmnFlashUrlHandler"]
+        struct UrlHandler;
+
+        // SAFETY: `NSObjectProtocol` has no requirements.
+        unsafe impl NSObjectProtocol for UrlHandler {}
+
+        impl UrlHandler {
+            // The selector registered below, called on the main thread.
+            #[unsafe(method(handleGetURLEvent:withReplyEvent:))]
+            fn handle_get_url_event(&self, event: &AnyObject, _reply: &AnyObject) {
+                // SAFETY: the Apple Event Manager always passes the event as an
+                // `NSAppleEventDescriptor`, and both calls are documented to
+                // return nil (checked here) when there is nothing to return.
+                let descriptor: *mut AnyObject =
+                    unsafe { msg_send![event, paramDescriptorForKeyword: KEY_DIRECT_OBJECT] };
+
+                if descriptor.is_null() {
+                    return;
+                }
+
+                let Some(url) = (unsafe { url_from_descriptor(&*descriptor) }) else {
+                    return;
+                };
+
+                let Ok(mut callbacks) = CALLBACKS.lock() else {
+                    return;
+                };
+
+                let Some(sender) = callbacks.as_mut() else {
+                    return;
+                };
+
+                let _ = sender.unbounded_send(url);
+            }
+        }
+    );
+
+    /// The URL an `NSAppleEventDescriptor` carries.
+    ///
+    /// # Safety
+    ///
+    /// `descriptor` must point to a live `NSAppleEventDescriptor`.
+    unsafe fn url_from_descriptor(descriptor: &AnyObject) -> Option<String> {
+        // Both objects are autoreleased, so they outlive this call; the copy
+        // into a `String` has to happen before the event is disposed of, which
+        // is why nothing borrowed from them is returned.
+        let string: *mut AnyObject = unsafe { msg_send![descriptor, stringValue] };
+
+        if string.is_null() {
+            return None;
+        }
+
+        let utf8: *const c_char = unsafe { msg_send![&*string, UTF8String] };
+
+        if utf8.is_null() {
+            return None;
+        }
+
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(utf8) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    impl UrlHandler {
+        /// Creates the handler, or `None` when `init` did not return an object.
+        fn new(mtm: MainThreadMarker) -> Option<Retained<Self>> {
+            let this = Self::alloc(mtm).set_ivars(());
+
+            // SAFETY: `NSObject`'s `init` on a freshly allocated instance of a
+            // subclass that has no instance variables.
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// Installs the `kAEGetURL` handler and returns the receiver the URLs it
+    /// brings arrive on, or `None` when the events cannot be received at all.
+    ///
+    /// The handler goes to `NSAppleEventManager` rather than into an
+    /// `NSApplicationDelegate` of our own: winit (and with it iced) owns that
+    /// delegate, so replacing it would break the application.
+    pub(super) fn listen_for_callbacks() -> Option<UnboundedReceiver<String>> {
+        // Apple Events are delivered on the main thread, which is where the
+        // application starts up and where this is called from.
+        let Some(mtm) = MainThreadMarker::new() else {
+            eprintln!("[protocol] not on the main thread: softwarefix:// callbacks are dropped");
+
+            return None;
+        };
+
+        let Some(handler) = UrlHandler::new(mtm) else {
+            eprintln!("[protocol] could not create the URL event handler");
+
+            return None;
+        };
+
+        // SAFETY: `NSAppleEventManager` is a Foundation class that every GUI
+        // application has, the selector above is implemented, and the handler
+        // object is leaked below so that it outlives the registration.
+        unsafe {
+            let Some(class) = AnyClass::get(c"NSAppleEventManager") else {
+                eprintln!("[protocol] NSAppleEventManager is missing");
+
+                return None;
+            };
+
+            let manager: *mut AnyObject = msg_send![class, sharedAppleEventManager];
+
+            if manager.is_null() {
+                eprintln!("[protocol] there is no shared Apple Event manager");
+
+                return None;
+            }
+
+            let _: () = msg_send![
+                &*manager,
+                setEventHandler: &*handler,
+                andSelector: sel!(handleGetURLEvent:withReplyEvent:),
+                forEventClass: AE_GET_URL,
+                andEventID: AE_GET_URL
+            ];
+        }
+
+        let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+
+        match CALLBACKS.lock() {
+            Ok(mut callbacks) => *callbacks = Some(sender),
+            Err(_) => return None,
+        }
+
+        // The Apple Event Manager is documented not to retain the handler, and
+        // the object is main-thread only (so it cannot live in a static): leak
+        // it instead of registering a second handler later.
+        std::mem::forget(handler);
+
+        Some(receiver)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod platform {
     use super::Handler;
 
@@ -475,8 +832,33 @@ pub fn register() -> Result<(), String> {
 
 /// Restores the handler that was in place before LMN Flash took over (or
 /// removes LMN Flash's registration when there was none).
+///
+/// macOS cannot remove a registration, only point it somewhere else, so there
+/// the second case fails instead (see [`platform`]).
 pub fn restore() -> Result<(), String> {
     platform::restore()
+}
+
+/// Receives the `softwarefix://` callbacks that are delivered to **this**
+/// process, for the platforms where the operating system does not start a
+/// second copy of the application for them.
+///
+/// macOS delivers the clicked URL as an Apple Event to the running application
+/// (see [`platform`]), so the receiver returned here yields exactly the URLs
+/// that [`crate::instance`] forwards on Windows and Linux. `None` means the
+/// callbacks cannot arrive at all, which is the case everywhere else — and on
+/// macOS on the platforms and in the situations where the event cannot be
+/// handled.
+pub fn listen_for_callbacks() -> Option<UnboundedReceiver<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        platform::listen_for_callbacks()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -162,25 +162,31 @@ LMN Flash registers the same scheme so that link can be handed straight to it:
 * **Linux** — a desktop entry (`~/.local/share/applications/lmnflash.desktop`)
   plus `xdg-mime default`, which needs `xdg-mime` on `PATH`. The entry runs the
   executable with the URL as an argument, so the callback arrives directly.
-* **macOS** — not registered: LaunchServices would start the application, but
-  the URL arrives as an Apple Event that iced exposes no API for, so the
-  callback would be silently dropped. Paste the link into the **Manual Login**
-  page instead.
+* **macOS** — a LaunchServices registration
+  (`LSSetDefaultHandlerForURLScheme`) for the scheme the bundle declares in its
+  `Info.plist` (`CFBundleURLTypes`), so the application has to be run from
+  `LMNFlash.app`. The URL arrives as an Apple Event sent to the running
+  application, which handles it itself. LaunchServices can only point a scheme
+  at another handler, never back at nothing, so switching back needs a handler
+  to have been registered before.
 
-Both registrations name the executable by its full path, so moving the
-application is detected on the next launch and the entry is rewritten in place;
-a handler that was previously replaced stays remembered for switching back.
+The Windows and Linux registrations name the executable by its full path, so
+moving the application is detected on the next launch and the entry is rewritten
+in place; macOS registers the bundle identifier instead, which survives a move.
+A handler that was previously replaced stays remembered for switching back.
 
 ### Browser login
 
 Once LMN Flash owns the scheme, **Log in** uses the browser installed on the
 system instead of the built-in WebView: the login page opens in the default
 browser, and when it redirects to `softwarefix://callback…` the operating
-system starts a second copy of the application. That copy hands the URL to the
-running instance over a loopback socket (advertised in `<config>/instance`) and
-exits, so the login completes in the window the user is already looking at
-instead of in a second one. Without the scheme in hand the callback would go to
-the other handler, so the built-in WebView is still used then.
+system hands the link to LMN Flash. On Windows and Linux that starts a second
+copy of the application, which hands the URL to the running instance over a
+loopback socket (advertised in `<config>/instance`) and exits; on macOS the
+running application is sent the URL as an Apple Event instead. Either way the
+login completes in the window the user is already looking at instead of in a
+second one. Without the scheme in hand the callback would go to the other
+handler, so the built-in WebView is still used then.
 
 ## Remove System Bloatware
 
