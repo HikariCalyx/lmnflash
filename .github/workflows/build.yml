@@ -136,7 +136,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: lmnflash-x86_64-unknown-linux-gnu
-          path: deb
+          path: bin
 
       - name: Read the package version
         run: |
@@ -157,31 +157,20 @@ jobs:
           # executable. `/usr/bin` gets a symlink to it, so the command is on
           # `PATH` — a symlink is enough, since `current_exe()` resolves it and
           # the app still finds the folder next to the real file.
-          install -D -m755 deb/lmnflash "$folder/lmnflash"
+          install -D -m755 bin/lmnflash "$folder/lmnflash"
           install -D -m755 prebuilt_binary/linux_amd64/31.0.2/mfastboot \
             "$folder/mfastboot/linux_amd64/31.0.2/mfastboot"
           install -d "$root/usr/bin"
           ln -s ../lib/lmnflash/lmnflash "$root/usr/bin/lmnflash"
 
-          # The launcher entry, so the application appears in the menu once the
-          # package is installed. Package and icon are named `lmnflash`, which
-          # is what makes `Icon=lmnflash` resolve; `MimeType` declares the
+          # The launcher entry (`linux/lmnflash.desktop`, the same file the RPM
+          # uses), so the application appears in the menu once the package is
+          # installed. Package and icon are named `lmnflash`, which is what
+          # makes `Icon=lmnflash` resolve; `MimeType` declares the
           # `softwarefix://` scheme the app can take over (it also writes a
           # per-user entry when it is asked to become the handler).
-          install -d "$root/usr/share/applications"
-          cat > "$root/usr/share/applications/lmnflash.desktop" <<'DESKTOP'
-          [Desktop Entry]
-          Type=Application
-          Name=LMN Flash
-          GenericName=Firmware Flashing Tool
-          Comment=Firmware lookup and flashing utility for Lenovo, Motorola and NEC devices
-          Exec=lmnflash %u
-          Icon=lmnflash
-          Terminal=false
-          Categories=Utility;System;
-          Keywords=firmware;flash;fastboot;adb;motorola;lenovo;
-          MimeType=x-scheme-handler/softwarefix;
-          DESKTOP
+          install -D -m644 linux/lmnflash.desktop \
+            "$root/usr/share/applications/lmnflash.desktop"
 
           # 512x512 is a size hicolor lists; the source icon is larger than
           # that, which only makes it sharper.
@@ -274,6 +263,140 @@ jobs:
           path: lmnflash_*_amd64.deb
           if-no-files-found: error
 
+  # ── RPM package (x86_64) ───────────────────────────────────────────────────
+  #
+  # The same wrapping as the Debian package, for the RPM distributions
+  # (`rpmbuild` comes from the distribution's `rpm` package). The file name is
+  # the one an RPM repository shows — `<name>-<version>-<release>.<architecture>.rpm`
+  # — and the libraries the executable needs are NOT listed by hand: rpmbuild
+  # reads them out of the executable, including the glibc symbol versions it
+  # was linked against. That is also what makes one package work on Fedora,
+  # RHEL and openSUSE, where the library package names all differ.
+  build-rpm:
+    name: RPM package (x86_64)
+    runs-on: ubuntu-24.04
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules: nothing is compiled here.
+
+      - name: Install rpmbuild
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y rpm
+
+      - name: Download the Linux executable
+        uses: actions/download-artifact@v4
+        with:
+          name: lmnflash-x86_64-unknown-linux-gnu
+          path: bin
+
+      - name: Read the package version and date
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          # The `%changelog` entry the spec below is written with; the padded
+          # day is the form rpm's own tools (`rpmdev-bumpspec`) produce.
+          echo "CHANGELOG_DATE=$(date '+%a %b %d %Y')" >> "$GITHUB_ENV"
+          echo "Package version: $version"
+
+      - name: Build the .rpm
+        run: |
+          set -euo pipefail
+          topdir=$PWD/rpmbuild
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS}
+
+          install -m755 bin/lmnflash "$topdir/SOURCES/lmnflash"
+          install -m755 prebuilt_binary/linux_amd64/31.0.2/mfastboot \
+            "$topdir/SOURCES/mfastboot"
+          install -m644 linux/lmnflash.desktop "$topdir/SOURCES/lmnflash.desktop"
+          install -m644 src/icon.png "$topdir/SOURCES/lmnflash.png"
+          install -m644 LICENSE "$topdir/SOURCES/LICENSE"
+
+          cat > "$topdir/SPECS/lmnflash.spec" <<SPEC
+          Name:           lmnflash
+          Version:        $VERSION
+          Release:        1
+          Summary:        Firmware lookup and flashing utility for Lenovo, Motorola and NEC devices
+          License:        MIT
+          URL:            https://github.com/HikariCalyx/lmnflash
+          BuildArch:      x86_64
+
+          # The library dependencies are deliberately not listed: rpmbuild's ELF
+          # dependency generator names them from the executable itself (with the
+          # glibc symbol version it was built against), and those names are the
+          # only ones every RPM distribution agrees on. libusb is compiled into
+          # the executable, so it is not among them. Only the two things the
+          # generator cannot see are listed: the icon theme directory, and
+          # xdg-utils, whose xdg-mime the login callback registration runs.
+          Requires:       hicolor-icon-theme
+          Requires:       xdg-utils
+
+          %description
+          LMN Flash looks up and flashes firmware for Lenovo/Motorola smartphones
+          and tablets, unlocks bootloaders, resets a phone to its factory state,
+          removes preinstalled applications over ADB, and unpacks Lenovo,
+          Motorola and Unisoc firmware packages.
+
+          The devices are spoken to directly over USB (fastboot/ADB); Google's
+          platform-tools are downloaded when they are needed.
+
+          %install
+          # The executable and its mfastboot build live in a folder of their own
+          # (/usr/lib64 on a 64-bit RPM distribution): the application looks for
+          # mfastboot beside the running executable, and it resolves the
+          # /usr/bin symlink to get there.
+          install -D -m755 %{_sourcedir}/lmnflash %{buildroot}%{_libdir}/lmnflash/lmnflash
+          install -D -m755 %{_sourcedir}/mfastboot %{buildroot}%{_libdir}/lmnflash/mfastboot/linux_amd64/31.0.2/mfastboot
+          install -d %{buildroot}%{_bindir}
+          ln -s %{_libdir}/lmnflash/lmnflash %{buildroot}%{_bindir}/lmnflash
+          install -D -m644 %{_sourcedir}/lmnflash.desktop %{buildroot}%{_datadir}/applications/lmnflash.desktop
+          install -D -m644 %{_sourcedir}/lmnflash.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/lmnflash.png
+          install -D -m644 %{_sourcedir}/LICENSE %{buildroot}/usr/share/licenses/lmnflash/LICENSE
+
+          # No %post/%postun scriptlets are needed: the desktop-file-utils and
+          # gtk-update-icon-cache file triggers rebuild those caches when the
+          # package is installed.
+          %files
+          %{_bindir}/lmnflash
+          %{_libdir}/lmnflash
+          %{_datadir}/applications/lmnflash.desktop
+          %{_datadir}/icons/hicolor/512x512/apps/lmnflash.png
+          %license /usr/share/licenses/lmnflash/LICENSE
+
+          %changelog
+          * $CHANGELOG_DATE HikariCalyx <HikariCalyx@users.noreply.github.com> - $VERSION-1
+          - Release $VERSION.
+          SPEC
+
+          rpmbuild --define "_topdir $topdir" -bb "$topdir/SPECS/lmnflash.spec"
+          cp "$topdir"/RPMS/x86_64/*.rpm .
+
+      - name: Show the package
+        run: |
+          set -euo pipefail
+          package=$(ls lmnflash-*.rpm)
+          rpm -qpi "$package"
+          echo "--- files ---"
+          rpm -qpl "$package"
+          echo "--- dependencies ---"
+          rpm -qpR "$package"
+
+          # Every library the executable loads must be named by the generated
+          # dependencies, or the package would install where it cannot run.
+          if ! rpm -qpR "$package" | grep -q 'libgtk-3'; then
+            echo "::warning file=.github/workflows/build.yml::$package names no GTK3 library — check rpm's ELF dependency generator"
+          fi
+
+      - name: Upload the RPM package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmnflash-rpm
+          path: lmnflash-*.rpm
+          if-no-files-found: error
+
   # ── macOS .app bundle + DMG (universal: x86_64 + aarch64) ────────────────
   build-macos:
     name: macOS (.app + DMG)
@@ -328,7 +451,7 @@ jobs:
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [build, build-deb, build-macos]
+    needs: [build, build-deb, build-rpm, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -362,6 +485,10 @@ jobs:
           # executable; it already carries the name a Debian repository uses
           # (`lmnflash_<version>_amd64.deb`), so it is published as it is.
           cp artifacts/lmnflash-deb/lmnflash_*_amd64.deb release/
+
+          # RPM package, from the same executable (`lmnflash-<version>-1.x86_64.rpm`
+          # is the name an RPM repository uses).
+          cp artifacts/lmnflash-rpm/lmnflash-*.rpm release/
 
           # macOS
           cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg

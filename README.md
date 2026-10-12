@@ -45,6 +45,7 @@ The release workflow bundles the contents of `prebuilt_binary` this way:
 | `lmnflash-linux-x86_64.tar.gz` | `mfastboot/linux_amd64/31.0.2` |
 | `lmnflash-linux-arm64.tar.gz` | `mfastboot/linux_amd64/31.0.2` (via box64) |
 | `lmnflash_<version>_amd64.deb` | `mfastboot/linux_amd64/31.0.2` |
+| `lmnflash-<version>-1.x86_64.rpm` | `mfastboot/linux_amd64/31.0.2` |
 | `lmnflash-macos_unsigned.dmg` | `Contents/Resources/mfastboot/darwin_amd64/29.0.6` |
 
 The Windows payload is the 32-bit build, which is the only one Motorola
@@ -73,6 +74,25 @@ is all it takes:
 
 It is built on Ubuntu 24.04 and therefore needs glibc 2.39 or newer (Ubuntu
 24.04+, Debian 13+); older releases can use the tarball instead.
+
+### RPM package
+
+`lmnflash-<version>-1.x86_64.rpm` is the same build for the RPM distributions
+(Fedora, RHEL, openSUSE) and installs the same layout — except that the
+`mfastboot` folder sits under `/usr/lib64/lmnflash`, where `rpm` puts library
+data — with the launcher entry and the icon included:
+
+```
+sudo dnf install ./lmnflash-<version>-1.x86_64.rpm
+```
+
+The dependency list is not written by hand: `rpmbuild` reads the libraries (and
+with them the glibc symbol version the binary was built against) out of the
+executable, which is the only naming every RPM distribution agrees on. Only the
+icon theme and `xdg-utils` are named manually, because they cannot be seen in
+the executable.
+
+The same glibc 2.39 floor applies (Fedora 40+, RHEL 10, openSUSE Tumbleweed).
 
 ### Google's platform-tools
 

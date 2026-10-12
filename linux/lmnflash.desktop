@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LMN Flash
+GenericName=Firmware Flashing Tool
+Comment=Firmware lookup and flashing utility for Lenovo, Motorola and NEC devices
+Exec=lmnflash %u
+Icon=lmnflash
+Terminal=false
+Categories=Utility;System;
+Keywords=firmware;flash;fastboot;adb;motorola;lenovo;
+MimeType=x-scheme-handler/softwarefix;
