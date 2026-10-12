@@ -200,6 +200,12 @@ jobs:
           # though iced opens them at runtime (they are loaded with dlopen, so
           # they are not in the executable's `NEEDED` list): without them the
           # window cannot be created at all.
+          #
+          # libc6 is not in the list either, although it is the library the
+          # executable uses most: it is an ESSENTIAL package, so every Debian
+          # system has it and naming it would only add a version floor (the
+          # binary is built against glibc 2.39, the one Ubuntu 24.04 ships — see
+          # the README for which releases that means).
           mkdir -p "$root/DEBIAN"
           installed_size=$(du -k -s "$root/usr" | cut -f1)
           cat > "$root/DEBIAN/control" <<CONTROL
@@ -211,7 +217,7 @@ jobs:
           Section: utils
           Priority: optional
           Homepage: https://github.com/HikariCalyx/lmnflash
-          Depends: libc6 (>= 2.39), libgcc-s1, libglib2.0-0 (>= 2.66.0) | libglib2.0-0t64, libgtk-3-0 (>= 3.24.24) | libgtk-3-0t64, libsoup-3.0-0 | libsoup-3.0-0t64, libwebkit2gtk-4.1-0 | libwebkit2gtk-4.1-0t64, libx11-6, libxcb1, libxkbcommon0 (>= 1.0.0), libwayland-client0 (>= 1.20.0)
+          Depends: libgcc-s1, libglib2.0-0 (>= 2.66.0) | libglib2.0-0t64, libgtk-3-0 (>= 3.24.24) | libgtk-3-0t64, libsoup-3.0-0 | libsoup-3.0-0t64, libwebkit2gtk-4.1-0 | libwebkit2gtk-4.1-0t64, libx11-6, libxcb1, libxkbcommon0 (>= 1.0.0), libwayland-client0 (>= 1.20.0)
           Recommends: xdg-utils
           Description: firmware lookup and flashing utility for Lenovo, Motorola and NEC devices
            LMN Flash looks up and flashes firmware for Lenovo/Motorola smartphones
@@ -252,6 +258,12 @@ jobs:
 
             if [ -z "$owner" ]; then
               continue
+
+            # An essential package is on every system by definition, so it
+            # needs no dependency entry (`libc6` is one).
+            elif [ "$(dpkg-query -W -f='${Essential}' "$owner" 2>/dev/null)" = "yes" ]; then
+              continue
+
             elif ! printf '%s\n' "$declared" | grep -qx "$owner"; then
               echo "::warning file=.github/workflows/build.yml::$executable loads $library, which $owner ships — add it to Depends"
             fi

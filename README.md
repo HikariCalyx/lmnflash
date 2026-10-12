@@ -73,11 +73,15 @@ is all it takes:
   in `/usr/share/icons/hicolor/512x512/apps/lmnflash.png`.
 * `Depends` — the runtime libraries the executable links or opens (`libgtk-3-0`,
   `libwebkit2gtk-4.1-0`, `libsoup-3.0-0`, the X11/Wayland libraries …), so
-  `apt` pulls them in. libusb is missing from the list on purpose: it is compiled
-  into the executable (rusb's `vendored` feature), not loaded from the system.
+  `apt` pulls them in. Two libraries are missing on purpose: `libusb`, which is
+  compiled into the executable (rusb's `vendored` feature) rather than loaded
+  from the system, and `libc6`, which is an *essential* package that every
+  Debian system already has.
 
 It is built on Ubuntu 24.04 and therefore needs glibc 2.39 or newer (Ubuntu
-24.04+, Debian 13+); older releases can use the tarball instead.
+24.04+, Debian 13+) — the tarball is the very same build. The package does not
+enforce that: since `libc6` is essential it is not a dependency, so the version
+floor only lives in this line.
 
 ### RPM package
 
