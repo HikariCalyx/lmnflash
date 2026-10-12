@@ -44,8 +44,8 @@ The release workflow bundles the contents of `prebuilt_binary` this way:
 | `lmnflash-win-arm64.zip` | `mfastboot/windows_x86/{34.0.4,28.0.2,26.0.0}` (via Windows' x86 emulation) |
 | `lmnflash-linux-x86_64.tar.gz` | `mfastboot/linux_amd64/31.0.2` |
 | `lmnflash-linux-arm64.tar.gz` | `mfastboot/linux_amd64/31.0.2` (via box64) |
-| `lmnflash_<version>_amd64.deb` | `mfastboot/linux_amd64/31.0.2` |
-| `lmnflash-<version>-1.x86_64.rpm` | `mfastboot/linux_amd64/31.0.2` |
+| `lmnflash_<version>_amd64.deb` | — (none) |
+| `lmnflash-<version>-1.x86_64.rpm` | — (none) |
 | `lmnflash-macos_unsigned.dmg` | `Contents/Resources/mfastboot/darwin_amd64/29.0.6` |
 
 The Windows payload is the 32-bit build, which is the only one Motorola
@@ -54,7 +54,10 @@ it travels with.
 
 The single-file artifacts (`lmnflash-win64.exe`, `lmnflash-win32.exe`,
 `lmnflash-win-arm64.exe`, `lmnflash-linux-x86_64`, …) do not carry `mfastboot`
-and therefore use the built-in fastboot.
+and therefore use the built-in fastboot. Neither do the two distribution
+packages below — `mfastboot` is not redistributable with them — so they start
+with the built-in fastboot as well, until one is put into the folder of the
+executable (see below) or Google's platform-tools are downloaded.
 
 ### Debian / Ubuntu package
 
@@ -62,9 +65,10 @@ and therefore use the built-in fastboot.
 the way a distribution expects, so `apt install ./lmnflash_<version>_amd64.deb`
 is all it takes:
 
-* `/usr/lib/lmnflash/lmnflash` — the executable, with
-  `mfastboot/linux_amd64/31.0.2` beside it (where the application looks for it),
-  plus a `/usr/bin/lmnflash` symlink so the command is on `PATH`.
+* `/usr/lib/lmnflash/lmnflash` — the executable, in a folder of its own so an
+  `mfastboot` build can be put beside it
+  (`mfastboot/linux_amd64/<version>/mfastboot`), plus a `/usr/bin/lmnflash`
+  symlink so the command is on `PATH`.
 * `/usr/share/applications/lmnflash.desktop` — the launcher entry, with the icon
   in `/usr/share/icons/hicolor/512x512/apps/lmnflash.png`.
 * `Depends` — the runtime libraries the executable links or opens (`libgtk-3-0`,
@@ -78,9 +82,10 @@ It is built on Ubuntu 24.04 and therefore needs glibc 2.39 or newer (Ubuntu
 ### RPM package
 
 `lmnflash-<version>-1.x86_64.rpm` is the same build for the RPM distributions
-(Fedora, RHEL, openSUSE) and installs the same layout — except that the
-`mfastboot` folder sits under `/usr/lib64/lmnflash`, where `rpm` puts library
-data — with the launcher entry and the icon included:
+(Fedora, RHEL, openSUSE) and installs the same layout — except that the folder
+of the executable is `/usr/lib64/lmnflash`, where `rpm` keeps an application's
+library data, which is also where an `mfastboot` build would go — with the
+launcher entry and the icon included:
 
 ```
 sudo dnf install ./lmnflash-<version>-1.x86_64.rpm

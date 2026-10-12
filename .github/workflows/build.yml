@@ -129,7 +129,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        # No submodules: nothing is compiled here. `prebuilt_binary` and the
+        # No submodules: nothing is compiled here. The launcher entry and the
         # icon are in the repository, and the executable comes from `build`.
 
       - name: Download the Linux executable
@@ -151,15 +151,16 @@ jobs:
           root=pkg
           folder="$root/usr/lib/lmnflash"
 
-          # The executable sits in its own folder with the `mfastboot` build
-          # beside it, because that is where the application looks for one: the
-          # `mfastboot/<platform>/<version>/` layout, relative to the running
-          # executable. `/usr/bin` gets a symlink to it, so the command is on
-          # `PATH` — a symlink is enough, since `current_exe()` resolves it and
-          # the app still finds the folder next to the real file.
+          # The executable sits in a folder of its own because that is where the
+          # application looks for an `mfastboot` build — an
+          # `mfastboot/<platform>/<version>/` folder beside the running
+          # executable. None is shipped here (the tarball carries one), so the
+          # app starts with its built-in fastboot until one is put there or
+          # Google's platform-tools are downloaded from the tool picker.
+          # `/usr/bin` gets a symlink to it, so the command is on `PATH` — a
+          # symlink is enough, since `current_exe()` resolves it and the app
+          # still looks beside the real file.
           install -D -m755 bin/lmnflash "$folder/lmnflash"
-          install -D -m755 prebuilt_binary/linux_amd64/31.0.2/mfastboot \
-            "$folder/mfastboot/linux_amd64/31.0.2/mfastboot"
           install -d "$root/usr/bin"
           ln -s ../lib/lmnflash/lmnflash "$root/usr/bin/lmnflash"
 
@@ -309,8 +310,6 @@ jobs:
           mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS}
 
           install -m755 bin/lmnflash "$topdir/SOURCES/lmnflash"
-          install -m755 prebuilt_binary/linux_amd64/31.0.2/mfastboot \
-            "$topdir/SOURCES/mfastboot"
           install -m644 linux/lmnflash.desktop "$topdir/SOURCES/lmnflash.desktop"
           install -m644 src/icon.png "$topdir/SOURCES/lmnflash.png"
           install -m644 LICENSE "$topdir/SOURCES/LICENSE"
@@ -344,12 +343,13 @@ jobs:
           platform-tools are downloaded when they are needed.
 
           %install
-          # The executable and its mfastboot build live in a folder of their own
-          # (/usr/lib64 on a 64-bit RPM distribution): the application looks for
-          # mfastboot beside the running executable, and it resolves the
-          # /usr/bin symlink to get there.
+          # The executable lives in a folder of its own (/usr/lib64 on a 64-bit
+          # RPM distribution): that is where the application looks for an
+          # `mfastboot/<platform>/<version>/` build, and it resolves the
+          # /usr/bin symlink to get there. No mfastboot is shipped here — the
+          # app uses its built-in fastboot, or Google's platform-tools that it
+          # downloads when they are picked.
           install -D -m755 %{_sourcedir}/lmnflash %{buildroot}%{_libdir}/lmnflash/lmnflash
-          install -D -m755 %{_sourcedir}/mfastboot %{buildroot}%{_libdir}/lmnflash/mfastboot/linux_amd64/31.0.2/mfastboot
           install -d %{buildroot}%{_bindir}
           ln -s %{_libdir}/lmnflash/lmnflash %{buildroot}%{_bindir}/lmnflash
           install -D -m644 %{_sourcedir}/lmnflash.desktop %{buildroot}%{_datadir}/applications/lmnflash.desktop
