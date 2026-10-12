@@ -51,6 +51,13 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 # `flashfile.xml` carries an MD5 for every image file.
 md5 = "0.7"
 
+# Local time for the Multi Flashing log: the run's directory is named after the
+# moment "Start" was pressed, and every log line is stamped with the time it was
+# written. The standard library cannot turn a `SystemTime` into local calendar
+# time, and the offset changes with the season (DST). Only the clock and the
+# formatting are needed — no `serde`, no `wasmbind`, no timezone database.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 # Wireless ADB pairing ("Connect ADB Wireless Debugging"): the QR code the
 # phone's "Pair device with QR code" screen scans, and the mDNS browse that
 # finds the pairing/connect services it then announces. The QR code is only

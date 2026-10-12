@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = Bootloader 不允许恢复出厂设置。请在设�
 factory-reset-refresh = 刷新
 
 flash-firmware-title = 固件刷写
+flash-multi-flashing-title = 多机刷机
 flash-firmware-smartphone-button = 智能手机
 flash-firmware-tablet-button = 平板电脑
 firmware-flash-desc = 将完整固件包刷入处于 fastboot 模式的手机。请选择固件 ZIP 压缩包，或 flashfile.xml 及其镜像文件。此操作会覆盖手机固件并清除手机上的所有数据。
@@ -267,7 +268,7 @@ cn-latest-version = 最新版本
 cn-id = 资源 ID
 
 retcn-sn-label = 序列号
-retcn-model-label = XT 型号代码
+retcn-model-label = XT 代码
 retcn-fingerprint-label = 构建指纹
 retcn-carrier-label = 运营商
 retcn-platform-label = 平台
@@ -277,7 +278,7 @@ platform-qualcomm = 高通
 platform-mediatek = 联发科或紫光展锐
 sim-single = 单卡
 sim-dual = 双卡
-retcn-error-model = 请填写 XT 型号代码
+retcn-error-model = 请填写 XT 代码
 retcn-error-fingerprint = 请填写构建指纹
 retcn-error-carrier = 请填写运营商
 retcn-error-sn = 请填写序列号
@@ -538,19 +539,92 @@ pac-repack-col-size = 大小
 pac-repack-col-file = 文件名
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = 进入多机刷机模式
-multi-flash-placeholder = 多机刷机模式尚未开放，相关操作将显示在此处。
+flash-multi-flashing-button = 打开
+multi-flash-idle = 暂无正在刷写的设备。
 multi-flash-exit = 退出
 multi-flash-preset-manage = 预设管理
-multi-flash-preset-add = 添加固件镜像…
+multi-flash-preset-add = 添加
+multi-flash-preset-finish = 完成
 multi-flash-preset-empty = 尚未加载固件镜像。
 multi-flash-start = 开始
 multi-flash-stop = 停止
 multi-flash-close-prompt = 请在关闭前停止操作。
 multi-flash-close-prompt-ok = 确定
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = 进度
+multi-flash-col-current = 当前进度
+multi-flash-no-preset = 没有适用于此设备的预设
+multi-flash-device-finished = 已完成
+multi-flash-device-failed = 失败：{ $error }
+multi-flash-run-failed = 无法开始运行：{ $error }
+multi-flash-still-flashing = 仍有 { $count } 台设备正在刷写，请勿关闭窗口。
+multi-flash-log-directory = 日志写入 { $path }
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = 所选的 ZIP 压缩包不是有效的固件包（其中没有 flashfile.xml）
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = 固件选项
+multi-flash-options-reboot = 此固件完成后重启设备
+multi-flash-options-conditions = 刷写条件
+multi-flash-options-default = 默认
+multi-flash-options-default-desc = 当设备 CID 与此固件匹配时刷入。engineering 引导加载程序会报告 0xDEAD 而不是真实 CID，此时也视为匹配。
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = 不匹配工程机
+multi-flash-options-custom = 自定义
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = 添加
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = 预设
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = 国行
+cid-name-global = 全球零售
+cid-name-usa-lockdown = 美国锁定版
+cid-name-super = 超级 CID
+cid-name-factory = 工厂 CID
+cid-name-invalid = 损坏
+cid-name-unknown = 未知
+cid-name-korea-sk-kt = 韩国 SK/KT
+cid-name-europe-apac-retail = 欧洲/亚太地区零售
+cid-name-us-retail = 美国零售
+cid-name-latam-retail = 拉美地区零售
+cid-name-unknown-deprecated = 未知（已废弃）
+cid-name-canada-retail = 加拿大零售
+cid-name-google-developer = Google 开发者版
+multi-flash-options-states = 引导加载程序解锁状态
+multi-flash-options-incomplete = 请至少添加一个 CID，并至少选择一种解锁状态。
+multi-flash-options-confirm = 确认
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = 解压到
+multi-flash-options-extract-choose = 选择…
+multi-flash-options-extract-required = 请选择用于解压此固件的文件夹。
+multi-flash-options-unpacking = 正在解压固件…
+multi-flash-preset-reboot = 完成后重启
+multi-flash-preset-edit = 编辑
+multi-flash-preset-remove = 移除
+multi-flash-preset-codename = 代号
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = 保存
+multi-flash-preset-load = 加载
+multi-flash-preset-saved = 预设已保存到 { $path }。
+multi-flash-preset-loaded = 已从 { $path } 加载 { $count } 个预设。
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = 有 { $count } 个条目无法加载：
+multi-flash-preset-invalid = 该文件不是 LMN Flash 保存的预设文件。
+multi-flash-preset-newer = 该预设文件由更新版本的 LMN Flash 创建（版本 { $version }）。
+multi-flash-preset-failed = 无法读写预设文件：{ $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = 已跳过 MD5 校验
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } 个预设会刷写到同一台设备：{ $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = 连接 ADB 无线调试

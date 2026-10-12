@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = Завантажувач не дозволяє ск�
 factory-reset-refresh = Оновити
 
 flash-firmware-title = Прошивання прошивки
+flash-multi-flashing-title = Множинне прошивання
 flash-firmware-smartphone-button = Смартфон
 flash-firmware-tablet-button = Планшет
 firmware-flash-desc = Прошиває повний пакет прошивки на телефон, підключений у режимі fastboot. Виберіть ZIP-архів прошивки або flashfile.xml разом із файлами образів. Прошивку буде перезаписано, а всі дані на телефоні — видалено.
@@ -267,7 +268,7 @@ cn-latest-version = Остання версія
 cn-id = ID ресурсу
 
 retcn-sn-label = Серійний номер
-retcn-model-label = Код моделі XT
+retcn-model-label = Код XT
 retcn-fingerprint-label = Відбиток збірки
 retcn-carrier-label = Оператор
 retcn-platform-label = Платформа
@@ -277,7 +278,7 @@ platform-qualcomm = Qualcomm
 platform-mediatek = MediaTek або Unisoc
 sim-single = Одна SIM
 sim-dual = Дві SIM
-retcn-error-model = Введіть код моделі XT
+retcn-error-model = Введіть код XT
 retcn-error-fingerprint = Введіть відбиток збірки
 retcn-error-carrier = Введіть оператора
 retcn-error-sn = Введіть серійний номер
@@ -539,19 +540,92 @@ pac-repack-col-size = Розмір
 pac-repack-col-file = Назва файлу
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = Перейти в режим множинного прошивання
-multi-flash-placeholder = Режим множинного прошивання ще недоступний. Його елементи керування з’являться тут.
+flash-multi-flashing-button = Відкрити
+multi-flash-idle = Жоден пристрій ще не прошивається.
 multi-flash-exit = Вихід
 multi-flash-preset-manage = Керування пресетами
-multi-flash-preset-add = Додати образ прошивки…
+multi-flash-preset-add = Додати
+multi-flash-preset-finish = Готово
 multi-flash-preset-empty = Образ прошивки ще не завантажено.
 multi-flash-start = Запуск
 multi-flash-stop = Зупинити
 multi-flash-close-prompt = Зупиніть операцію перед закриттям.
 multi-flash-close-prompt-ok = ОК
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = Поступ
+multi-flash-col-current = Поточний поступ
+multi-flash-no-preset = Немає доступних пресетів для цього пристрою
+multi-flash-device-finished = Готово
+multi-flash-device-failed = Помилка: { $error }
+multi-flash-run-failed = Не вдалося запустити виконання: { $error }
+multi-flash-still-flashing = Ще { $count } пристроїв прошиваються. Не закривайте вікно, доки вони не завершать роботу.
+multi-flash-log-directory = Журнали записуються до { $path }
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Вибраний ZIP-архів не є дійсним пакетом прошивки (усередині немає flashfile.xml)
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = Параметри прошивки
+multi-flash-options-reboot = Перезавантажити пристрій після завершення прошивки
+multi-flash-options-conditions = Умови прошивання
+multi-flash-options-default = Стандартні
+multi-flash-options-default-desc = Прошиває, коли CID пристрою збігається з цією прошивкою. Інженерний завантажувач повідомляє 0xDEAD замість справжнього CID і теж вважається збігом.
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = Не зіставляти інженерні зразки
+multi-flash-options-custom = Власні
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = Додати
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = Пресет
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = Роздріб Китаю
+cid-name-global = Глобальний
+cid-name-usa-lockdown = Блокування США
+cid-name-super = Super CID
+cid-name-factory = Заводський CID
+cid-name-invalid = Пошкоджений
+cid-name-unknown = Невідомо
+cid-name-korea-sk-kt = Корея SK/KT
+cid-name-europe-apac-retail = Роздріб Європа/Азіатсько-Тихоокеанський регіон
+cid-name-us-retail = Роздріб США
+cid-name-latam-retail = Роздріб Латинської Америки
+cid-name-unknown-deprecated = Невідомо (застаріло)
+cid-name-canada-retail = Роздріб Канади
+cid-name-google-developer = Видання для розробників Google
+multi-flash-options-states = Статус розблокування завантажувача
+multi-flash-options-incomplete = Додайте принаймні один CID і виберіть принаймні один статус розблокування.
+multi-flash-options-confirm = Підтвердити
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = Розпакувати до
+multi-flash-options-extract-choose = Вибрати…
+multi-flash-options-extract-required = Виберіть теку для розпакування цієї прошивки.
+multi-flash-options-unpacking = Розпакування прошивки…
+multi-flash-preset-reboot = Перезавантажити після завершення
+multi-flash-preset-edit = Змінити
+multi-flash-preset-remove = Видалити
+multi-flash-preset-codename = Кодова назва
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = Зберегти
+multi-flash-preset-load = Завантажити
+multi-flash-preset-saved = Пресети збережено в { $path }.
+multi-flash-preset-loaded = Завантажено пресетів: { $count } з { $path }.
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = Не вдалося завантажити записи ({ $count }):
+multi-flash-preset-invalid = Цей файл не є файлом пресетів, збереженим LMN Flash.
+multi-flash-preset-newer = Цей файл пресетів створено новішою версією LMN Flash (версія { $version }).
+multi-flash-preset-failed = Не вдалося прочитати або записати файл пресетів: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = Перевірку MD5 пропущено
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } пресети прошиють той самий телефон: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = Підключення ADB через Wi-Fi

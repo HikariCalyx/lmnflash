@@ -24,7 +24,7 @@ use crate::compat_iced as iced;
 use crate::compat_iced::*;
 use crate::fastboot_info::{self, SecureState};
 use crate::flash_engine::{Engine, RebootMode};
-use crate::flashfile::{EraseGroup, FlashPart, LoadError};
+use crate::flashfile::{EraseGroup, FlashPart};
 use crate::guided::spinner;
 use crate::text;
 use crate::{enabled_procedures, engine_tool_missing, output_font, FirmwareFlashDialog, Labeled, Message, State};
@@ -44,8 +44,9 @@ const BAR_HEIGHT: f32 = 6.0;
 /// is a step up from the labels around it.
 const OUTPUT_SIZE: f32 = 13.0;
 
-/// A progress bar at the height used everywhere in this dialog.
-fn bar<'a>(fraction: f32) -> Element<'a, Message> {
+/// A progress bar at the height used everywhere in this dialog (and in the
+/// Multi Flashing options card, whose unpacking shows the same kind of bar).
+pub(crate) fn bar<'a>(fraction: f32) -> Element<'a, Message> {
     progress_bar(0.0..=1.0, fraction)
         .girth(BAR_HEIGHT)
         .length(Fill)
@@ -121,11 +122,9 @@ fn card(state: &State) -> Element<'_, Message> {
     }
 
     // Footer: Cancel closes the dialog, but never while a job is running so
-    // the phone is not left half-flashed. "Enter Multi Flashing Mode" hands
-    // the user to the multi-device workspace and is locked for the same
-    // reason.
+    // the phone is not left half-flashed.
     //
-    // Both are hidden once the user committed to a flash: the warning page and
+    // It is hidden once the user committed to a flash: the warning page and
     // the running/result page carry their own way back, and leaving them from
     // the footer would either skip the warning or abandon a half-flashed
     // phone.
@@ -135,28 +134,12 @@ fn card(state: &State) -> Element<'_, Message> {
         content = content.push(horizontal_rule(1));
 
         let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
-        let multi = button(text(l10n.tr("firmware-flash-multi-flashing"))).width(Fill);
-        // The Multi Flashing workspace behind this button is still being built, so
-        // it is only live in a debug build. There it also waits for a free dialog,
-        // like Cancel does (iced greys a button without `on_press` out and ignores
-        // clicks on it).
-        let multi = if cfg!(debug_assertions) && !busy {
-            multi.on_press(Message::FirmwareFlashMultiFlashing)
-        } else {
-            multi
-        };
 
-        content = content.push(
-            row![
-                if busy {
-                    cancel
-                } else {
-                    cancel.on_press(Message::FirmwareFlashCancel)
-                },
-                multi,
-            ]
-            .spacing(8),
-        );
+        content = content.push(if busy {
+            cancel
+        } else {
+            cancel.on_press(Message::FirmwareFlashCancel)
+        });
     }
 
     // The padding sits inside the scrollable, so the card's border is the
@@ -246,13 +229,8 @@ fn setup_section(state: &State) -> Element<'_, Message> {
         // The one message the user has to act on is translated; the rest come
         // from the ZIP reader, the XML parser or the file system and are shown
         // as they are.
-        let message = match error {
-            LoadError::NotAPackage => l10n.tr("firmware-flash-invalid-package"),
-            LoadError::Other(message) => message.clone(),
-        };
-
         content = content.push(
-            text(message)
+            text(crate::load_error_text(l10n, error))
                 .size(13.0)
                 .width(Fill)
                 .wrapping(Wrapping::WordOrGlyph)
@@ -1013,6 +991,21 @@ fn running_section(state: &State) -> Element<'_, Message> {
             ]
             .spacing(4),
         );
+
+        // Where the file this run writes is, so the log outlives the dialog:
+        // the package's own load output is not part of it, and a dialog that
+        // never flashed anything has no file to point at.
+        if let Some(path) = flash.log_file.as_ref().map(|file| file.path().display()) {
+            content = content.push(
+                text(l10n.tr_with_args(
+                    "multi-flash-log-directory",
+                    &[("path", path.to_string())],
+                ))
+                .size(12.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph),
+            );
+        }
     }
 
     content.into()
@@ -1610,7 +1603,7 @@ fn busy_row<'a>(state: &'a State, label: String) -> Element<'a, Message> {
 }
 
 /// `done / total` as a `0.0..=1.0` fraction, for the progress bars.
-fn fraction(done: u64, total: u64) -> f32 {
+pub(crate) fn fraction(done: u64, total: u64) -> f32 {
     if total == 0 {
         0.0
     } else {

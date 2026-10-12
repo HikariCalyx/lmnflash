@@ -21,6 +21,7 @@ pub(crate) enum SmartphoneFeature {
     BootloaderUnlock,
     FactoryReset,
     FirmwareFlash,
+    MultiFlashing,
     InstallDriver,
     RemoveBloatware,
     WirelessDebugging,
@@ -28,10 +29,11 @@ pub(crate) enum SmartphoneFeature {
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
+        Self::MultiFlashing,
         Self::InstallDriver,
         Self::RemoveBloatware,
         Self::WirelessDebugging,
@@ -43,6 +45,7 @@ impl SmartphoneFeature {
             Self::BootloaderUnlock => "flash-bootloader-title",
             Self::FactoryReset => "flash-factory-reset-title",
             Self::FirmwareFlash => "flash-firmware-title",
+            Self::MultiFlashing => "flash-multi-flashing-title",
             Self::InstallDriver => "flash-driver-title",
             Self::RemoveBloatware => "flash-bloatware-title",
             Self::WirelessDebugging => "flash-wireless-title",
@@ -89,6 +92,14 @@ impl SmartphoneFeature {
                 ("flash-firmware-smartphone-button", pressed()),
                 ("flash-firmware-tablet-button", None),
             ],
+            // Flashing a whole batch of phones at once has a workspace of its
+            // own, which takes over the window. It sits next to the one-device
+            // procedure rather than inside it, because a run is set up (and
+            // watched) on its own.
+            Self::MultiFlashing => vec![(
+                "flash-multi-flashing-button",
+                Some(Message::MultiFlashingSelected),
+            )],
             // Windows installs a driver per device type: phones take
             // Motorola's Mobile Drivers, tablets are flashed with Lenovo's
             // "Software Fix", which is a download page of its own. Linux has a

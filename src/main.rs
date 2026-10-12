@@ -11,6 +11,7 @@ mod bulk;
 mod captive_portal;
 mod captive_portal_dialog;
 mod carrier;
+mod cid;
 mod compat_iced;
 mod config;
 mod debloat;
@@ -23,6 +24,7 @@ mod fastboot_info;
 mod firmware;
 mod firmware_flash;
 mod flash_engine;
+mod flash_log;
 mod flash_script;
 mod flashfile;
 mod fluent;
@@ -34,11 +36,13 @@ mod lenovoubl;
 mod login;
 mod lookup;
 mod multi_flash;
+mod multi_flash_run;
 mod pac;
 mod pac_build;
 mod pac_repack;
 mod pac_unpack;
 mod platform_tools;
+mod preset_file;
 mod protocol;
 mod scatter;
 mod smartphone;
@@ -635,6 +639,228 @@ struct DecryptState {
     status: DecryptStatus,
 }
 
+/// One firmware image of a Multi Flashing run, with what to do with it.
+#[derive(Debug, Clone)]
+struct MultiFlashPreset {
+    /// The firmware package (a ZIP, or a `flashfile.xml` with its images).
+    path: std::path::PathBuf,
+    /// What the package says about itself. Its codename is what tells the
+    /// entries apart (a package without a `vbmeta` image has none).
+    identity: flashfile::PackageIdentity,
+    /// Which of its procedures run: one flag per `identity.steps`, so a preset
+    /// can leave out a step that erases user data. A missing entry counts as
+    /// checked.
+    enabled: Vec<bool>,
+    /// Reboot the device once this preset finished.
+    reboot: bool,
+    /// Verify the `MD5` of every image before writing it. A preset can skip
+    /// that, which is what the "skip the checksum" option is for: it costs a
+    /// read of the whole image per step.
+    verify_checksums: bool,
+    /// The tool this preset's run uses.
+    tool: PresetTool,
+    /// Where the firmware's files were unpacked, for a ZIP package (a
+    /// `flashfile.xml` package is already unpacked next to its images).
+    extract_to: Option<std::path::PathBuf>,
+    /// Which devices this firmware may be flashed to.
+    conditions: FlashConditions,
+    /// `true` when the default rule is told not to take an engineering unit:
+    /// such a bootloader reports the placeholder `0xDEAD` instead of a real
+    /// CID, so it would be flashed whatever the firmware is for. A custom
+    /// condition says so itself, through the unlock states it lists.
+    no_engineering: bool,
+}
+
+/// The tool a preset's run uses.
+///
+/// The single-device dialog picks one of these too; here it belongs to a
+/// preset, so a run can use a different `fastboot` per firmware (a package its
+/// own build was made for, say). The tool is stored by *name*, not by path, so
+/// a saved preset still reads on a machine that keeps its builds elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PresetTool {
+    /// The built-in `fastboot` crate.
+    Builtin,
+    /// One of the `mfastboot` builds shipped next to the application, named by
+    /// the version its directory carries.
+    Shipped(String),
+    /// Google's `fastboot` from the Android platform-tools.
+    PlatformTools,
+}
+
+/// Why the extraction directory of a ZIP preset was asked for.
+///
+/// The two cases differ in what a cancelled pick means: the first one belongs
+/// to the flow that adds a firmware, so cancelling it is the user saying no to
+/// that firmware, while changing a directory is a correction of something that
+/// is already set up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectoryAsk {
+    /// The picked archive turned out to be a firmware package and has no
+    /// directory yet.
+    New,
+    /// The card's own button, changing a directory that is set already.
+    Change,
+}
+
+/// When a preset's firmware may be flashed to a device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FlashConditions {
+    /// The rule the single-device dialog applies: the CID has to match the
+    /// firmware, and an engineering bootloader — which ignores the CID and
+    /// reports the placeholder `0xDEAD` instead — matches as well unless
+    /// [`MultiFlashPreset::no_engineering`] was set.
+    Default,
+    /// The user's own list of acceptable CIDs and bootloader unlock states.
+    Custom {
+        cids: Vec<String>,
+        states: Vec<fastboot_info::SecureState>,
+    },
+}
+
+/// The "flash options" card's inputs: what the firmware image that was just
+/// picked is set up to do before it joins the preset list.
+struct PresetOptions {
+    /// The image the card configures; `None` while the card is closed.
+    path: Option<std::path::PathBuf>,
+    /// The entry of the preset list the card changes, when it was opened from
+    /// the list; `None` sets up a new one.
+    index: Option<usize>,
+    /// What the package says about itself, once it was read.
+    identity: Option<Result<flashfile::PackageIdentity, flashfile::LoadError>>,
+    /// `true` while it is being read.
+    identifying: bool,
+    /// One flag per procedure of the identified package (parallel to its
+    /// `steps`): only the checked ones run, so a preset can leave out a step
+    /// that erases user data. A missing entry counts as checked.
+    enabled: Vec<bool>,
+    /// Reboot the device once this preset finished.
+    reboot: bool,
+    /// Verify the `MD5` of every image before writing it.
+    verify_checksums: bool,
+    /// The tool this preset's run uses.
+    tool: PresetTool,
+    /// Where the firmware's files go, for a ZIP package: a factory package is
+    /// gigabytes of images, so the user picks the directory they are written
+    /// to (a package that is already unpacked needs none).
+    extract_to: Option<std::path::PathBuf>,
+    /// `true` while that directory is being written.
+    unpacking: bool,
+    /// How far the unpacking is, in bytes.
+    unpacked: Option<(u64, u64)>,
+    /// Why it failed, when it did.
+    unpack_error: Option<flashfile::LoadError>,
+    /// `true` when the user defines the conditions themselves instead of
+    /// taking the default rule.
+    custom: bool,
+    /// `true` while the default rule is told not to take an engineering unit:
+    /// such a bootloader reports the placeholder `0xDEAD` instead of a real
+    /// CID, so a run would flash it whatever the firmware is for.
+    no_engineering: bool,
+    /// The CIDs a custom condition accepts, as they were entered.
+    cids: Vec<String>,
+    /// What the CID field holds right now.
+    cid_input: String,
+    /// The bootloader unlock states a custom condition accepts.
+    states: Vec<fastboot_info::SecureState>,
+}
+
+impl Default for PresetOptions {
+    /// A card that was just opened runs every procedure, verifies the image
+    /// checksums, reboots the phone when it is done and leaves engineering
+    /// units out — the set-up a batch of retail phones is flashed with. The
+    /// tool is filled in from the machine's own builds when the pick opens.
+    fn default() -> Self {
+        Self {
+            path: None,
+            index: None,
+            identity: None,
+            identifying: false,
+            enabled: Vec::new(),
+            reboot: true,
+            verify_checksums: true,
+            tool: PresetTool::Builtin,
+            extract_to: None,
+            unpacking: false,
+            unpacked: None,
+            unpack_error: None,
+            custom: false,
+            no_engineering: true,
+            cids: Vec::new(),
+            cid_input: String::new(),
+            states: Vec::new(),
+        }
+    }
+}
+
+impl PresetOptions {
+    /// Whether this configuration can be confirmed: the image has to be a
+    /// readable package with at least one checked procedure, its files have to
+    /// be in place, and a custom condition has to name at least one CID and
+    /// one unlock state.
+    fn complete(&self) -> bool {
+        let conditions =
+            !self.custom || (!self.cids.is_empty() && !self.states.is_empty());
+        let identity = matches!(self.identity, Some(Ok(_)));
+
+        conditions && identity && self.unpacked() && self.enabled.iter().any(|enabled| *enabled)
+    }
+
+    /// Whether the picked package is a ZIP, whose images have to be unpacked
+    /// into [`PresetOptions::extract_to`] before a run can flash them.
+    fn zip(&self) -> bool {
+        self.path.as_deref().is_some_and(flashfile::is_zip)
+    }
+
+    /// Whether the firmware's files are in place: a package that is unpacked
+    /// next to its `flashfile.xml` already is, a ZIP only once it finished
+    /// unpacking into the directory the user chose.
+    fn unpacked(&self) -> bool {
+        !self.zip()
+            || (self.extract_to.is_some() && !self.unpacking && self.unpack_error.is_none())
+    }
+
+    /// The CID the package itself carries, which a condition starts with: the
+    /// firmware says which carrier it is for, and that is the code a phone of
+    /// that carrier reports. A package that names none leaves the list to the
+    /// user.
+    fn default_cids(&self) -> Vec<String> {
+        match &self.identity {
+            Some(Ok(identity)) => identity.cid.iter().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The card that changes an entry of the list, filled in with what that
+    /// entry holds now.
+    fn from_preset(preset: &MultiFlashPreset, index: usize) -> Self {
+        let (custom, cids, states) = match &preset.conditions {
+            FlashConditions::Default => (false, Vec::new(), Vec::new()),
+            FlashConditions::Custom { cids, states } => (true, cids.clone(), states.clone()),
+        };
+
+        Self {
+            path: Some(preset.path.clone()),
+            index: Some(index),
+            identity: Some(Ok(preset.identity.clone())),
+            identifying: false,
+            enabled: preset.enabled.clone(),
+            reboot: preset.reboot,
+            verify_checksums: preset.verify_checksums,
+            tool: preset.tool.clone(),
+            extract_to: preset.extract_to.clone(),
+            unpacking: false,
+            unpacked: None,
+            unpack_error: None,
+            custom,
+            no_engineering: preset.no_engineering,
+            cids,
+            cid_input: String::new(),
+            states,
+        }
+    }
+}
+
 /// State of the "Multi Flashing" page (Mode 2).
 ///
 /// The page is reached from the Firmware Flash dialog and takes the place of
@@ -643,17 +869,124 @@ struct DecryptState {
 struct MultiFlashState {
     /// Whether the page is shown instead of the feature grid.
     open: bool,
-    /// The firmware images loaded for the run. The "Preset Manage" dialog
-    /// fills them in, and starting a run needs at least one.
-    images: Vec<std::path::PathBuf>,
+    /// The firmware images of the run, each with the options it was set up
+    /// with. The "Preset Manage" dialog fills them in, and starting a run
+    /// needs at least one.
+    presets: Vec<MultiFlashPreset>,
     /// Whether the "Preset Manage" dialog is open.
     preset_dialog: bool,
+    /// The flash-options card a picked image is configured with.
+    pending: PresetOptions,
+    /// The `mfastboot` builds found next to the application when the page was
+    /// entered (newest first) — the tools a preset may pick from.
+    mfastboot: Vec<flash_engine::Mfastboot>,
+    /// Google's `fastboot`, when this machine has a download for it. Built
+    /// with `mfastboot` above, so the picker does not ask the system (Rosetta
+    /// 2, box64) on every frame.
+    platform_tools: Option<flash_engine::Mfastboot>,
+    /// What the last save or load of the preset list did; shown above the
+    /// list until the dialog is closed.
+    preset_status: Option<PresetStatus>,
     /// `true` while a run goes on: the workspace is locked, "Start" reads
     /// "Stop", and the window cannot be closed.
     running: bool,
+    /// The devices the run found, in the order they appeared.
+    devices: Vec<MultiFlashDevice>,
+    /// The serials whose flash has not reported its end yet. A device that was
+    /// stopped is *not* taken out of it: its flash runs to the end in the
+    /// background, and the window stays unclosable until it does.
+    flashing: std::collections::HashSet<String>,
+    /// Counts the runs, so the events of a session that was stopped (or that
+    /// ran before) are not applied to what the user sees now.
+    session: u64,
+    /// Stops the session's watch for devices; taken out of the way (`None`)
+    /// once it was asked to stop.
+    stop: Option<Arc<AtomicBool>>,
+    /// Where this run's logs go, once the session said so.
+    log_directory: Option<std::path::PathBuf>,
+    /// Why the run could not start (its log directory could not be made).
+    run_error: Option<String>,
     /// Whether a close request was refused because a run was going on; the
     /// prompt stays up until it is acknowledged.
     close_prompt: bool,
+}
+
+/// One device of a run, as the table shows it.
+struct MultiFlashDevice {
+    serial: String,
+    /// XT model code (`sku`), when the bootloader reports one.
+    xt_code: Option<String>,
+    /// Carrier/region code (`cid`), normalized.
+    cid: Option<String>,
+    status: DeviceStatus,
+    /// How far the preset is, 0 to 1, kept as its own field so a flash that
+    /// fails leaves its bar where it stopped instead of jumping back.
+    fraction: f32,
+}
+
+/// What a device of a run is doing.
+enum DeviceStatus {
+    /// A preset was chosen and its firmware is being read; the row is created
+    /// once that is known, so this is the state of a single frame.
+    Preparing,
+    /// No preset accepts this device: it is left alone.
+    NoPreset,
+    /// A procedure is running, and the progress line says which one.
+    Flashing {
+        /// 0-based index of the procedure.
+        index: usize,
+        total: usize,
+        label: String,
+    },
+    /// The firmware was written (and the phone rebooted, when the preset asks
+    /// for that).
+    Finished,
+    /// The flash failed; the reason is the log file's, and the row shows it.
+    Failed(String),
+}
+
+impl DeviceStatus {
+    /// Whether nothing more will be reported about this device: it was left
+    /// alone (no preset), or its flash ended one way or another.
+    ///
+    /// What a run that was stopped keeps on the table is exactly the devices
+    /// that are *not* done — those are the ones still being written to, and the
+    /// only thing the window is waiting for.
+    fn settled(&self) -> bool {
+        matches!(self, Self::NoPreset | Self::Finished | Self::Failed(_))
+    }
+}
+
+/// The row of a device, for a report that carries its serial.
+fn device_mut<'a>(
+    multi: &'a mut MultiFlashState,
+    serial: &str,
+) -> Option<&'a mut MultiFlashDevice> {
+    multi.devices.iter_mut().find(|device| device.serial == serial)
+}
+
+/// Where a device is in its preset, as the table's fraction: the procedures
+/// that are done, plus how far the running one is (`inside`, 0 to 1).
+fn device_fraction(index: usize, inside: f32, total: usize) -> f32 {
+    if total == 0 {
+        return 0.0;
+    }
+
+    ((index as f32 + inside) / total as f32).clamp(0.0, 1.0)
+}
+
+/// What the last save or load of the preset list did.
+enum PresetStatus {
+    /// The whole list was written to that file.
+    Saved(std::path::PathBuf),
+    /// A file was read into the list; `skipped` entries could not be loaded.
+    Loaded {
+        path: std::path::PathBuf,
+        count: usize,
+        skipped: Vec<std::path::PathBuf>,
+    },
+    /// The file was refused (not ours, too new, or unreadable).
+    Failed(preset_file::FileError),
 }
 
 /// State of the "Smart Device Flashing" mode (Mode 2) feature tiles.
@@ -1509,6 +1842,10 @@ struct FirmwareFlashState {
     progress: Option<(u64, u64)>,
     /// Output of the flashing tool (and the engine's own notes).
     log: Vec<String>,
+    /// The file this run's log is written to as well, once it started:
+    /// `Documents\lmnflash\logs\single_flash_<serial>_<moment>.log`. The
+    /// dialog shows the output, the file is what the user can keep or send on.
+    log_file: Option<flash_log::FlashLog>,
     /// Result of the whole package, once it finished.
     result: Option<Result<(), String>>,
     /// `true` while `oem fb_mode_clear` + `reboot` run on the phone.
@@ -1569,6 +1906,7 @@ impl Default for FirmwareFlashState {
             step_label: String::new(),
             progress: None,
             log: Vec::new(),
+            log_file: None,
             result: None,
             rebooting: false,
             reboot_result: None,
@@ -2043,9 +2381,9 @@ enum Message {
     FirmwareFlashEditDone,
     /// Firmware Flash: close the dialog.
     FirmwareFlashCancel,
-    /// Firmware Flash: leave the dialog for the Multi Flashing page, which
-    /// takes the place of the Mode 2 feature grid.
-    FirmwareFlashMultiFlashing,
+    /// Multi Flashing: open the workspace that flashes a whole batch of
+    /// phones, which takes the place of the Mode 2 feature grid.
+    MultiFlashingSelected,
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     FirmwareFlashBackdropPressed,
@@ -2279,10 +2617,84 @@ enum Message {
     MultiFlashPresetManage,
     /// Multi Flashing: add a firmware image to the run (file picker).
     MultiFlashPresetAdd,
-    /// Multi Flashing: that picker closed (`None` = cancelled).
+    /// Multi Flashing: that picker closed (`None` = cancelled). The picked
+    /// image is then configured by the flash-options card.
     MultiFlashPresetPicked(Option<std::path::PathBuf>),
     /// Multi Flashing: close the "Preset Manage" dialog.
     MultiFlashPresetClose,
+    /// Multi Flashing: the flash-options card's reboot switch changed.
+    MultiFlashOptionsRebootToggled(bool),
+    /// Multi Flashing: the flash-options card's checksum switch changed
+    /// (`false` skips the MD5 check of every image).
+    MultiFlashVerifyToggled(bool),
+    /// Multi Flashing: the flashing tool of the options card changed.
+    MultiFlashToolSelected(PresetTool),
+    /// Multi Flashing: choose (or change) the directory a ZIP package is
+    /// unpacked into.
+    MultiFlashPresetChooseDirectory,
+    /// Multi Flashing: that picker closed (`None` = cancelled; a cancelled
+    /// first pick drops the firmware being added, see [`DirectoryAsk`]).
+    MultiFlashPresetDirectoryPicked(Option<std::path::PathBuf>, DirectoryAsk),
+    /// Multi Flashing: what the unpacking of a package reports (progress, the
+    /// finished package, or why it failed).
+    MultiFlashUnpackEvent(std::path::PathBuf, flash_engine::PackageEvent),
+    /// Multi Flashing: the unpacking worker is done (only used to keep its
+    /// task alive, so a panic is reported instead of waiting forever).
+    MultiFlashUnpackWorkerDone,
+    /// Multi Flashing: write the preset list to a file (save dialog).
+    MultiFlashPresetSave,
+    /// Multi Flashing: that dialog closed (`None` = cancelled), or the file
+    /// could not be written.
+    MultiFlashPresetSaved(
+        Result<Option<std::path::PathBuf>, preset_file::FileError>,
+    ),
+    /// Multi Flashing: read a preset list back from a file (file picker).
+    MultiFlashPresetLoad,
+    /// Multi Flashing: that picker closed (`None` = cancelled), or the file
+    /// could not be read.
+    MultiFlashPresetLoaded(Result<Option<preset_file::Loaded>, preset_file::FileError>),
+    /// Multi Flashing: what the picked firmware package says about itself.
+    MultiFlashPresetIdentified(
+        std::path::PathBuf,
+        Result<flashfile::PackageIdentity, flashfile::LoadError>,
+    ),
+    /// Multi Flashing: change an entry of the preset list.
+    MultiFlashPresetEdit(usize),
+    /// Multi Flashing: drop an entry of the preset list.
+    MultiFlashPresetRemoved(usize),
+    /// Multi Flashing: the options card takes the default conditions.
+    MultiFlashConditionsDefault,
+    /// Multi Flashing: the options card takes the user's own conditions.
+    MultiFlashConditionsCustom,
+    /// Multi Flashing: the options card's default rule was told (not) to take
+    /// an engineering unit as well (`true` = do not match one).
+    MultiFlashNoEngineeringToggled(bool),
+    /// Multi Flashing: the CID field of a custom condition changed.
+    MultiFlashCidChanged(String),
+    /// Multi Flashing: one of the documented CIDs was picked from the options
+    /// card's dropdown, which puts it into the field (`None` is the rule that
+    /// separates its groups).
+    MultiFlashCidPresetSelected(Option<&'static str>),
+    /// Multi Flashing: add what the CID field holds as one more tag.
+    MultiFlashCidAdded,
+    /// Multi Flashing: drop one of those tags.
+    MultiFlashCidRemoved(usize),
+    /// Multi Flashing: one of the accepted unlock states was (de)selected.
+    MultiFlashStateToggled(fastboot_info::SecureState, bool),
+    /// Multi Flashing: one procedure of the options card's checklist was
+    /// (de)selected.
+    MultiFlashStepToggled(usize, bool),
+    /// Multi Flashing: check or uncheck every procedure of that checklist.
+    MultiFlashStepsAll(bool),
+    /// Multi Flashing: check the procedures of one firmware part (AP/BP/BL)
+    /// without unchecking anything else.
+    MultiFlashSelectPart(flashfile::FlashPart),
+    /// Multi Flashing: the configured image joins the preset list.
+    MultiFlashOptionsConfirm,
+    /// Multi Flashing: the options card is dismissed; the image is not added.
+    MultiFlashOptionsCancel,
+    /// Click on the options card's empty space (swallowed).
+    MultiFlashOptionsBackdropPressed,
     /// Click on the "Preset Manage" dialog's empty space (swallowed, so it
     /// neither dismisses the dialog nor reaches the UI underneath).
     MultiFlashPresetBackdropPressed,
@@ -2290,6 +2702,14 @@ enum Message {
     MultiFlashStart,
     /// Multi Flashing: stop the running job.
     MultiFlashStop,
+    /// Multi Flashing: what the running session reports (a device it found, the
+    /// progress of a flash, its end). The number is the run the report belongs
+    /// to, so a session that was stopped never writes into the table of the
+    /// next one.
+    MultiFlashSessionEvent(u64, multi_flash_run::SessionEvent),
+    /// Multi Flashing: the session's worker is done (only used to keep its task
+    /// alive, so a panic is reported instead of waiting forever).
+    MultiFlashSessionDone,
     /// The window was asked to close. The app answers it itself (the window
     /// settings turn iced's automatic close off), so a job can refuse to be
     /// cut short.
@@ -2364,6 +2784,10 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         // from one status to the next; the multi-IMEI batch spins as well.
         || matches!(state.lookup.status, LookupStatus::Fetching)
         || matches!(state.lookup.bulk.status, BulkStatus::Running { .. })
+        // Reading a picked preset's package is quick, but it is still work
+        // with a spinner — and unpacking one is not quick at all.
+        || state.flash.multi_flash.pending.identifying
+        || state.flash.multi_flash.pending.unpacking
         // The decrypt dialog only has text while it works, but its spinner
         // ticks along with the others.
         || matches!(state.decrypt.status, DecryptStatus::Working);
@@ -2497,9 +2921,7 @@ fn start_overlay_transition(state: &mut State, before: u8, after: u8) {
 }
 
 /// Whether the message is the user closing the dialog, rather than a step
-/// inside it — including leaving the Firmware Flash dialog for the Multi
-/// Flashing page, which closes it. Only these are held back for the exit
-/// animation.
+/// inside it. Only these are held back for the exit animation.
 fn closes_overlay(message: &Message) -> bool {
     matches!(
         message,
@@ -2507,7 +2929,6 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::TabletUnlockCancel
             | Message::FactoryResetCancel
             | Message::FirmwareFlashCancel
-            | Message::FirmwareFlashMultiFlashing
             | Message::DriverCancel
             | Message::BloatwareCancel
             | Message::WirelessCancel
@@ -2543,6 +2964,7 @@ fn is_stacked(key: u8) -> bool {
     key == OVERLAY_BOOTLOADER_PICKER
         || key == OVERLAY_GUIDED_CONFIRM
         || key == OVERLAY_TABLET_PICKER
+        || key == OVERLAY_MULTI_FLASH_PRESET_OPTIONS
 }
 
 /// No dialog is open.
@@ -2593,6 +3015,9 @@ const OVERLAY_RETCN_PICKER: u8 = 0xC0;
 /// prompt that a close request was refused because a run was going on.
 const OVERLAY_MULTI_FLASH_PRESET: u8 = 0xF0;
 const OVERLAY_MULTI_FLASH_CLOSE_PROMPT: u8 = 0xF1;
+/// The flash-options card a picked firmware image is configured with, stacked
+/// on top of the "Preset Manage" dialog.
+const OVERLAY_MULTI_FLASH_PRESET_OPTIONS: u8 = 0xF2;
 
 /// Identifies the dialog card that is on screen (or [`OVERLAY_NONE`]), so that
 /// opening, closing, stepping through and replacing a dialog can be noticed
@@ -2609,6 +3034,10 @@ fn overlay_key(state: &State) -> u8 {
     // the page can only be reached with every other dialog closed.
     if multi_flash::close_prompt_open(state) {
         return OVERLAY_MULTI_FLASH_CLOSE_PROMPT;
+    }
+
+    if multi_flash::preset_options_open(state) {
+        return OVERLAY_MULTI_FLASH_PRESET_OPTIONS;
     }
 
     if multi_flash::preset_open(state) {
@@ -2982,6 +3411,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
+            SmartphoneFeature::MultiFlashing => start_multi_flashing_page(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
             SmartphoneFeature::WirelessDebugging => start_wireless_dialog(state),
@@ -3140,7 +3570,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                     tokio::task::spawn_blocking(move || {
                         rfd::FileDialog::new()
                             .set_title(&title)
-                            .add_filter("Firmware package", &["zip", "xml"])
+                            .add_filter("Firmware package", &FIRMWARE_PACKAGE_EXTENSIONS)
                             .pick_file()
                     })
                     .await
@@ -3537,53 +3967,34 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             cleanup_firmware_flash_package()
         }
-        Message::FirmwareFlashMultiFlashing => {
-            // The workspace is still being built, so it is only reachable from
-            // a debug build (the button that leads there is greyed out
-            // otherwise, and this keeps a stray event out too).
-            if !cfg!(debug_assertions) {
+        Message::MultiFlashingSelected => {
+            // Never step into the workspace while a job is in flight: the phone
+            // must not be left half-flashed. The tile that sends this sits
+            // behind the Firmware Flash dialog, so nothing was ever flashed
+            // from the grid's point of view — but a stray event must not skip
+            // the check either.
+            let flash = &state.flash.firmware;
+
+            if flash.loading || flash.running || flash.rebooting {
                 return Task::none();
             }
 
-            // Never leave the dialog while a job is in flight: the phone must
-            // not be left half-flashed.
-            let busy = {
-                let flash = &state.flash.firmware;
-                flash.loading || flash.running || flash.rebooting
-            };
-
-            if busy {
-                return Task::none();
-            }
-
-            // The dialog is discarded exactly as Cancel discards it, so the
-            // package it unpacked is cleaned up, and the workspace takes over.
-            let job = state.flash.firmware.job + 1;
-            state.flash.firmware = FirmwareFlashState {
-                job,
-                ..FirmwareFlashState::default()
-            };
-            state.flash.multi_flash.open = true;
-            // The workspace slides in the way a tab does. This runs after the
-            // dialog finished leaving (the close is held back for its exit
-            // animation), so the two movements follow each other.
-            state.content_transition = Some(anim::Transition::settle(
-                anim::content_start(true),
-                anim::content_rest(),
-            ));
-            // The whole window is animated: the tab bar and the language
-            // selector disappear together with the grid instead of popping
-            // while the page fades in.
-            state.content_transition_covers_chrome = true;
-
-            cleanup_firmware_flash_package()
+            start_multi_flashing_page(state)
         }
         Message::MultiFlashExit => {
             // A run has to be stopped first; the button is locked while it
-            // goes on, but a stray event must not leave one behind either.
-            if state.flash.multi_flash.running {
+            // goes on, but a stray event must not leave one behind either. A
+            // device that is still being flashed counts the same way: its log
+            // is still being written.
+            if state.flash.multi_flash.running || !state.flash.multi_flash.flashing.is_empty() {
                 return Task::none();
             }
+
+            // The table belongs to the run that was just left; the firmware
+            // images do not (they are what the page is set up with).
+            state.flash.multi_flash.devices.clear();
+            state.flash.multi_flash.log_directory = None;
+            state.flash.multi_flash.run_error = None;
 
             state.flash.multi_flash.open = false;
             // Leaving plays the same slide the other way round, so the
@@ -3599,10 +4010,20 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::MultiFlashPresetManage => {
             state.flash.multi_flash.preset_dialog = true;
+            // A result from an earlier visit says nothing about this one.
+            state.flash.multi_flash.preset_status = None;
             Task::none()
         }
         Message::MultiFlashPresetBackdropPressed => Task::none(),
         Message::MultiFlashPresetClose => {
+            // A list holding two presets that would flash the same phone is not
+            // one a run can work with — the first of them would win, by their
+            // order — so the card cannot be left. The button is shut for the
+            // same reason; this refuses a stray event.
+            if !multi_flash_run::conflicting_presets(&state.flash.multi_flash.presets).is_empty() {
+                return Task::none();
+            }
+
             state.flash.multi_flash.preset_dialog = false;
             Task::none()
         }
@@ -3612,7 +4033,13 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        rfd::FileDialog::new().set_title(&title).pick_file()
+                        // The same formats the single-device Firmware Flash
+                        // dialog takes: a package ZIP, or a `flashfile.xml`
+                        // with its image files next to it.
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("Firmware package", &FIRMWARE_PACKAGE_EXTENSIONS)
+                            .pick_file()
                     })
                     .await
                     .unwrap_or(None)
@@ -3621,12 +4048,440 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             )
         }
         Message::MultiFlashPresetPicked(path) => {
-            if let Some(path) = path {
-                let images = &mut state.flash.multi_flash.images;
+            let Some(path) = path else {
+                return Task::none();
+            };
 
-                if !images.contains(&path) {
-                    images.push(path);
+            // The image is configured before it joins the list: the options
+            // card decides what happens to it, and cancelling it discards the
+            // pick. What the package is for is read while the card opens.
+            let tool = default_preset_tool(&state.flash.multi_flash);
+            state.flash.multi_flash.pending = PresetOptions {
+                path: Some(path.clone()),
+                identifying: true,
+                tool,
+                ..PresetOptions::default()
+            };
+
+            start_multi_flash_identify(path)
+        }
+        Message::MultiFlashPresetIdentified(path, identity) => {
+            let ask = {
+                let pending = &mut state.flash.multi_flash.pending;
+
+                // An answer for a package the card no longer shows.
+                if pending.path.as_deref() != Some(path.as_path()) {
+                    return Task::none();
                 }
+
+                pending.identifying = false;
+                // Every procedure starts checked; the card offers the same
+                // checklist the single-device dialog does.
+                pending.enabled = match &identity {
+                    Ok(identity) => vec![true; identity.steps.len()],
+                    Err(_) => Vec::new(),
+                };
+                pending.identity = Some(identity);
+
+                // The firmware names the CID it is for, so a custom condition
+                // starts with it instead of an empty list.
+                pending.cids = pending.default_cids();
+
+                // A ZIP holds images that have to be unpacked before anything
+                // can be flashed, so its directory is asked for now. The
+                // check above runs FIRST: a file that is no firmware package
+                // never gets a folder picked for it, and nothing is ever
+                // unpacked on the strength of its name.
+                matches!(pending.identity, Some(Ok(_)))
+                    && pending.zip()
+                    && pending.extract_to.is_none()
+            };
+
+            if ask {
+                return start_multi_flash_choose_directory(
+                    state,
+                    path,
+                    None,
+                    DirectoryAsk::New,
+                );
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashStepToggled(index, checked) => {
+            let enabled = &mut state.flash.multi_flash.pending.enabled;
+
+            if let Some(flag) = enabled.get_mut(index) {
+                *flag = checked;
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashStepsAll(checked) => {
+            for enabled in &mut state.flash.multi_flash.pending.enabled {
+                *enabled = checked;
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashSelectPart(part) => {
+            let pending = &mut state.flash.multi_flash.pending;
+
+            let Some(Ok(identity)) = &pending.identity else {
+                return Task::none();
+            };
+
+            // Additive, like the single-device dialog: the steps of that part
+            // are checked and nothing is unchecked, so parts can be combined.
+            let mediatek = flashfile::is_mediatek(&identity.steps);
+            let selected: Vec<usize> = identity
+                .steps
+                .iter()
+                .enumerate()
+                .filter(|(_, step)| step.part(mediatek) == Some(part))
+                .map(|(index, _)| index)
+                .collect();
+
+            for index in selected {
+                if let Some(enabled) = pending.enabled.get_mut(index) {
+                    *enabled = true;
+                }
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashPresetEdit(index) => {
+            let multi = &mut state.flash.multi_flash;
+
+            let Some(preset) = multi.presets.get(index).cloned() else {
+                return Task::none();
+            };
+
+            multi.pending = PresetOptions::from_preset(&preset, index);
+
+            // The folder a preset was unpacked into may be gone by now (moved
+            // or deleted). The card asks for one again rather than confirming
+            // a preset whose files are nowhere.
+            if multi
+                .pending
+                .extract_to
+                .as_deref()
+                .is_some_and(|directory| !directory.is_dir())
+            {
+                multi.pending.extract_to = None;
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashPresetRemoved(index) => {
+            let presets = &mut state.flash.multi_flash.presets;
+
+            if index < presets.len() {
+                presets.remove(index);
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashOptionsBackdropPressed => Task::none(),
+        Message::MultiFlashOptionsCancel => {
+            // A preset whose files are still being written is not dropped:
+            // the card does not offer this while that runs, and a stray event
+            // must not leave the user's folder half filled either.
+            if state.flash.multi_flash.pending.unpacking {
+                return Task::none();
+            }
+
+            state.flash.multi_flash.pending = PresetOptions::default();
+            Task::none()
+        }
+        Message::MultiFlashOptionsConfirm => {
+            let multi = &mut state.flash.multi_flash;
+
+            // The card only offers this once the image and the conditions are
+            // in order.
+            let preset = {
+                let pending = &multi.pending;
+
+                let (Some(path), true) = (pending.path.clone(), pending.complete()) else {
+                    return Task::none();
+                };
+
+                let Some(Ok(identity)) = pending.identity.clone() else {
+                    return Task::none();
+                };
+
+                let conditions = if pending.custom {
+                    FlashConditions::Custom {
+                        cids: pending.cids.clone(),
+                        states: pending.states.clone(),
+                    }
+                } else {
+                    FlashConditions::Default
+                };
+
+                MultiFlashPreset {
+                    path,
+                    identity,
+                    enabled: pending.enabled.clone(),
+                    reboot: pending.reboot,
+                    verify_checksums: pending.verify_checksums,
+                    tool: pending.tool.clone(),
+                    extract_to: pending.extract_to.clone(),
+                    conditions,
+                    no_engineering: pending.no_engineering,
+                }
+            };
+
+            // A card opened from the list changes that entry; a new pick joins
+            // the end of it.
+            match multi.pending.index {
+                Some(index) if index < multi.presets.len() => multi.presets[index] = preset,
+                _ => multi.presets.push(preset),
+            }
+
+            multi.pending = PresetOptions::default();
+
+            Task::none()
+        }
+        Message::MultiFlashOptionsRebootToggled(reboot) => {
+            state.flash.multi_flash.pending.reboot = reboot;
+            Task::none()
+        }
+        Message::MultiFlashVerifyToggled(verify) => {
+            state.flash.multi_flash.pending.verify_checksums = verify;
+            Task::none()
+        }
+        Message::MultiFlashToolSelected(tool) => {
+            state.flash.multi_flash.pending.tool = tool;
+            Task::none()
+        }
+        Message::MultiFlashPresetChooseDirectory => {
+            let (path, current, ask) = {
+                let pending = &state.flash.multi_flash.pending;
+                (
+                    pending.path.clone(),
+                    pending.extract_to.clone(),
+                    // A package that is unpacked next to its flashfile already
+                    // needs no directory, and one that is being written must
+                    // not be moved under the extraction.
+                    pending.zip() && !pending.unpacking,
+                )
+            };
+
+            match (path, ask) {
+                (Some(path), true) => {
+                    start_multi_flash_choose_directory(state, path, current, DirectoryAsk::Change)
+                }
+                _ => Task::none(),
+            }
+        }
+        Message::MultiFlashPresetDirectoryPicked(directory, ask) => {
+            let Some(directory) = directory else {
+                // A cancelled pick. The first directory belongs to the flow
+                // that adds a firmware — without one there is nothing to
+                // confirm — so cancelling it drops the card and brings the
+                // preset list back, exactly as cancelling the file pick does.
+                // Changing a directory that is set already only leaves the
+                // card as it was.
+                if ask == DirectoryAsk::New {
+                    state.flash.multi_flash.pending = PresetOptions::default();
+                }
+
+                return Task::none();
+            };
+
+            state.flash.multi_flash.pending.extract_to = Some(directory);
+
+            start_multi_flash_unpack(state)
+        }
+        Message::MultiFlashUnpackEvent(path, event) => {
+            let pending = &mut state.flash.multi_flash.pending;
+
+            // An answer for a package the card no longer shows.
+            if pending.path.as_deref() != Some(path.as_path()) {
+                return Task::none();
+            }
+
+            match event {
+                flash_engine::PackageEvent::Extract { done, total } => {
+                    pending.unpacked = Some((done, total));
+                }
+                flash_engine::PackageEvent::Ready(_) => {
+                    // The card works from what `identify` read out of the
+                    // archive, so the unpacked package itself is not needed
+                    // here: what matters is that its files are in place.
+                    pending.unpacking = false;
+                    pending.unpack_error = None;
+                }
+                flash_engine::PackageEvent::Failed(error) => {
+                    pending.unpacking = false;
+                    pending.unpack_error = Some(error);
+                }
+                // The lines an unpack logs are the engine's own (English)
+                // notes, and the card has no log to show them in.
+                flash_engine::PackageEvent::Log(_) => {}
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashUnpackWorkerDone => Task::none(),
+        Message::MultiFlashPresetSave => {
+            let title = state.l10n.tr("multi-flash-preset-save");
+            let presets = state.flash.multi_flash.presets.clone();
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_title(&title)
+                            .set_file_name(preset_file::DEFAULT_FILE_NAME)
+                            .add_filter("Preset file", &preset_file::EXTENSIONS)
+                            .save_file()
+                        else {
+                            return Ok(None);
+                        };
+
+                        preset_file::save(&presets, &path).map(|()| Some(path))
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(preset_file::FileError::Other(format!(
+                            "background task failed: {error}"
+                        )))
+                    })
+                },
+                Message::MultiFlashPresetSaved,
+            )
+        }
+        Message::MultiFlashPresetSaved(result) => {
+            let multi = &mut state.flash.multi_flash;
+
+            multi.preset_status = match result {
+                Ok(Some(path)) => Some(PresetStatus::Saved(path)),
+                // The save dialog was cancelled: nothing happened.
+                Ok(None) => None,
+                Err(error) => Some(PresetStatus::Failed(error)),
+            };
+
+            Task::none()
+        }
+        Message::MultiFlashPresetLoad => {
+            let title = state.l10n.tr("multi-flash-preset-load");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("Preset file", &preset_file::EXTENSIONS)
+                            .pick_file()
+                        else {
+                            return Ok(None);
+                        };
+
+                        // Every firmware package is identified again on this
+                        // thread, so a slow disk does not hold up the UI.
+                        preset_file::load(&path).map(Some)
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(preset_file::FileError::Other(format!(
+                            "background task failed: {error}"
+                        )))
+                    })
+                },
+                Message::MultiFlashPresetLoaded,
+            )
+        }
+        Message::MultiFlashPresetLoaded(result) => {
+            let multi = &mut state.flash.multi_flash;
+
+            match result {
+                // The file replaces the list: that is what loading a preset
+                // file means, and entries that could not be read are reported
+                // instead of being kept as half-usable rows.
+                Ok(Some(loaded)) => {
+                    let count = loaded.presets.len();
+                    multi.presets = loaded.presets;
+                    multi.preset_status = Some(PresetStatus::Loaded {
+                        path: loaded.path,
+                        count,
+                        skipped: loaded.skipped,
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => multi.preset_status = Some(PresetStatus::Failed(error)),
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashConditionsDefault => {
+            state.flash.multi_flash.pending.custom = false;
+            Task::none()
+        }
+        Message::MultiFlashConditionsCustom => {
+            let pending = &mut state.flash.multi_flash.pending;
+            pending.custom = true;
+
+            // A condition written by hand starts with the CID the firmware is
+            // for, so the usual case is one click away from being complete.
+            if pending.cids.is_empty() {
+                pending.cids = pending.default_cids();
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashNoEngineeringToggled(no_engineering) => {
+            state.flash.multi_flash.pending.no_engineering = no_engineering;
+            Task::none()
+        }
+        Message::MultiFlashCidChanged(value) => {
+            state.flash.multi_flash.pending.cid_input = value;
+            Task::none()
+        }
+        Message::MultiFlashCidPresetSelected(code) => {
+            // The rule between two groups of the dropdown is there to be read,
+            // not to be picked — and it names no CID to put into the field.
+            let Some(code) = code else {
+                return Task::none();
+            };
+
+            state.flash.multi_flash.pending.cid_input = flashfile::normalize_cid(code);
+
+            Task::none()
+        }
+        Message::MultiFlashCidAdded => {
+            let pending = &mut state.flash.multi_flash.pending;
+
+            // The same normalization the firmware dialog uses, so `50`,
+            // `0x32` and `0x0032` are one CID here too.
+            let cid = flashfile::normalize_cid(&pending.cid_input);
+            pending.cid_input.clear();
+
+            if !cid.is_empty() && !pending.cids.contains(&cid) {
+                pending.cids.push(cid);
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashCidRemoved(index) => {
+            let cids = &mut state.flash.multi_flash.pending.cids;
+
+            if index < cids.len() {
+                cids.remove(index);
+            }
+
+            Task::none()
+        }
+        Message::MultiFlashStateToggled(securestate, selected) => {
+            let states = &mut state.flash.multi_flash.pending.states;
+
+            if selected {
+                if !states.contains(&securestate) {
+                    states.push(securestate);
+                }
+            } else {
+                states.retain(|state| *state != securestate);
             }
 
             Task::none()
@@ -3635,21 +4490,150 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             let multi = &mut state.flash.multi_flash;
 
             // A run needs something to flash; the button is only drawn live
-            // once an image was loaded.
-            if !multi.running && !multi.images.is_empty() {
-                multi.running = true;
+            // once an image was loaded. A device of the previous run that is
+            // still being flashed has to finish first: its log is still being
+            // written, and it belongs to the run that started it.
+            if multi.running || !multi.flashing.is_empty() || multi.presets.is_empty() {
+                return Task::none();
+            }
+
+            multi.running = true;
+            multi.devices.clear();
+            multi.run_error = None;
+            multi.log_directory = None;
+            multi.session += 1;
+
+            start_multi_flash_session(state)
+        }
+        Message::MultiFlashStop => {
+            let multi = &mut state.flash.multi_flash;
+
+            // Only the watch for devices is stopped. A device that is being
+            // written right now runs to the end — pulling the cable out of a
+            // phone mid-flash is not what the button should do — so `flashing`
+            // is left as it is, its row stays on the table to be watched (and
+            // keeps being updated as it goes), and the window stays unclosable
+            // until every one of them is done. Only what the run is finished
+            // with goes away: a stopped run keeps exactly the devices it is
+            // still writing to.
+            if let Some(stop) = multi.stop.take() {
+                stop.store(true, Ordering::Relaxed);
+            }
+
+            multi.running = false;
+            multi.devices.retain(|device| !device.status.settled());
+
+            Task::none()
+        }
+        Message::MultiFlashSessionEvent(session, event) => {
+            let multi = &mut state.flash.multi_flash;
+
+            // What a run that is no longer the one on the page reports (a new
+            // "Start" took the table over, see [`MultiFlashState::session`]).
+            if session != multi.session {
+                return Task::none();
+            }
+
+            match event {
+                multi_flash_run::SessionEvent::LogDirectory(directory) => {
+                    multi.log_directory = Some(directory);
+                }
+                multi_flash_run::SessionEvent::Failed(error) => {
+                    multi.running = false;
+                    multi.run_error = Some(error);
+                }
+                multi_flash_run::SessionEvent::Finished { serial, result } => {
+                    multi.flashing.remove(&serial);
+
+                    if let Some(device) = device_mut(multi, &serial) {
+                        device.status = match result {
+                            Ok(()) => DeviceStatus::Finished,
+                            Err(error) => DeviceStatus::Failed(error),
+                        };
+                    }
+                }
+                multi_flash_run::SessionEvent::Stopped => {
+                    multi.running = false;
+                    multi.stop = None;
+                }
+                multi_flash_run::SessionEvent::Identified {
+                    serial,
+                    xt_code,
+                    cid,
+                    steps,
+                } => {
+                    // A device with procedures to run is being written to from
+                    // here on, which is what keeps the window from being closed
+                    // while this run goes on — even after it was stopped. Its
+                    // row is shown for the same reason: a device the run is
+                    // still writing to is what the wait is about.
+                    if steps.is_some() {
+                        multi.flashing.insert(serial.clone());
+                    }
+
+                    let status = match steps {
+                        Some(_) => DeviceStatus::Preparing,
+                        None => DeviceStatus::NoPreset,
+                    };
+
+                    multi.devices.push(MultiFlashDevice {
+                        serial,
+                        xt_code,
+                        cid,
+                        status,
+                        fraction: 0.0,
+                    });
+                }
+                multi_flash_run::SessionEvent::Step {
+                    serial,
+                    index,
+                    total,
+                    label,
+                } => {
+                    if let Some(device) = device_mut(multi, &serial) {
+                        // The bar starts over for every procedure: the fraction
+                        // is about the preset as a whole.
+                        device.fraction = device_fraction(index, 0.0, total);
+                        device.status = DeviceStatus::Flashing {
+                            index,
+                            total,
+                            label,
+                        };
+                    }
+                }
+                multi_flash_run::SessionEvent::Progress {
+                    serial,
+                    done,
+                    total,
+                } => {
+                    if let Some(device) = device_mut(multi, &serial) {
+                        if let DeviceStatus::Flashing {
+                            index,
+                            total: steps,
+                            ..
+                        } = &device.status
+                        {
+                            let inside = if total == 0 {
+                                0.0
+                            } else {
+                                done as f32 / total as f32
+                            };
+
+                            device.fraction = device_fraction(*index, inside, *steps);
+                        }
+                    }
+                }
             }
 
             Task::none()
         }
-        Message::MultiFlashStop => {
-            state.flash.multi_flash.running = false;
-            Task::none()
-        }
+        Message::MultiFlashSessionDone => Task::none(),
         Message::WindowCloseRequested(id) => {
             // Closing the window would cut the run short, so it is refused
-            // and the user is told to stop the operation first.
-            if state.flash.multi_flash.running {
+            // and the user is told to stop the operation first. A device that
+            // is still being flashed keeps the window open even after "Stop":
+            // its log is still being written, and it has to finish.
+            if state.flash.multi_flash.running || !state.flash.multi_flash.flashing.is_empty() {
                 state.flash.multi_flash.close_prompt = true;
                 return Task::none();
             }
@@ -3673,7 +4657,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 flash_engine::PackageEvent::Extract { done, total } => {
                     flash.extracted = Some((done, total));
                 }
-                flash_engine::PackageEvent::Log(line) => push_flash_log(&mut flash.log, line),
+                flash_engine::PackageEvent::Log(line) => push_flash_log(flash, line),
                 flash_engine::PackageEvent::Ready(package) => {
                     flash.loading = false;
                     flash.extracted = None;
@@ -3712,7 +4696,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                     label,
                 } => {
                     push_flash_log(
-                        &mut flash.log,
+                        flash,
                         format!("[{}/{}] {}", index + 1, total, label),
                     );
                     flash.step_index = index;
@@ -3725,7 +4709,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                     flash.progress = Some((done, total));
                 }
                 flash_engine::FlashEvent::Log(line) => {
-                    push_flash_log(&mut flash.log, line);
+                    push_flash_log(flash, line);
                     scroll_log = true;
                 }
                 flash_engine::FlashEvent::Finished(result) => {
@@ -5047,7 +6031,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             flash.rebooting = false;
 
             if let Err(error) = &result {
-                push_flash_log(&mut flash.log, format!("reboot failed: {error}"));
+                push_flash_log(flash, format!("reboot failed: {error}"));
             }
 
             flash.reboot_result = Some(result);
@@ -6531,6 +7515,28 @@ fn start_factory_reset(serial: String) -> Task<Message> {
     )
 }
 
+/// Opens the Multi Flashing workspace: the page takes the place of the Mode 2
+/// feature grid, so the whole window is its own.
+fn start_multi_flashing_page(state: &mut State) -> Task<Message> {
+    // A preset picks the tool its run uses, so the builds of this machine are
+    // looked up here as well as in the Firmware Flash dialog: the page is
+    // reached from the grid, without that dialog ever opening.
+    state.flash.multi_flash.mfastboot = flash_engine::discover_mfastboot();
+    state.flash.multi_flash.platform_tools = platform_tools::engine();
+    state.flash.multi_flash.open = true;
+
+    // The workspace slides in the way a tab does, and the whole window is
+    // animated: the tab bar and the language selector disappear together with
+    // the grid instead of popping while the page fades in.
+    state.content_transition = Some(anim::Transition::settle(
+        anim::content_start(true),
+        anim::content_rest(),
+    ));
+    state.content_transition_covers_chrome = true;
+
+    Task::none()
+}
+
 /// Opens the Firmware Flash dialog: finds the `mfastboot` builds shipped next
 /// to the application, notes whether Google's platform-tools can be offered,
 /// and lists the connected devices.
@@ -6733,7 +7739,10 @@ fn start_firmware_flash_load(state: &mut State, path: std::path::PathBuf) -> Tas
     flash.enabled.clear();
     flash.editing = false;
     flash.error = None;
+    // The log of a previous run is not this package's, on screen or on disk:
+    // the file of the run that is now over is left as it was written.
     flash.log.clear();
+    flash.log_file = None;
     flash.result = None;
 
     let job = flash.job;
@@ -6824,6 +7833,24 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
         serial,
         verify_checksums: flash.verify_checksums,
     };
+
+    // The run's own log file, next to the multi-device mode's logs: every line
+    // the dialog shows from here on goes into it as well, so what was flashed
+    // can be read (and sent on) after the dialog is closed. The two header
+    // lines say which package went to which phone — the file name has the
+    // serial, not the firmware.
+    let mut log_file = flash_log::FlashLog::create(flash_log::single_flash_path(&job.serial));
+    let device = match &job.package.model {
+        Some(model) => format!("{} ({model})", job.serial),
+        None => job.serial.clone(),
+    };
+    log_file.line(&format!(
+        "LMN Flash {} - flashing {}",
+        env!("CARGO_PKG_VERSION"),
+        job.package.directory.display()
+    ));
+    log_file.line(&format!("device {device}"));
+    flash.log_file = Some(log_file);
 
     let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
     let failure_sender = sender.clone();
@@ -7778,16 +8805,22 @@ fn cleanup_firmware_flash_package() -> Task<Message> {
     )
 }
 
-/// Appends a line to the flashing log, keeping memory bounded (a factory
-/// firmware produces thousands of lines).
-fn push_flash_log(log: &mut Vec<String>, line: String) {
+/// Appends a line to the flashing log: to the file this run writes (when it
+/// has one) and to the log on screen, which is bounded in length because a
+/// factory firmware produces thousands of lines.
+fn push_flash_log(flash: &mut FirmwareFlashState, line: String) {
     const MAX_LINES: usize = 500;
 
-    if log.len() >= MAX_LINES {
-        log.remove(0);
+    // The file keeps every line; only what is shown is trimmed.
+    if let Some(file) = flash.log_file.as_mut() {
+        file.line(&line);
     }
 
-    log.push(line);
+    if flash.log.len() >= MAX_LINES {
+        flash.log.remove(0);
+    }
+
+    flash.log.push(line);
 }
 
 /// Pins the flashing log to its last line. A build without the log on screen
@@ -7815,6 +8848,200 @@ fn enabled_procedures(flash: &FirmwareFlashState) -> usize {
 /// How long the warning that the package belongs to another phone has to be
 /// read before "Yes" can be clicked.
 const MISMATCH_COUNTDOWN_SECONDS: u8 = 10;
+
+/// The firmware formats the file pickers offer: the factory ZIP, or the
+/// `flashfile.xml` of a package that is unpacked next to its image files.
+/// Shared, so the Multi Flashing presets take exactly what the single-device
+/// Firmware Flash dialog does.
+const FIRMWARE_PACKAGE_EXTENSIONS: [&str; 2] = ["zip", "xml"];
+
+/// The message a package failure shows: the one the user has to act on has a
+/// translation, the rest (the ZIP reader, the XML parser, the file system) is
+/// technical text shown as it came.
+fn load_error_text(l10n: &l10n::Bundle, error: &flashfile::LoadError) -> String {
+    match error {
+        flashfile::LoadError::NotAPackage => l10n.tr("firmware-flash-invalid-package"),
+        flashfile::LoadError::Other(message) => message.clone(),
+    }
+}
+
+/// The tool a preset that was just picked starts with.
+///
+/// The newest shipped `mfastboot` is what the single-device dialog prefers;
+/// Google's copy is the fallback on a machine that ships no build at all, and
+/// the built-in fastboot is the last resort.
+fn default_preset_tool(multi: &MultiFlashState) -> PresetTool {
+    if let Some(tool) = multi.mfastboot.first() {
+        return PresetTool::Shipped(tool.version.clone());
+    }
+
+    if multi.platform_tools.is_some() {
+        return PresetTool::PlatformTools;
+    }
+
+    PresetTool::Builtin
+}
+
+/// Asks where a ZIP package's images should be unpacked.
+///
+/// The picker opens where the directory is set already (someone changing their
+/// mind), or in the one the archive lies in, which is where a firmware is
+/// usually unpacked next to. Nothing is unpacked until a directory is picked:
+/// a factory package is gigabytes, and where they go is the user's choice.
+///
+/// `ask` says which of the two cases this is, so the answer can be acted on
+/// (see [`DirectoryAsk`]).
+fn start_multi_flash_choose_directory(
+    state: &State,
+    path: std::path::PathBuf,
+    current: Option<std::path::PathBuf>,
+    ask: DirectoryAsk,
+) -> Task<Message> {
+    let title = state.l10n.tr("multi-flash-options-extract");
+    let start = current.or_else(|| path.parent().map(std::path::Path::to_path_buf));
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut dialog = rfd::FileDialog::new().set_title(&title);
+
+                if let Some(start) = start {
+                    dialog = dialog.set_directory(start);
+                }
+
+                dialog.pick_folder()
+            })
+            .await
+            .unwrap_or(None)
+        },
+        move |directory| Message::MultiFlashPresetDirectoryPicked(directory, ask),
+    )
+}
+
+/// Unpacks the picked ZIP into the directory the user chose, streaming its
+/// progress into [`Message::MultiFlashUnpackEvent`].
+///
+/// The same loader the single-device dialog uses does the work, so the archive
+/// is checked for a `flashfile.xml` before a single byte is written.
+fn start_multi_flash_unpack(state: &mut State) -> Task<Message> {
+    let pending = &mut state.flash.multi_flash.pending;
+
+    let (Some(path), Some(destination)) = (pending.path.clone(), pending.extract_to.clone()) else {
+        return Task::none();
+    };
+
+    if pending.unpacking {
+        return Task::none();
+    }
+
+    pending.unpacking = true;
+    pending.unpacked = None;
+    pending.unpack_error = None;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    // Kept to report a worker panic, which would otherwise leave the card
+    // waiting for an event that never comes.
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let answer_path = path.clone();
+    let producer = Task::perform(
+        async move {
+            let worker = tokio::task::spawn_blocking(move || {
+                flash_engine::load_package_into(&path, Some(&destination), &emit)
+            });
+
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(flash_engine::PackageEvent::Failed(
+                    format!("background task failed: {error}").into(),
+                ));
+            }
+        },
+        |()| Message::MultiFlashUnpackWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::MultiFlashUnpackEvent(answer_path.clone(), event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// Watches for devices and flashes the preset that fits each of them.
+///
+/// The session runs on a blocking worker thread (it sleeps between looks at the
+/// bus) and serves every device it finds on a thread of its own; what it reports
+/// is streamed into [`Message::MultiFlashSessionEvent`].
+///
+/// The log directory is named here, when the user pressed "Start", so the folder
+/// carries the moment the run began rather than the moment its thread happened
+/// to start.
+fn start_multi_flash_session(state: &mut State) -> Task<Message> {
+    let multi = &mut state.flash.multi_flash;
+
+    let presets = multi.presets.clone();
+    let tools = multi.mfastboot.clone();
+    let platform_tools = multi.platform_tools.clone();
+    let session = multi.session;
+
+    // The session is asked to stop through this flag; it is kept so "Stop" can
+    // reach a thread that is sleeping between two looks at the bus.
+    let stop = Arc::new(AtomicBool::new(false));
+    multi.stop = Some(Arc::clone(&stop));
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    // Kept to report a worker panic, which would otherwise leave the page
+    // running forever with a table that never changes.
+    let failure_sender = sender.clone();
+    let emit: Arc<dyn Fn(multi_flash_run::SessionEvent) + Send + Sync> =
+        Arc::new(move |event| {
+            let _ = sender.unbounded_send(event);
+        });
+
+    let directory = multi_flash_run::log_directory();
+    let producer = Task::perform(
+        async move {
+            let worker = tokio::task::spawn_blocking(move || {
+                multi_flash_run::run(presets, tools, platform_tools, directory, emit, stop)
+            });
+
+            if let Err(error) = worker.await {
+                let _ = failure_sender
+                    .unbounded_send(multi_flash_run::SessionEvent::Failed(format!(
+                        "background task failed: {error}"
+                    )));
+            }
+        },
+        |()| Message::MultiFlashSessionDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::MultiFlashSessionEvent(session, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// Asks what a picked firmware package is for, without unpacking its images.
+fn start_multi_flash_identify(path: std::path::PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            let reading = path.clone();
+            let identity = tokio::task::spawn_blocking(move || flashfile::identify(&reading))
+                .await
+                .unwrap_or_else(|error| {
+                    Err(flashfile::LoadError::Other(format!(
+                        "background task failed: {error}"
+                    )))
+                });
+
+            (path, identity)
+        },
+        |(path, identity)| Message::MultiFlashPresetIdentified(path, identity),
+    )
+}
 
 /// Whether the loaded package is made for another phone than the selected one.
 ///
@@ -8825,6 +10052,10 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    if let Some(overlay) = multi_flash::preset_options_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     if let Some(overlay) = multi_flash::preset_overlay(state) {
         return stack![base, animated_overlay(state, overlay)].into();
     }
@@ -8991,6 +10222,310 @@ mod tests {
         assert_eq!(detect_category("  XT2125-4 "), Some((firmware::Category::Phone, None)));
         assert_eq!(detect_category(""), None);
         assert_eq!(detect_category("XYZ123"), None);
+    }
+
+    /// Cancelling the directory picker of a firmware that is being added means
+    /// the user does not want that firmware after all: the options card is
+    /// dropped and the preset list comes back, exactly as it does when the
+    /// file pick is cancelled.
+    #[test]
+    fn a_cancelled_first_directory_pick_drops_the_firmware() {
+        let mut state = State::default();
+        state.flash.multi_flash.pending = PresetOptions {
+            path: Some(std::path::PathBuf::from(r"D:\firmware\arcfox.zip")),
+            identity: Some(Ok(flashfile::PackageIdentity::default())),
+            ..PresetOptions::default()
+        };
+
+        let _ = update(
+            &mut state,
+            Message::MultiFlashPresetDirectoryPicked(None, DirectoryAsk::New),
+        );
+
+        assert!(state.flash.multi_flash.pending.path.is_none());
+        assert!(state.flash.multi_flash.pending.identity.is_none());
+    }
+
+    /// Changing a directory that is set already is not a change of mind about
+    /// the firmware: cancelling that pick leaves the card with what it had.
+    #[test]
+    fn a_cancelled_directory_change_keeps_the_card() {
+        let mut state = State::default();
+        let zip = std::path::PathBuf::from(r"D:\firmware\arcfox.zip");
+        let directory = std::path::PathBuf::from(r"D:\firmware\arcfox");
+
+        state.flash.multi_flash.pending = PresetOptions {
+            path: Some(zip.clone()),
+            identity: Some(Ok(flashfile::PackageIdentity::default())),
+            extract_to: Some(directory.clone()),
+            ..PresetOptions::default()
+        };
+
+        let _ = update(
+            &mut state,
+            Message::MultiFlashPresetDirectoryPicked(None, DirectoryAsk::Change),
+        );
+
+        assert_eq!(state.flash.multi_flash.pending.path, Some(zip));
+        assert_eq!(state.flash.multi_flash.pending.extract_to, Some(directory));
+    }
+
+    /// The bar of a device of a Multi Flashing run counts the procedures that
+    /// are done, plus how far the running one got — and never leaves 0 to 1,
+    /// whatever the tool reports.
+    #[test]
+    fn a_device_fraction_counts_the_procedures_that_are_done() {
+        assert_eq!(device_fraction(0, 0.0, 4), 0.0);
+        assert_eq!(device_fraction(1, 0.5, 4), 0.375);
+        assert_eq!(device_fraction(3, 1.0, 4), 1.0);
+
+        // A preset that reported no procedure at all (a package that could not
+        // be read): the bar stays empty instead of dividing by zero.
+        assert_eq!(device_fraction(0, 0.0, 0), 0.0);
+
+        // A report past the end of the preset does not overfill the bar.
+        assert_eq!(device_fraction(9, 0.0, 4), 1.0);
+        assert_eq!(device_fraction(2, 3.0, 4), 1.0);
+    }
+
+    /// Reports a device the session found, the way `serve` does.
+    fn identified(state: &mut State, session: u64, serial: &str, steps: Option<usize>) {
+        let _ = update(
+            state,
+            Message::MultiFlashSessionEvent(
+                session,
+                multi_flash_run::SessionEvent::Identified {
+                    serial: serial.to_owned(),
+                    xt_code: Some("XT2451-2".to_owned()),
+                    cid: Some("0x0032".to_owned()),
+                    steps,
+                },
+            ),
+        );
+    }
+
+    /// "Stop" ends the run, not the flashes it started: a device that is being
+    /// written to keeps its row (the user watches it finish), the devices the
+    /// run is done with go away, and the window cannot be closed until every
+    /// one of them reports its end.
+    #[test]
+    fn stopping_keeps_the_devices_that_are_still_being_flashed() {
+        let mut state = State::default();
+        state.flash.multi_flash.running = true;
+        let session = state.flash.multi_flash.session;
+
+        // A run in progress: closing is refused and the prompt is up.
+        let _ = update(
+            &mut state,
+            Message::WindowCloseRequested(iced::window::Id::unique()),
+        );
+        assert!(state.flash.multi_flash.close_prompt);
+
+        // Three devices: one that is flashing, one that finished, and one no
+        // preset accepts. Only the first is work that is still going on.
+        identified(&mut state, session, "ZY00000001", Some(48));
+        identified(&mut state, session, "ZY00000002", Some(12));
+        identified(&mut state, session, "ZY00000003", None);
+        let _ = update(
+            &mut state,
+            Message::MultiFlashSessionEvent(
+                session,
+                multi_flash_run::SessionEvent::Finished {
+                    serial: "ZY00000002".to_owned(),
+                    result: Ok(()),
+                },
+            ),
+        );
+        assert_eq!(state.flash.multi_flash.devices.len(), 3);
+
+        let _ = update(&mut state, Message::MultiFlashStop);
+        assert!(!state.flash.multi_flash.running);
+        assert_eq!(state.flash.multi_flash.flashing.len(), 1);
+        assert_eq!(state.flash.multi_flash.devices.len(), 1);
+        assert_eq!(state.flash.multi_flash.devices[0].serial, "ZY00000001");
+
+        // The device that is still being written to keeps reporting, and its
+        // row is the one the window is waiting for.
+        let _ = update(
+            &mut state,
+            Message::MultiFlashSessionEvent(
+                session,
+                multi_flash_run::SessionEvent::Step {
+                    serial: "ZY00000001".to_owned(),
+                    index: 4,
+                    total: 48,
+                    label: "flash super (super.img)".to_owned(),
+                },
+            ),
+        );
+        assert!(matches!(
+            state.flash.multi_flash.devices[0].status,
+            DeviceStatus::Flashing { index: 4, .. }
+        ));
+
+        // A device the session was already serving when "Stop" arrived is
+        // shown too: it is being written to, and the window is waiting for it.
+        identified(&mut state, session, "ZY00000004", Some(48));
+        assert_eq!(state.flash.multi_flash.devices.len(), 2);
+
+        state.flash.multi_flash.close_prompt = false;
+        let _ = update(
+            &mut state,
+            Message::WindowCloseRequested(iced::window::Id::unique()),
+        );
+        assert!(state.flash.multi_flash.close_prompt);
+
+        // Their flashes end: nothing is being written any more, so the window
+        // may be closed again (the rows stay, showing what happened).
+        for serial in ["ZY00000001", "ZY00000004"] {
+            let _ = update(
+                &mut state,
+                Message::MultiFlashSessionEvent(
+                    session,
+                    multi_flash_run::SessionEvent::Finished {
+                        serial: serial.to_owned(),
+                        result: Ok(()),
+                    },
+                ),
+            );
+        }
+
+        assert!(state.flash.multi_flash.flashing.is_empty());
+        assert_eq!(state.flash.multi_flash.devices.len(), 2);
+        assert!(
+            state
+                .flash
+                .multi_flash
+                .devices
+                .iter()
+                .all(|device| matches!(device.status, DeviceStatus::Finished))
+        );
+
+        state.flash.multi_flash.close_prompt = false;
+        let _ = update(
+            &mut state,
+            Message::WindowCloseRequested(iced::window::Id::unique()),
+        );
+        assert!(!state.flash.multi_flash.close_prompt);
+    }
+
+    /// The CID dropdown of the options card puts the code it names into the
+    /// field (Add, or Enter, then takes it like a typed one), and the rule
+    /// between two groups of it does nothing at all.
+    #[test]
+    fn picking_a_cid_from_the_dropdown_fills_the_field() {
+        let mut state = State::default();
+        state.flash.multi_flash.pending.custom = true;
+
+        let retcn = cid::MENU
+            .iter()
+            .find_map(|item| match item {
+                cid::CidMenuItem::Cid { code, .. } if *code == "0x000B" => Some(*code),
+                _ => None,
+            })
+            .expect("the list names RETCN");
+
+        let _ = update(&mut state, Message::MultiFlashCidPresetSelected(Some(retcn)));
+        assert_eq!(state.flash.multi_flash.pending.cid_input, "0x000B");
+
+        // A code is put in as the app writes CIDs, so Add takes it unchanged.
+        let _ = update(
+            &mut state,
+            Message::MultiFlashCidPresetSelected(Some("0x0032")),
+        );
+        assert_eq!(state.flash.multi_flash.pending.cid_input, "0x0032");
+
+        // The rule is a line to read, not a CID.
+        let _ = update(&mut state, Message::MultiFlashCidPresetSelected(None));
+        assert_eq!(state.flash.multi_flash.pending.cid_input, "0x0032");
+        assert!(state.flash.multi_flash.pending.cids.is_empty());
+    }
+
+    /// A condition is written against the CID the firmware itself carries: the
+    /// package says which carrier it is for, so its list starts with that code
+    /// instead of being empty.
+    #[test]
+    fn a_custom_condition_starts_with_the_firmwares_own_cid() {
+        let mut state = State::default();
+        state.flash.multi_flash.pending.identity = Some(Ok(flashfile::PackageIdentity {
+            cid: Some("0x0032".to_owned()),
+            ..flashfile::PackageIdentity::default()
+        }));
+
+        let _ = update(&mut state, Message::MultiFlashConditionsCustom);
+        assert_eq!(state.flash.multi_flash.pending.cids, ["0x0032"]);
+
+        // Picking the default rule and coming back keeps it: the firmware is
+        // still the one that was picked.
+        let _ = update(&mut state, Message::MultiFlashConditionsDefault);
+        let _ = update(&mut state, Message::MultiFlashConditionsCustom);
+        assert_eq!(state.flash.multi_flash.pending.cids, ["0x0032"]);
+
+        // A package that names no CID leaves the list to the user.
+        state.flash.multi_flash.pending = PresetOptions {
+            identity: Some(Ok(flashfile::PackageIdentity::default())),
+            ..PresetOptions::default()
+        };
+
+        let _ = update(&mut state, Message::MultiFlashConditionsCustom);
+        assert!(state.flash.multi_flash.pending.cids.is_empty());
+    }
+
+    /// A line of a flash run goes into that run's log file as well as into the
+    /// log on screen: the file is what the user can read (and send on) once the
+    /// dialog is gone, and a dialog that is not flashing anything writes none.
+    #[test]
+    fn a_flash_line_is_written_to_the_runs_log_file() {
+        let directory =
+            std::env::temp_dir().join(format!("lmnflash-flash-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let path = directory.join("single_flash_ZY12345678_20261012_101112.log");
+
+        let mut flash = FirmwareFlashState {
+            log_file: Some(flash_log::FlashLog::create(path.clone())),
+            ..FirmwareFlashState::default()
+        };
+
+        push_flash_log(&mut flash, "[1/48] flash super (super.img)".to_owned());
+
+        assert_eq!(flash.log, ["[1/48] flash super (super.img)"]);
+        let written = std::fs::read_to_string(&path).expect("the run wrote its log");
+        assert!(
+            written.contains("[1/48] flash super (super.img)"),
+            "{written}"
+        );
+
+        // Nothing was started, so there is no file to write to.
+        let mut idle = FirmwareFlashState::default();
+        push_flash_log(&mut idle, "not part of a run".to_owned());
+        assert_eq!(idle.log, ["not part of a run"]);
+        assert!(idle.log_file.is_none());
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// What a run reports is applied to the table it belongs to: the reports of
+    /// a session that was stopped (or of the run before it) are dropped, so a
+    /// phone of the last run cannot appear in the new one's table.
+    #[test]
+    fn a_report_of_another_run_is_dropped() {
+        let mut state = State::default();
+        let stale = state.flash.multi_flash.session + 7;
+
+        let _ = update(
+            &mut state,
+            Message::MultiFlashSessionEvent(
+                stale,
+                multi_flash_run::SessionEvent::Identified {
+                    serial: "ZY12345678".to_owned(),
+                    xt_code: None,
+                    cid: Some("0x0032".to_owned()),
+                    steps: None,
+                },
+            ),
+        );
+
+        assert!(state.flash.multi_flash.devices.is_empty());
     }
 
     /// The "Disconnect" menu offers every wireless device `adb` lists, and last

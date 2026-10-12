@@ -94,6 +94,7 @@ factory-reset-refresh = Refresh
 flash-firmware-title = Firmware Flash
 flash-firmware-smartphone-button = Smartphone
 flash-firmware-tablet-button = Tablet
+flash-multi-flashing-title = Multi Flashing
 firmware-flash-desc = Flash a complete firmware package to a phone connected in fastboot mode. Select the firmware ZIP, or the flashfile.xml together with its image files. This overwrites the firmware and erases all data on the phone.
 firmware-flash-desc-no-erase = Flash a complete firmware package to a phone connected in fastboot mode. Select the firmware ZIP, or the flashfile.xml together with its image files. This overwrites the firmware on the phone.
 firmware-flash-select = Select firmware package
@@ -267,7 +268,7 @@ cn-latest-version = Latest version
 cn-id = Resource ID
 
 retcn-sn-label = Serial number
-retcn-model-label = XT model code
+retcn-model-label = XT code
 retcn-fingerprint-label = Build fingerprint
 retcn-carrier-label = Carrier
 retcn-platform-label = Platform
@@ -277,7 +278,7 @@ platform-qualcomm = Qualcomm
 platform-mediatek = MediaTek or Unisoc
 sim-single = Single SIM
 sim-dual = Dual SIM
-retcn-error-model = XT model code is required
+retcn-error-model = XT code is required
 retcn-error-fingerprint = Build fingerprint is required
 retcn-error-carrier = Carrier is required
 retcn-error-sn = Serial number is required
@@ -541,19 +542,100 @@ pac-repack-col-size = Size
 pac-repack-col-file = FileName
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = Enter Multi Flashing Mode
-multi-flash-placeholder = Multi Flashing Mode is not available yet. Its controls will appear here.
+flash-multi-flashing-button = Open
+multi-flash-idle = No device is being flashed yet.
 multi-flash-exit = Exit
 multi-flash-preset-manage = Preset Manage
-multi-flash-preset-add = Add firmware image…
+multi-flash-preset-add = Add
+multi-flash-preset-finish = Finish
 multi-flash-preset-empty = No firmware image loaded yet.
 multi-flash-start = Start
 multi-flash-stop = Stop
 multi-flash-close-prompt = Please Stop the operation before closing.
 multi-flash-close-prompt-ok = OK
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them. "Logs are written to" names the directory of this run, so
+# the user can read what happened to a phone afterwards.
+multi-flash-col-progress = Progress
+multi-flash-col-current = Current Progress
+multi-flash-no-preset = No available presets for this device
+multi-flash-device-finished = Finished
+multi-flash-device-failed = Failed: { $error }
+multi-flash-run-failed = Could not start the run: { $error }
+multi-flash-still-flashing = { $count } devices are still being flashed. Do not close the window until they are done.
+multi-flash-log-directory = Logs are written to { $path }
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = The selected ZIP archive is not a valid firmware package (no flashfile.xml inside)
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = Firmware Options
+multi-flash-options-reboot = Reboot the device when this firmware is done
+multi-flash-options-conditions = Flash conditions
+multi-flash-options-default = Default
+multi-flash-options-default-desc = Flash when the device CID matches this firmware. An engineering bootloader reports 0xDEAD instead of a real CID, and matches as well.
+# A preset whose default rule is told not to take an engineering unit: such a
+# bootloader reports the placeholder CID 0xDEAD, so it would otherwise be taken
+# whatever the firmware is for.
+multi-flash-options-no-engineering = Do not match engineering unit
+multi-flash-options-custom = Custom
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = Add
+# The dropdown beside the CID field: the codes the community documents, which
+# fill the field instead of being typed. Its entries are data (see src/cid.rs).
+multi-flash-options-cid-preset = Preset
+# The names of the CIDs the dropdown offers. A carrier's name ("Verizon") reads
+# the same everywhere and is data, not a message — only what a code is *for* is
+# translated here (see src/cid.rs).
+cid-name-retcn = China retail
+cid-name-global = Global
+cid-name-usa-lockdown = USA Lockdown
+cid-name-super = SuperCID
+cid-name-factory = FactoryCID
+cid-name-invalid = Invalid
+cid-name-unknown = Unknown
+cid-name-korea-sk-kt = Korea SK/KT
+cid-name-europe-apac-retail = Europe/Asia-Pacific retail
+cid-name-us-retail = US retail
+cid-name-latam-retail = Latin America retail
+cid-name-unknown-deprecated = Unknown (deprecated)
+cid-name-canada-retail = Canada retail
+cid-name-google-developer = Google Developer Edition
+multi-flash-options-states = Bootloader unlock state
+multi-flash-options-incomplete = Add at least one CID and pick at least one unlock state.
+multi-flash-options-confirm = Confirm
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = Extract to
+multi-flash-options-extract-choose = Choose…
+multi-flash-options-extract-required = Choose a folder to unpack this firmware into.
+multi-flash-options-unpacking = Unpacking the firmware…
+multi-flash-preset-reboot = Reboot when done
+multi-flash-preset-edit = Edit
+multi-flash-preset-remove = Remove
+multi-flash-preset-codename = Codename
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = Save
+multi-flash-preset-load = Load
+multi-flash-preset-saved = Presets saved to { $path }.
+multi-flash-preset-loaded = Loaded { $count } presets from { $path }.
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = Could not load { $count } entries:
+multi-flash-preset-invalid = This file is not a preset file saved by LMN Flash.
+multi-flash-preset-newer = This preset file was written by a newer version of LMN Flash (version { $version }).
+multi-flash-preset-failed = Could not read or write the preset file: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = MD5 check skipped
+# Two presets that would both be flashed to the same phone: a run takes the
+# first one that matches, so which firmware a device gets would be decided by
+# the order of the list. The list names the presets it is about, and Finish is
+# shut until it is resolved.
+multi-flash-preset-conflict = { $count } presets would flash the same phone: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = Connect ADB Wireless Debugging

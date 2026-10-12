@@ -1047,28 +1047,130 @@ mod tests {
         }
     }
 
-    /// The Multi Flashing page is entered from the Firmware Flash dialog: its
-    /// placeholder and its way out must be present in every locale.
+    /// The Multi Flashing workspace has a tile of its own in the Mode 2 grid:
+    /// its table of devices, its dialogs and its way out must be present in
+    /// every locale.
     #[test]
     fn the_multi_flash_page_renders_in_every_locale() {
         for language in Language::ALL {
             let bundle = bundle_for(language);
 
             for id in [
-                "firmware-flash-multi-flashing",
-                "multi-flash-placeholder",
+                "flash-multi-flashing-title",
+                "flash-multi-flashing-button",
+                "multi-flash-idle",
                 "multi-flash-exit",
                 "multi-flash-preset-manage",
                 "multi-flash-preset-add",
+                "multi-flash-preset-finish",
                 "multi-flash-preset-empty",
                 "multi-flash-start",
                 "multi-flash-stop",
                 "multi-flash-close-prompt",
                 "multi-flash-close-prompt-ok",
+                "multi-flash-col-progress",
+                "multi-flash-col-current",
+                "multi-flash-no-preset",
+                "multi-flash-device-finished",
+                "multi-flash-options-title",
+                "multi-flash-options-reboot",
+                "multi-flash-options-conditions",
+                "multi-flash-options-default",
+                "multi-flash-options-default-desc",
+                "multi-flash-options-no-engineering",
+                "multi-flash-options-custom",
+                "multi-flash-options-cid",
+                "multi-flash-options-cid-add",
+                "multi-flash-options-cid-preset",
+                "multi-flash-options-states",
+                "multi-flash-options-incomplete",
+                "multi-flash-options-confirm",
+                "multi-flash-options-extract",
+                "multi-flash-options-extract-choose",
+                "multi-flash-options-extract-required",
+                "multi-flash-options-unpacking",
+                "multi-flash-preset-reboot",
+                "multi-flash-preset-edit",
+                "multi-flash-preset-remove",
+                "multi-flash-preset-codename",
+                "multi-flash-preset-save",
+                "multi-flash-preset-load",
+                "multi-flash-preset-invalid",
+                "multi-flash-preset-no-verify",
             ] {
                 let text = bundle.tr(id);
 
                 assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            // The messages that carry a value are formatted as well: a
+            // translation that renames `$path`/`$count`/`$version`/`$error`
+            // would leave a hole the id check above cannot see.
+            for (id, args, expected) in [
+                (
+                    "multi-flash-preset-saved",
+                    vec![("path", "C:\\firmware\\presets.json".to_owned())],
+                    "presets.json",
+                ),
+                (
+                    "multi-flash-preset-loaded",
+                    vec![
+                        ("count", "3".to_owned()),
+                        ("path", "C:\\firmware\\presets.json".to_owned()),
+                    ],
+                    "presets.json",
+                ),
+                (
+                    "multi-flash-preset-load-skipped",
+                    vec![("count", "2".to_owned())],
+                    "2",
+                ),
+                (
+                    "multi-flash-preset-newer",
+                    vec![("version", "7".to_owned())],
+                    "7",
+                ),
+                (
+                    "multi-flash-preset-failed",
+                    vec![("error", "no space left".to_owned())],
+                    "no space left",
+                ),
+                (
+                    "multi-flash-preset-conflict",
+                    vec![
+                        ("count", "2".to_owned()),
+                        ("presets", "#1, #3".to_owned()),
+                    ],
+                    "#1, #3",
+                ),
+                (
+                    "multi-flash-device-failed",
+                    vec![("error", "boot: not enough space".to_owned())],
+                    "boot: not enough space",
+                ),
+                (
+                    "multi-flash-run-failed",
+                    vec![("error", "the log directory was refused".to_owned())],
+                    "the log directory was refused",
+                ),
+                (
+                    "multi-flash-still-flashing",
+                    vec![("count", "2".to_owned())],
+                    "2",
+                ),
+                (
+                    "multi-flash-log-directory",
+                    vec![(
+                        "path",
+                        "C:\\Users\\me\\Documents\\lmnflash\\logs".to_owned(),
+                    )],
+                    "lmnflash",
+                ),
+            ] {
+                let text = bundle.tr_with_args(id, &args);
+
+                assert!(text.contains(expected), "{language:?}: {id}: {text}");
                 assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
             }
         }

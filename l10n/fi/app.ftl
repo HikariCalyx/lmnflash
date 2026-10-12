@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = Bootloader ei salli tehdasasetusten palautusta. Pois
 factory-reset-refresh = Päivitä
 
 flash-firmware-title = Laiteohjelmiston flashays
+flash-multi-flashing-title = Monilataus
 flash-firmware-smartphone-button = Älypuhelin
 flash-firmware-tablet-button = Tabletti
 firmware-flash-desc = Flashaa täydellisen laiteohjelmistopaketin fastboot-tilassa yhdistettyyn puhelimeen. Valitse laiteohjelmiston ZIP-tiedosto tai flashfile.xml ja sen kuvatiedostot. Tämä korvaa laiteohjelmiston ja poistaa kaikki puhelimen tiedot.
@@ -267,7 +268,7 @@ cn-latest-version = Uusin versio
 cn-id = Resurssin tunnus
 
 retcn-sn-label = Sarjanumero
-retcn-model-label = XT-mallikoodi
+retcn-model-label = XT-koodi
 retcn-fingerprint-label = Koontiversion sormenjälki
 retcn-carrier-label = Operaattori
 retcn-platform-label = Alusta
@@ -277,7 +278,7 @@ platform-qualcomm = Qualcomm
 platform-mediatek = MediaTek tai Unisoc
 sim-single = Yksi SIM
 sim-dual = Kaksi SIM-korttia
-retcn-error-model = XT-mallikoodi vaaditaan
+retcn-error-model = XT-koodi vaaditaan
 retcn-error-fingerprint = Koontiversion sormenjälki vaaditaan
 retcn-error-carrier = Operaattori vaaditaan
 retcn-error-sn = Sarjanumero vaaditaan
@@ -539,19 +540,92 @@ pac-repack-col-size = Koko
 pac-repack-col-file = Tiedostonimi
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = Siirry monilataustilaan
-multi-flash-placeholder = Monilataustila ei ole vielä käytettävissä. Sen säätimet tulevat tähän.
+flash-multi-flashing-button = Avaa
+multi-flash-idle = Yhtään laitetta ei vielä flashätä.
 multi-flash-exit = Poistu
 multi-flash-preset-manage = Hallitse esiasetuksia
-multi-flash-preset-add = Lisää laiteohjelmistokuva…
+multi-flash-preset-add = Lisää
+multi-flash-preset-finish = Valmis
 multi-flash-preset-empty = Laiteohjelmistokuvaa ei ole vielä ladattu.
 multi-flash-start = Aloita
 multi-flash-stop = Lopeta
 multi-flash-close-prompt = Pysäytä toiminto ennen sulkemista.
 multi-flash-close-prompt-ok = OK
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = Edistyminen
+multi-flash-col-current = Nykyinen edistyminen
+multi-flash-no-preset = Tälle laitteelle ei ole käytettävissä esiasetuksia
+multi-flash-device-finished = Valmis
+multi-flash-device-failed = Epäonnistui: { $error }
+multi-flash-run-failed = Ajoa ei voitu aloittaa: { $error }
+multi-flash-still-flashing = { $count } laitetta flashätään edelleen. Älä sulje ikkunaa ennen kuin ne ovat valmiit.
+multi-flash-log-directory = Lokit kirjoitetaan kohteeseen { $path }
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Valittu ZIP-tiedosto ei ole kelvollinen laiteohjelmistopaketti (ei flashfile.xml-tiedostoa)
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = Laiteohjelmiston asetukset
+multi-flash-options-reboot = Käynnistä laite uudelleen, kun tämä laiteohjelmisto on valmis
+multi-flash-options-conditions = Kirjoitusehdot
+multi-flash-options-default = Oletus
+multi-flash-options-default-desc = Kirjoittaa, kun laitteen CID vastaa tätä laiteohjelmistoa. Engineering-bootloader ilmoittaa 0xDEAD oikean CID:n sijaan ja vastaa myös.
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = Älä matchaa engineering-laitteita
+multi-flash-options-custom = Mukautettu
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = Lisää
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = Esiasetus
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = Kiinan vähittäismyynti
+cid-name-global = Globaali
+cid-name-usa-lockdown = USA-lukitus
+cid-name-super = SuperCID
+cid-name-factory = FactoryCID
+cid-name-invalid = Virheellinen
+cid-name-unknown = Tuntematon
+cid-name-korea-sk-kt = Korea SK/KT
+cid-name-europe-apac-retail = Eurooppa/Aasia-Tyynimeri vähittäismyynti
+cid-name-us-retail = USA vähittäismyynti
+cid-name-latam-retail = Latinalaisen Amerikan vähittäismyynti
+cid-name-unknown-deprecated = Tuntematon (vanhentunut)
+cid-name-canada-retail = Kanadan vähittäismyynti
+cid-name-google-developer = Googlen kehittäjäversio
+multi-flash-options-states = Bootloaderin avauksen tila
+multi-flash-options-incomplete = Lisää vähintään yksi CID ja valitse vähintään yksi avauksen tila.
+multi-flash-options-confirm = Vahvista
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = Pura tänne
+multi-flash-options-extract-choose = Valitse…
+multi-flash-options-extract-required = Valitse kansio, johon tämä laiteohjelmisto puretaan.
+multi-flash-options-unpacking = Puretaan laiteohjelmistoa…
+multi-flash-preset-reboot = Käynnistä uudelleen valmistuttua
+multi-flash-preset-edit = Muokkaa
+multi-flash-preset-remove = Poista
+multi-flash-preset-codename = Koodinimi
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = Tallenna
+multi-flash-preset-load = Lataa
+multi-flash-preset-saved = Esiasetukset tallennettiin kohteeseen { $path }.
+multi-flash-preset-loaded = Ladattiin { $count } esiasetusta kohteesta { $path }.
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = { $count } merkintää ei voitu ladata:
+multi-flash-preset-invalid = Tämä tiedosto ei ole LMN Flashin tallentama esiasetustiedosto.
+multi-flash-preset-newer = Tämän esiasetustiedoston on kirjoittanut uudempi LMN Flashin versio (versio { $version }).
+multi-flash-preset-failed = Esiasetustiedostoa ei voitu lukea tai kirjoittaa: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = MD5-tarkistus ohitettu
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } esiasetusta kirjoittaisi saman puhelimen: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = Yhdistä ADB langattomasti

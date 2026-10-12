@@ -526,7 +526,23 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 ///
 /// Runs on a worker thread; the ZIP of a factory firmware is several
 /// gigabytes, so extraction is streamed and reported as it goes.
+///
+/// A ZIP is unpacked into [`flashfile::work_directory`], which is cleared
+/// first; use [`load_package_into`] to unpack it somewhere the caller owns.
 pub fn load_package(path: &Path, emit: &(dyn Fn(PackageEvent) + Send + Sync)) {
+    load_package_into(path, None, emit)
+}
+
+/// [`load_package`], unpacking a ZIP archive into `destination` when one is
+/// given (`None` uses the work directory, which is cleared first).
+///
+/// The directory is assumed to be the caller's own — a Multi Flashing preset
+/// unpacks into a folder the user picked — so nothing inside it is deleted.
+pub fn load_package_into(
+    path: &Path,
+    destination: Option<&Path>,
+    emit: &(dyn Fn(PackageEvent) + Send + Sync),
+) {
     emit(PackageEvent::Log(format!("loading {}", path.display())));
 
     // Extraction reports every megabyte; the UI only needs coarse updates.
@@ -538,7 +554,12 @@ pub fn load_package(path: &Path, emit: &(dyn Fn(PackageEvent) + Send + Sync)) {
         }
     };
 
-    match flashfile::load(path, &mut on_progress) {
+    let loaded = match destination {
+        Some(destination) => flashfile::load_into(path, destination, &mut on_progress),
+        None => flashfile::load(path, &mut on_progress),
+    };
+
+    match loaded {
         Ok(package) => {
             emit(PackageEvent::Log(format!(
                 "{}: {} steps",

@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = 부트로더가 초기화를 허용하지 않습니�
 factory-reset-refresh = 새로 고침
 
 flash-firmware-title = 펌웨어 플래시
+flash-multi-flashing-title = 멀티 플래싱
 flash-firmware-smartphone-button = 스마트폰
 flash-firmware-tablet-button = 태블릿
 firmware-flash-desc = fastboot 모드로 연결된 휴대폰에 전체 펌웨어 패키지를 플래시합니다. 펌웨어 ZIP 또는 flashfile.xml과 해당 이미지 파일을 선택하세요. 펌웨어가 덮어써지고 휴대폰의 모든 데이터가 지워집니다.
@@ -267,7 +268,7 @@ cn-latest-version = 최신 버전
 cn-id = 리소스 ID
 
 retcn-sn-label = 일련번호
-retcn-model-label = XT 모델 코드
+retcn-model-label = XT 코드
 retcn-fingerprint-label = 빌드 지문
 retcn-carrier-label = 통신사
 retcn-platform-label = 플랫폼
@@ -277,7 +278,7 @@ platform-qualcomm = 퀄컴
 platform-mediatek = 미디어텍 또는 유니소크
 sim-single = 싱글 SIM
 sim-dual = 듀얼 SIM
-retcn-error-model = XT 모델 코드를 입력하세요
+retcn-error-model = XT 코드를 입력하세요
 retcn-error-fingerprint = 빌드 지문을 입력하세요
 retcn-error-carrier = 통신사를 입력하세요
 retcn-error-sn = 일련번호를 입력하세요
@@ -539,19 +540,92 @@ pac-repack-col-size = 크기
 pac-repack-col-file = 파일 이름
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = 멀티 플래싱 모드 진입
-multi-flash-placeholder = 멀티 플래싱 모드는 아직 사용할 수 없습니다. 이곳에 조작 항목이 표시됩니다.
+flash-multi-flashing-button = 열기
+multi-flash-idle = 아직 플래싱 중인 기기가 없습니다.
 multi-flash-exit = 종료
 multi-flash-preset-manage = 프리셋 관리
-multi-flash-preset-add = 펌웨어 이미지 추가…
+multi-flash-preset-add = 추가
+multi-flash-preset-finish = 완료
 multi-flash-preset-empty = 아직 불러온 펌웨어 이미지가 없습니다.
 multi-flash-start = 시작
 multi-flash-stop = 중지
 multi-flash-close-prompt = 닫기 전에 작업을 중지하십시오.
 multi-flash-close-prompt-ok = 확인
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = 진행률
+multi-flash-col-current = 현재 진행률
+multi-flash-no-preset = 이 기기에 사용할 수 있는 프리셋이 없습니다
+multi-flash-device-finished = 완료
+multi-flash-device-failed = 실패: { $error }
+multi-flash-run-failed = 실행을 시작할 수 없습니다: { $error }
+multi-flash-still-flashing = { $count }대의 기기를 아직 플래싱 중입니다. 완료될 때까지 창을 닫지 마십시오.
+multi-flash-log-directory = 로그는 { $path }에 기록됩니다
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = 선택한 ZIP 아카이브는 유효한 펌웨어 패키지가 아닙니다(flashfile.xml이 없음)
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = 펌웨어 옵션
+multi-flash-options-reboot = 이 펌웨어가 끝나면 기기를 재부팅
+multi-flash-options-conditions = 플래시 조건
+multi-flash-options-default = 기본
+multi-flash-options-default-desc = 기기의 CID가 이 펌웨어와 일치할 때 플래시합니다. engineering 부트로더는 실제 CID 대신 0xDEAD를 보고하며, 이 경우에도 일치로 봅니다.
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = 엔지니어링 기기와 일치하지 않음
+multi-flash-options-custom = 사용자 지정
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = 추가
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = 프리셋
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = 중국 리테일
+cid-name-global = 글로벌
+cid-name-usa-lockdown = 미국 잠금
+cid-name-super = 슈퍼 CID
+cid-name-factory = 공장 CID
+cid-name-invalid = 유효하지 않음
+cid-name-unknown = 알 수 없음
+cid-name-korea-sk-kt = 한국 SK/KT
+cid-name-europe-apac-retail = 유럽/아시아태평양 리테일
+cid-name-us-retail = 미국 리테일
+cid-name-latam-retail = 라틴아메리카 리테일
+cid-name-unknown-deprecated = 알 수 없음(폐기)
+cid-name-canada-retail = 캐나다 리테일
+cid-name-google-developer = Google 개발자 에디션
+multi-flash-options-states = 부트로더 잠금 해제 상태
+multi-flash-options-incomplete = CID를 하나 이상 추가하고 잠금 해제 상태를 하나 이상 선택하세요.
+multi-flash-options-confirm = 확인
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = 압축 해제 위치
+multi-flash-options-extract-choose = 선택…
+multi-flash-options-extract-required = 이 펌웨어의 압축을 풀 폴더를 선택하세요.
+multi-flash-options-unpacking = 펌웨어 압축을 푸는 중…
+multi-flash-preset-reboot = 완료 후 재부팅
+multi-flash-preset-edit = 편집
+multi-flash-preset-remove = 삭제
+multi-flash-preset-codename = 코드명
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = 저장
+multi-flash-preset-load = 불러오기
+multi-flash-preset-saved = 프리셋을 { $path }에 저장했습니다.
+multi-flash-preset-loaded = { $path }에서 프리셋 { $count }개를 불러왔습니다.
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = 항목 { $count }개를 불러오지 못했습니다:
+multi-flash-preset-invalid = 이 파일은 LMN Flash가 저장한 프리셋 파일이 아닙니다.
+multi-flash-preset-newer = 이 프리셋 파일은 더 새로운 버전의 LMN Flash로 작성되었습니다(버전 { $version }).
+multi-flash-preset-failed = 프리셋 파일을 읽거나 쓸 수 없습니다: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = MD5 확인 건너뜀
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } 개의 프리셋이 같은 기기에 플래싱됩니다: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = ADB 무선 연결

@@ -242,14 +242,24 @@ impl FlashPackage {
     /// `u-boot-spl-16k`. On MediaTek the `dtbo` image is part of the
     /// bootloader, so the part classification depends on this.
     pub fn is_mediatek(&self) -> bool {
-        self.steps.iter().any(|step| match step {
-            FlashOp::Flash { partition, file, .. } => {
-                normalize_partition(partition) == "preloader"
-                    || file.to_ascii_lowercase().contains("preloader")
-            }
-            _ => false,
-        })
+        is_mediatek(&self.steps)
     }
+}
+
+/// Whether a step list belongs to a MediaTek package (see
+/// [`FlashPackage::is_mediatek`]).
+///
+/// The steps on their own are enough to tell, so the Multi Flashing preset
+/// list — which holds an identified package, not a loaded one — can classify
+/// its procedures the same way the single-device dialog does.
+pub fn is_mediatek(steps: &[FlashOp]) -> bool {
+    steps.iter().any(|step| match step {
+        FlashOp::Flash { partition, file, .. } => {
+            normalize_partition(partition) == "preloader"
+                || file.to_ascii_lowercase().contains("preloader")
+        }
+        _ => false,
+    })
 }
 
 /// What the `<header>` of a `flashfile.xml` declares.
@@ -435,6 +445,16 @@ fn children_named<'a, 'input>(
     node.children().find(|child| child.has_tag_name(name))
 }
 
+/// Whether `path` is a firmware ZIP archive rather than a `flashfile.xml`
+/// sitting next to its image files.
+///
+/// The extension decides, which is what both dialogs' file pickers filter for
+/// and what the Multi Flashing presets ask the user to unpack.
+pub fn is_zip(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+}
+
 /// The directory firmware packages are unpacked into. Everything inside it is
 /// disposable and is cleared before every extraction.
 pub fn work_directory() -> PathBuf {
@@ -499,8 +519,32 @@ impl From<&str> for LoadError {
 ///
 /// `on_progress` reports the ZIP extraction as `(bytes_written, total_bytes)`.
 /// The result carries the package directory the image files are read from.
+///
+/// A ZIP is unpacked into [`work_directory`], which is cleared first: use
+/// [`load_into`] to unpack it into a directory of the caller's own (a
+/// directory that must not be wiped, such as the one a Multi Flashing preset
+/// unpacks into).
 pub fn load(
     path: &Path,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<FlashPackage, LoadError> {
+    // Everything inside the work directory is disposable, so what an earlier
+    // run left there is dropped before this package is written.
+    cleanup_work_directory();
+
+    load_into(path, &work_directory(), on_progress)
+}
+
+/// Loads a package from `path`, unpacking a ZIP archive into `destination`.
+///
+/// A `flashfile.xml` (a package that is already unpacked next to its image
+/// files) is read where it lies and ignores `destination`.
+///
+/// The archive is checked for a `flashfile.xml` before anything is written, so
+/// a file that is not a firmware package never costs an extraction.
+pub fn load_into(
+    path: &Path,
+    destination: &Path,
     on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<FlashPackage, LoadError> {
     if path.is_dir() {
@@ -511,38 +555,44 @@ pub fn load(
         return Err(format!("{} does not exist", path.display()).into());
     }
 
-    let is_zip = path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"));
-
-    let directory = if is_zip {
+    let (directory, flashfile) = if is_zip(path) {
         // A ZIP without a `flashfile.xml` is not a firmware package. Saying so
         // here means a file that was picked by mistake never gets unpacked
         // (a factory package is several gigabytes of images), and the dialog
         // reports it as invalid instead of failing halfway through.
-        if !zip_has_flashfile(path)? {
+        let Some(name) = zip_flashfile_name(path)? else {
             return Err(LoadError::NotAPackage);
-        }
+        };
 
-        let destination = work_directory();
-        cleanup_work_directory();
-        std::fs::create_dir_all(&destination)
+        std::fs::create_dir_all(destination)
             .map_err(|error| format!("could not create {}: {error}", destination.display()))?;
 
-        extract_zip(path, &destination, on_progress)?;
-        destination
-    } else {
-        path.parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."))
-    };
+        extract_zip(path, destination, on_progress)?;
 
-    let flashfile = if is_zip {
-        find_flashfile(&directory).ok_or_else(|| {
-            "no flashfile.xml found in the selected ZIP archive".to_owned()
-        })?
+        // The file the archive itself brought, not whatever a search finds
+        // first: a preset unpacks into a folder of the user's own, which may
+        // already hold an older package that must not be read in its place.
+        let flashfile = find_flashfile(destination)
+            .filter(|found| found.ends_with(&name))
+            .or_else(|| {
+                let extracted = destination.join(&name);
+                extracted.is_file().then_some(extracted)
+            })
+            .ok_or_else(|| "no flashfile.xml found in the selected ZIP archive".to_owned())?;
+
+        let directory = flashfile
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| destination.to_path_buf());
+
+        (directory, flashfile)
     } else {
-        path.to_path_buf()
+        let directory = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        (directory, path.to_path_buf())
     };
 
     let xml = read_flashfile(&flashfile)?;
@@ -553,11 +603,6 @@ pub fn load(
     // calibration or carrier data) are dropped before anything can flash or
     // even show them.
     let (steps, ignored_partitions) = without_ignored_steps(steps);
-
-    let directory = flashfile
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| directory.clone());
 
     // The CID is declared by the flashfile, or embedded in the `vbmeta` image
     // when it does not declare one; the project code only ever comes from that
@@ -581,6 +626,110 @@ pub fn load(
     })
 }
 
+/// What a package says about itself, read without unpacking its images.
+///
+/// [`load`] has to write every image of a package out before it can be read,
+/// which costs gigabytes; the Multi Flashing preset list wants this for every
+/// entry it holds, so [`identify`] reads only the files the answer lives in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageIdentity {
+    pub model: Option<String>,
+    pub software_version: Option<String>,
+    /// The CID the package is made for: the one its flashfile declares, or the
+    /// one encoded in its `vbmeta` image.
+    pub cid: Option<String>,
+    /// The device codename the package is for (`arcfox` of `arcfox_50`).
+    pub codename: Option<String>,
+    /// The procedures the package runs, in document order, with the steps of
+    /// ignored partitions already dropped — exactly what a checklist may
+    /// offer (and what [`load`] would flash).
+    pub steps: Vec<FlashOp>,
+    /// The partitions those dropped steps would have written.
+    pub ignored_partitions: Vec<String>,
+}
+
+/// Reads what a package says about itself without unpacking it.
+///
+/// A ZIP is only looked into — its `flashfile.xml` and the `vbmeta` image that
+/// file names are read straight out of the archive — so this stays fast
+/// whatever the size of the package. A file that is no package at all fails
+/// exactly as [`load`] would.
+pub fn identify(path: &Path) -> Result<PackageIdentity, LoadError> {
+    if path.is_dir() {
+        return Err("select the firmware ZIP or its flashfile.xml, not a directory".into());
+    }
+
+    if !path.is_file() {
+        return Err(format!("{} does not exist", path.display()).into());
+    }
+
+    let is_zip = is_zip(path);
+
+    // A `flashfile.xml` next to its images: the images are read from that
+    // directory, exactly as `load` reads them after unpacking a ZIP.
+    if !is_zip {
+        let directory = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let xml = read_flashfile(path)?;
+        let (header, steps) =
+            parse(&xml).map_err(|error| format!("{}: {error}", path.display()))?;
+
+        return Ok(identity_from(
+            header,
+            vbmeta_identifier(&directory, &steps),
+            steps,
+        ));
+    }
+
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|error| format!("{} is not a readable ZIP archive: {error}", path.display()))?;
+
+    // The same depth `find_flashfile` searches, so a package this refuses is
+    // one `load` could not have read either.
+    let bytes = zip_read_named(&mut zip, "flashfile.xml", Some(FINDFILE_DEPTH))?
+        .ok_or(LoadError::NotAPackage)?;
+    let xml = decode_flashfile(&bytes, path)?;
+    let (header, steps) = parse(&xml).map_err(|error| format!("{}: {error}", path.display()))?;
+
+    // A package whose `vbmeta` is missing (or carries no marker) simply has no
+    // codename; that is not a failure.
+    let identifier = vbmeta_name(&steps)
+        .map(|name| zip_read_named(&mut zip, &name, None))
+        .transpose()?
+        .flatten()
+        .and_then(|bytes| identifier_in_bytes(&bytes));
+
+    Ok(identity_from(header, identifier, steps))
+}
+
+/// What the dialog shows, from a parsed header and the `vbmeta` identifier.
+fn identity_from(
+    header: FlashHeader,
+    identifier: Option<String>,
+    steps: Vec<FlashOp>,
+) -> PackageIdentity {
+    let cid = header
+        .cid
+        .or_else(|| identifier.as_deref().and_then(cid_from_project_code));
+
+    // Steps a package must not run are dropped here as well, so the checklist
+    // a preset offers is exactly what a run would do.
+    let (steps, ignored_partitions) = without_ignored_steps(steps);
+
+    PackageIdentity {
+        model: header.model,
+        software_version: header.software_version,
+        cid,
+        codename: identifier.as_deref().and_then(project_codename),
+        steps,
+        ignored_partitions,
+    }
+}
+
 /// The project code a package reports: the codename in front of the CID
 /// (`arcfox` of `arcfox_50`).
 fn project_codename(identifier: &str) -> Option<String> {
@@ -597,6 +746,11 @@ fn cid_from_project_code(identifier: &str) -> Option<String> {
     value.parse::<u32>().ok().map(format_cid)
 }
 
+/// How much of a `vbmeta` image (or of any other file read out of a ZIP) is
+/// taken. `vbmeta` is a few hundred KiB; the cap only keeps a mis-declared
+/// `filename` from pulling in a huge file.
+const MAX_SCAN: u64 = 8 << 20;
+
 /// Reads the identifier out of the package's `vbmeta` image.
 ///
 /// The image carries the code Motorola puts in `vbmeta` as plain text,
@@ -607,11 +761,6 @@ fn cid_from_project_code(identifier: &str) -> Option<String> {
 /// A package without a `vbmeta` image (or with one that carries no marker) has
 /// no identifier: that is not a failure, the dialog just has nothing to show.
 fn vbmeta_identifier(directory: &Path, steps: &[FlashOp]) -> Option<String> {
-    /// How much of the image is searched. `vbmeta` is a few hundred KiB; the
-    /// cap only keeps a mis-declared `filename` from pulling in a huge file.
-    const MAX_SCAN: u64 = 8 << 20;
-    const MAGIC: &[u8] = b"HAB_META";
-
     let path = vbmeta_file(directory, steps)?;
 
     let mut bytes = Vec::new();
@@ -620,6 +769,16 @@ fn vbmeta_identifier(directory: &Path, steps: &[FlashOp]) -> Option<String> {
         .take(MAX_SCAN)
         .read_to_end(&mut bytes)
         .ok()?;
+
+    identifier_in_bytes(&bytes)
+}
+
+/// Finds the `<codename>_<cid>` identifier a `vbmeta` image carries.
+///
+/// The marker can appear more than once (and the bare byte sequence can appear
+/// by chance), so every occurrence is tried until one parses.
+fn identifier_in_bytes(bytes: &[u8]) -> Option<String> {
+    const MAGIC: &[u8] = b"HAB_META";
 
     let mut search_from = 0;
 
@@ -662,15 +821,20 @@ fn identifier_after_marker(rest: &[u8]) -> Option<String> {
     Some(identifier)
 }
 
+/// The `vbmeta` image file a package's steps name, if any.
+fn vbmeta_name(steps: &[FlashOp]) -> Option<String> {
+    steps.iter().find_map(|step| match step {
+        FlashOp::Flash {
+            partition, file, ..
+        } if normalize_partition(partition) == "vbmeta" => Some(file.clone()),
+        _ => None,
+    })
+}
+
 /// The `vbmeta` image of the package: the file its `flash` step names, or a
 /// plain `vbmeta.img` next to the flashfile.
 fn vbmeta_file(directory: &Path, steps: &[FlashOp]) -> Option<PathBuf> {
-    let named = steps.iter().find_map(|step| match step {
-        FlashOp::Flash {
-            partition, file, ..
-        } if normalize_partition(partition) == "vbmeta" => Some(directory.join(file)),
-        _ => None,
-    });
+    let named = vbmeta_name(steps).map(|name| directory.join(name));
 
     match named {
         Some(path) if path.is_file() => Some(path),
@@ -683,7 +847,10 @@ fn vbmeta_file(directory: &Path, steps: &[FlashOp]) -> Option<PathBuf> {
 
 /// Whether a device CID accepts firmware from any region: `0x0000` is the
 /// super CID and `0x00FF` the factory super CID (`reference/M_cid.md`).
-fn cid_allows_any_region(cid: &str) -> bool {
+///
+/// The Multi Flashing conflict check asks the same question about the CIDs it
+/// compares, which is why this is reachable outside the module.
+pub(crate) fn cid_allows_any_region(cid: &str) -> bool {
     matches!(cid.to_ascii_uppercase().as_str(), "0X0000" | "0X00FF")
 }
 
@@ -750,6 +917,12 @@ fn read_flashfile(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
 
+    decode_flashfile(&bytes, path)
+}
+
+/// Decodes the bytes of a `flashfile.xml`, wherever they were read from (the
+/// file itself, or the ZIP archive that holds it).
+fn decode_flashfile(bytes: &[u8], path: &Path) -> Result<String, String> {
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
         if bytes.len() % 2 != 0 {
             return Err(format!("{} is not a valid UTF-16 file", path.display()));
@@ -771,9 +944,13 @@ fn read_flashfile(path: &Path) -> Result<String, String> {
             .map_err(|error| format!("{} is not valid UTF-16 text: {error}", path.display()));
     }
 
-    String::from_utf8(bytes)
+    String::from_utf8(bytes.to_vec())
         .map_err(|error| format!("{} is not valid UTF-8 text: {error}", path.display()))
 }
+
+/// How many directory levels a package's `flashfile.xml` may sit under, both
+/// when it is looked for on disk and when it is looked for in a ZIP.
+const FINDFILE_DEPTH: usize = 3;
 
 /// Finds the `flashfile.xml` of an extracted package: at the root of the
 /// archive, or a few directory levels down (some packages wrap everything in
@@ -812,18 +989,66 @@ pub fn find_flashfile(directory: &Path) -> Option<PathBuf> {
         None
     }
 
-    search(directory, 3)
+    search(directory, FINDFILE_DEPTH)
 }
 
-/// Whether a ZIP archive holds a `flashfile.xml`, at the same depth
-/// [`find_flashfile`] searches.
+/// Reads one file out of a ZIP archive by name, without unpacking the rest.
+///
+/// The name is matched against the entry's whole path and against its file
+/// name, so a file the flashfile names (`images/vbmeta.img`) is found either
+/// way. `max_parents` limits how many directories it may sit under: the
+/// package's `flashfile.xml` keeps to [`FINDFILE_DEPTH`], the depth
+/// [`find_flashfile`] searches; a file the flashfile itself names takes any
+/// directory.
+fn zip_read_named(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    name: &str,
+    max_parents: Option<usize>,
+) -> Result<Option<Vec<u8>>, String> {
+    for index in 0..zip.len() {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|error| format!("could not read entry #{index}: {error}"))?;
+
+        // The name as the archive spells it, e.g. `XT2451/arcfox/flashfile.xml`.
+        let path = entry.name().replace('\\', "/");
+        let file_name = path.rsplit('/').next().unwrap_or(&path);
+        let parents = path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .count()
+            .saturating_sub(1);
+
+        let matches = (path.eq_ignore_ascii_case(name) || file_name.eq_ignore_ascii_case(name))
+            && max_parents.is_none_or(|max| parents <= max);
+
+        if !matches {
+            continue;
+        }
+
+        let mut bytes = Vec::new();
+        entry
+            .by_ref()
+            .take(MAX_SCAN)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("could not read {path}: {error}"))?;
+
+        return Ok(Some(bytes));
+    }
+
+    Ok(None)
+}
+
+/// The name of the `flashfile.xml` a ZIP archive holds, at the same depth
+/// [`find_flashfile`] searches; `None` when the archive holds none.
 ///
 /// This runs before the archive is unpacked, so a file that is not a firmware
-/// package is rejected without writing anything to disk.
-fn zip_has_flashfile(archive: &Path) -> Result<bool, String> {
+/// package is rejected without writing anything to disk. The name it returns
+/// is also how [`load_into`] finds the file the archive brought.
+fn zip_flashfile_name(archive: &Path) -> Result<Option<String>, String> {
     /// Directory levels [`find_flashfile`] searches; the two have to agree,
     /// or a package would pass this check only to fail that search.
-    const DEPTH: usize = 3;
+    const DEPTH: usize = FINDFILE_DEPTH;
 
     let file = std::fs::File::open(archive)
         .map_err(|error| format!("could not open {}: {error}", archive.display()))?;
@@ -846,11 +1071,11 @@ fn zip_has_flashfile(archive: &Path) -> Result<bool, String> {
         };
 
         if parts.len() <= DEPTH && file_name.eq_ignore_ascii_case("flashfile.xml") {
-            return Ok(true);
+            return Ok(Some(name));
         }
     }
 
-    Ok(false)
+    Ok(None)
 }
 
 /// Extracts every file of a ZIP archive into `destination`.
@@ -1405,8 +1630,9 @@ mod tests {
         );
     }
 
-    /// A ZIP archive built in memory.
-    fn zip_archive(entries: &[(&str, &str)]) -> Vec<u8> {
+    /// A ZIP archive built in memory out of raw entries (a `vbmeta` image is
+    /// not text).
+    fn zip_archive_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
         use std::io::Write;
 
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -1415,18 +1641,29 @@ mod tests {
             writer
                 .start_file(*name, zip::write::SimpleFileOptions::default())
                 .unwrap();
-            writer.write_all(contents.as_bytes()).unwrap();
+            writer.write_all(contents).unwrap();
         }
 
         writer.finish().unwrap().into_inner()
     }
 
     /// Writes such an archive into a file of its own.
-    fn zip_file(name: &str, entries: &[(&str, &str)]) -> PathBuf {
+    fn zip_file_bytes(name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
         let path = std::env::temp_dir().join(format!("lmnflash-flashfile-{name}.zip"));
-        std::fs::write(&path, zip_archive(entries)).unwrap();
+        std::fs::write(&path, zip_archive_bytes(entries)).unwrap();
 
         path
+    }
+
+    /// The same for an archive of text entries.
+    fn zip_file(name: &str, entries: &[(&str, &str)]) -> PathBuf {
+        zip_file_bytes(
+            name,
+            &entries
+                .iter()
+                .map(|(name, contents)| (*name, contents.as_bytes()))
+                .collect::<Vec<_>>(),
+        )
     }
 
     #[test]
@@ -1436,7 +1673,7 @@ mod tests {
             &[("gpt.bin", "binary"), ("boot.img", "binary")],
         );
 
-        assert!(!zip_has_flashfile(&path).unwrap());
+        assert!(zip_flashfile_name(&path).unwrap().is_none());
         // The package is rejected before anything is unpacked, and with the
         // error the dialog knows to translate rather than print.
         assert!(matches!(
@@ -1450,17 +1687,21 @@ mod tests {
     #[test]
     fn a_zip_with_a_flashfile_passes_the_pre_check() {
         let root = zip_file("flashfile-root", &[("flashfile.xml", "xml")]);
-        assert!(zip_has_flashfile(&root).unwrap());
+        assert_eq!(zip_flashfile_name(&root).unwrap().as_deref(), Some("flashfile.xml"));
         let _ = std::fs::remove_file(&root);
 
-        // A factory package wraps everything in a per-model folder.
+        // A factory package wraps everything in a per-model folder, and the
+        // name the check reports is the one the loader reads afterwards.
         let nested = zip_file("flashfile-nested", &[("XT2451/arcfox/flashfile.xml", "xml")]);
-        assert!(zip_has_flashfile(&nested).unwrap());
+        assert_eq!(
+            zip_flashfile_name(&nested).unwrap().as_deref(),
+            Some("XT2451/arcfox/flashfile.xml")
+        );
         let _ = std::fs::remove_file(&nested);
 
         // The name is matched without regard to case, like `find_flashfile`.
         let upper = zip_file("flashfile-upper", &[("FLASHFILE.XML", "xml")]);
-        assert!(zip_has_flashfile(&upper).unwrap());
+        assert!(zip_flashfile_name(&upper).unwrap().is_some());
         let _ = std::fs::remove_file(&upper);
     }
 
@@ -1470,11 +1711,128 @@ mod tests {
         // check has to agree with it: a package it cannot find would otherwise
         // be unpacked and then reported as having no flashfile after all.
         let found = zip_file("flashfile-at-depth", &[("a/b/c/flashfile.xml", "xml")]);
-        assert!(zip_has_flashfile(&found).unwrap());
+        assert!(zip_flashfile_name(&found).unwrap().is_some());
         let _ = std::fs::remove_file(&found);
 
         let too_deep = zip_file("flashfile-too-deep", &[("a/b/c/d/flashfile.xml", "xml")]);
-        assert!(!zip_has_flashfile(&too_deep).unwrap());
+        assert!(zip_flashfile_name(&too_deep).unwrap().is_none());
         let _ = std::fs::remove_file(&too_deep);
+    }
+
+    /// A package can be unpacked into a directory of the caller's own — a
+    /// Multi Flashing preset unpacks into a folder the user picked — which is
+    /// NOT cleared, and the package read afterwards is the one that was just
+    /// unpacked even when the folder holds an older one.
+    #[test]
+    fn a_package_can_be_unpacked_into_a_chosen_directory() {
+        let directory = std::env::temp_dir().join("lmnflash-load-into");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        // What an earlier extraction (or the user) left behind: a flashfile a
+        // search would find before the nested one of this package.
+        std::fs::write(directory.join("flashfile.xml"), "<flashing/>").unwrap();
+        std::fs::write(directory.join("keep.txt"), "keep").unwrap();
+
+        let archive = zip_file(
+            "load-into",
+            &[
+                (
+                    "XT2451/arcfox/flashfile.xml",
+                    r#"<flashing><header><phone_model model="arcfox"/></header><steps>
+                       <step operation="flash" partition="boot" filename="boot.img"/>
+                       </steps></flashing>"#,
+                ),
+                ("XT2451/arcfox/boot.img", "boot"),
+            ],
+        );
+
+        let package = load_into(&archive, &directory, &mut |_, _| {}).unwrap();
+
+        // The file the archive brought is the one that was read …
+        assert_eq!(package.directory, directory.join("XT2451/arcfox"));
+        assert_eq!(package.steps.len(), 1);
+        assert_eq!(package.model.as_deref(), Some("arcfox"));
+        // … and nothing of the user's own folder was touched.
+        assert!(directory.join("keep.txt").is_file());
+        assert!(directory.join("flashfile.xml").is_file());
+
+        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A `vbmeta` image carrying the marker the way a real one does
+    /// (`HAB_META\0arcfox_50\0`, see `reference/M_cid.md`).
+    fn vbmeta_image(code: &str) -> Vec<u8> {
+        let mut bytes = b"HAB_META\0".to_vec();
+        bytes.extend_from_slice(code.as_bytes());
+        bytes.push(0);
+        // A real image is a few hundred KiB of padding; only the marker reads.
+        bytes.resize(4096, 0);
+
+        bytes
+    }
+
+    /// A flashfile whose steps name a `vbmeta` image, so the identifier can be
+    /// read out of it.
+    const SAMPLE_WITH_VBMETA: &str = r#"<flashing>
+  <header>
+    <phone_model model="SM8650_ARCFOX_IFLASH"/>
+    <software_version version="arcfox_factory-userdebug 14 U3UX34.30-F.15"/>
+  </header>
+  <steps>
+    <step operation="flash" partition="vbmeta" filename="vbmeta.img"/>
+    <step operation="erase" partition="userdata"/>
+  </steps>
+</flashing>"#;
+
+    #[test]
+    fn a_zip_package_is_identified_without_unpacking_it() {
+        // Only the flashfile and the `vbmeta` image are read: the images
+        // themselves are not even in the archive.
+        let path = zip_file_bytes(
+            "identify",
+            &[
+                ("arcfox/flashfile.xml", SAMPLE_WITH_VBMETA.as_bytes()),
+                ("arcfox/vbmeta.img", vbmeta_image("arcfox_50").as_slice()),
+            ],
+        );
+
+        let identity = identify(&path).unwrap();
+
+        assert_eq!(identity.model.as_deref(), Some("SM8650_ARCFOX_IFLASH"));
+        assert_eq!(identity.codename.as_deref(), Some("arcfox"));
+        assert_eq!(identity.cid.as_deref(), Some("0x0032"));
+        // The steps come back too, so a preset can offer the checklist.
+        assert_eq!(identity.steps.len(), 2);
+        assert_eq!(identity.steps[1].describe(), "erase userdata");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unpacked_package_is_identified_too() {
+        let directory = std::env::temp_dir().join("lmnflash-flashfile-identify");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        std::fs::write(directory.join("flashfile.xml"), SAMPLE_WITH_VBMETA).unwrap();
+        std::fs::write(directory.join("vbmeta.img"), vbmeta_image("arcfox_50")).unwrap();
+
+        let identity = identify(&directory.join("flashfile.xml")).unwrap();
+
+        assert_eq!(identity.codename.as_deref(), Some("arcfox"));
+        assert_eq!(identity.cid.as_deref(), Some("0x0032"));
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn identifying_a_zip_without_a_flashfile_fails() {
+        let path = zip_file("identify-no-flashfile", &[("gpt.bin", "binary")]);
+
+        assert!(matches!(identify(&path), Err(LoadError::NotAPackage)));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

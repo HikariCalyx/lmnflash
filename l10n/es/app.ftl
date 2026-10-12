@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = El bootloader no permite el restablecimiento de fáb
 factory-reset-refresh = Actualizar
 
 flash-firmware-title = Flashear firmware
+flash-multi-flashing-title = Multiflash
 flash-firmware-smartphone-button = Smartphone
 flash-firmware-tablet-button = Tableta
 firmware-flash-desc = Flashea un paquete de firmware completo en un teléfono conectado en modo fastboot. Selecciona el ZIP del firmware, o el flashfile.xml junto con sus archivos de imagen. Esto sobrescribe el firmware y borra todos los datos del teléfono.
@@ -267,7 +268,7 @@ cn-latest-version = Última versión
 cn-id = ID de recurso
 
 retcn-sn-label = Número de serie
-retcn-model-label = Código de modelo XT
+retcn-model-label = Código XT
 retcn-fingerprint-label = Huella de compilación
 retcn-carrier-label = Operador
 retcn-platform-label = Plataforma
@@ -277,7 +278,7 @@ platform-qualcomm = Qualcomm
 platform-mediatek = MediaTek o Unisoc
 sim-single = SIM única
 sim-dual = SIM doble
-retcn-error-model = Se requiere el código de modelo XT
+retcn-error-model = Se requiere el código XT
 retcn-error-fingerprint = Se requiere la huella de compilación
 retcn-error-carrier = Se requiere el operador
 retcn-error-sn = Se requiere el número de serie
@@ -539,19 +540,92 @@ pac-repack-col-size = Tamaño
 pac-repack-col-file = Nombre de archivo
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = Entrar en modo multiflash
-multi-flash-placeholder = El modo multiflash aún no está disponible. Sus controles aparecerán aquí.
+flash-multi-flashing-button = Abrir
+multi-flash-idle = Todavía no se está flasheando ningún dispositivo.
 multi-flash-exit = Salir
 multi-flash-preset-manage = Gestionar preajustes
-multi-flash-preset-add = Añadir imagen de firmware…
+multi-flash-preset-add = Añadir
+multi-flash-preset-finish = Finalizar
 multi-flash-preset-empty = Aún no se ha cargado ninguna imagen de firmware.
 multi-flash-start = Iniciar
 multi-flash-stop = Detener
 multi-flash-close-prompt = Detén la operación antes de cerrar.
 multi-flash-close-prompt-ok = Aceptar
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = Progreso
+multi-flash-col-current = Progreso actual
+multi-flash-no-preset = No hay preajustes disponibles para este dispositivo
+multi-flash-device-finished = Completado
+multi-flash-device-failed = Error: { $error }
+multi-flash-run-failed = No se pudo iniciar la operación: { $error }
+multi-flash-still-flashing = Se siguen flasheando { $count } dispositivos. No cierres la ventana hasta que terminen.
+multi-flash-log-directory = Los registros se escriben en { $path }
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = El archivo ZIP seleccionado no es un paquete de firmware válido (no contiene flashfile.xml)
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = Opciones de firmware
+multi-flash-options-reboot = Reiniciar el dispositivo al terminar este firmware
+multi-flash-options-conditions = Condiciones de flasheo
+multi-flash-options-default = Predeterminado
+multi-flash-options-default-desc = Flashea cuando el CID del dispositivo coincida con este firmware. Un bootloader de ingeniería informa 0xDEAD en lugar de un CID real y también coincide.
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = No coincidir con unidades de ingeniería
+multi-flash-options-custom = Personalizado
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = Añadir
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = Preajuste
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = Minorista China
+cid-name-global = Global
+cid-name-usa-lockdown = Bloqueo EE. UU.
+cid-name-super = SuperCID
+cid-name-factory = FactoryCID
+cid-name-invalid = No válido
+cid-name-unknown = Desconocido
+cid-name-korea-sk-kt = Corea SK/KT
+cid-name-europe-apac-retail = Minorista Europa/Asia-Pacífico
+cid-name-us-retail = Minorista EE. UU.
+cid-name-latam-retail = Minorista Latinoamérica
+cid-name-unknown-deprecated = Desconocido (obsoleto)
+cid-name-canada-retail = Minorista Canadá
+cid-name-google-developer = Edición para desarrolladores de Google
+multi-flash-options-states = Estado de desbloqueo del bootloader
+multi-flash-options-incomplete = Añade al menos un CID y elige al menos un estado de desbloqueo.
+multi-flash-options-confirm = Confirmar
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = Extraer en
+multi-flash-options-extract-choose = Elegir…
+multi-flash-options-extract-required = Elige una carpeta en la que extraer este firmware.
+multi-flash-options-unpacking = Extrayendo el firmware…
+multi-flash-preset-reboot = Reiniciar al terminar
+multi-flash-preset-edit = Editar
+multi-flash-preset-remove = Quitar
+multi-flash-preset-codename = Nombre en clave
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = Guardar
+multi-flash-preset-load = Cargar
+multi-flash-preset-saved = Preajustes guardados en { $path }.
+multi-flash-preset-loaded = Se cargaron { $count } preajustes desde { $path }.
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = No se pudieron cargar { $count } entradas:
+multi-flash-preset-invalid = Este archivo no es un archivo de preajustes guardado por LMN Flash.
+multi-flash-preset-newer = Este archivo de preajustes fue escrito por una versión más reciente de LMN Flash (versión { $version }).
+multi-flash-preset-failed = No se pudo leer ni escribir el archivo de preajustes: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = Comprobación de MD5 omitida
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } preajustes grabarían el mismo teléfono: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = Conectar depuración inalámbrica ADB

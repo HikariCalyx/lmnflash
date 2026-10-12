@@ -112,6 +112,66 @@ fn is_motorola(variables: &HashMap<String, String>) -> bool {
         .is_some_and(|value| !value.trim().is_empty())
 }
 
+/// What a Multi Flashing session has to know about a device it just found.
+///
+/// It is read in one connection and one `getvar all`, which reports all of it:
+/// a session looks at the bus every second, so the identity of a device is read
+/// once, when it appears, rather than polled.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceFacts {
+    /// XT model code (`sku`), e.g. `XT2451-2`.
+    pub xt_code: Option<String>,
+    /// Carrier/region code (`cid`), normalized (`0x0032`). A device that does
+    /// not report one is not a Motorola phone (see
+    /// [`DeviceFacts::is_motorola`]).
+    pub cid: Option<String>,
+    /// Bootloader unlock state, as the bootloader spells it (`flashing_unlocked`
+    /// …). Kept raw: what it is put into is a log line.
+    pub securestate: Option<String>,
+    /// Project codename (`product`), e.g. `arcfox`.
+    pub product: Option<String>,
+}
+
+impl DeviceFacts {
+    /// Whether this is a device the app supports.
+    pub fn is_motorola(&self) -> bool {
+        self.cid.is_some()
+    }
+
+    /// The unlock state, parsed: what decides whether a preset may be flashed
+    /// to it. A bootloader that reports a state this app does not know counts
+    /// as unknown, which only a custom condition can accept.
+    pub fn state(&self) -> Option<SecureState> {
+        self.securestate.as_deref().and_then(SecureState::parse)
+    }
+}
+
+/// Reads what a Multi Flashing session needs from one device.
+///
+/// A device that answers at all is reported; whether the app supports it is
+/// what [`DeviceFacts::is_motorola`] says.
+pub fn read_device_facts(serial: &str) -> Result<DeviceFacts, String> {
+    let device = fastboot::FastbootDevice::connect(serial)?;
+    let variables = parse_getvar_all(&device.getvar_all()?);
+
+    // An empty value is a value the bootloader does not have: it is reported as
+    // the empty string it sent, which is not an identity.
+    let read = |name: &str| -> Option<String> {
+        let value = variables.get(name)?.trim();
+
+        (!value.is_empty()).then(|| value.to_owned())
+    };
+
+    Ok(DeviceFacts {
+        xt_code: read("sku"),
+        // Normalized so it can be compared with the CID of a firmware package,
+        // which is read from a `flashfile.xml` in the same form.
+        cid: read("cid").map(|cid| crate::flashfile::normalize_cid(&cid)),
+        securestate: read("securestate"),
+        product: read("product"),
+    })
+}
+
 /// Connects to the fastboot device with the given serial and reads its
 /// variables, returning the values mapped onto the RETCN form.
 pub fn read_device_info(serial: &str) -> Result<DeviceInfo, String> {
@@ -654,6 +714,19 @@ impl SecureState {
             "flashing_locked" => Some(Self::Relocked),
             "engineering" => Some(Self::Engineering),
             _ => None,
+        }
+    }
+
+    /// The value a bootloader reports for this state (`oem_locked`, …).
+    ///
+    /// It is also the spelling a saved Multi Flashing preset stores, so such a
+    /// file stays readable without knowing this program's internals.
+    pub fn raw(self) -> &'static str {
+        match self {
+            Self::Locked => "oem_locked",
+            Self::Unlocked => "flashing_unlocked",
+            Self::Relocked => "flashing_locked",
+            Self::Engineering => "engineering",
         }
     }
 

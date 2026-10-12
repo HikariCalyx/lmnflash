@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = ブートローダーがリセットを許可して�
 factory-reset-refresh = 更新
 
 flash-firmware-title = ファームウェアの書き込み
+flash-multi-flashing-title = マルチフラッシュ
 flash-firmware-smartphone-button = スマホ
 flash-firmware-tablet-button = タブレット
 firmware-flash-desc = fastboot モードで接続した端末に、完全なファームウェアパッケージを書き込みます。ファームウェアの ZIP、または flashfile.xml とそのイメージファイルを選択してください。ファームウェアは上書きされ、端末内のすべてのデータが消去されます。
@@ -267,7 +268,7 @@ cn-latest-version = 最新バージョン
 cn-id = リソース ID
 
 retcn-sn-label = シリアル番号
-retcn-model-label = XT モデル コード
+retcn-model-label = XT コード
 retcn-fingerprint-label = ビルド フィンガープリント
 retcn-carrier-label = 通信事業者
 retcn-platform-label = プラットフォーム
@@ -277,7 +278,7 @@ platform-qualcomm = クアルコム
 platform-mediatek = メディアテック または ユニソック
 sim-single = シングル SIM
 sim-dual = デュアル SIM
-retcn-error-model = XT モデル コードを入力してください
+retcn-error-model = XT コードを入力してください
 retcn-error-fingerprint = ビルド フィンガープリントを入力してください
 retcn-error-carrier = 通信事業者を入力してください
 retcn-error-sn = シリアル番号を入力してください
@@ -539,19 +540,92 @@ pac-repack-col-size = サイズ
 pac-repack-col-file = ファイル名
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = マルチフラッシュモードに入る
-multi-flash-placeholder = マルチフラッシュモードはまだ利用できません。ここに操作項目が表示されます。
+flash-multi-flashing-button = 開く
+multi-flash-idle = まだどの端末も書き込み中ではありません。
 multi-flash-exit = 終了
 multi-flash-preset-manage = プリセット管理
-multi-flash-preset-add = ファームウェアイメージを追加…
+multi-flash-preset-add = 追加
+multi-flash-preset-finish = 完了
 multi-flash-preset-empty = ファームウェアイメージがまだ読み込まれていません。
 multi-flash-start = 開始
 multi-flash-stop = 停止
 multi-flash-close-prompt = 閉じる前に操作を停止してください。
 multi-flash-close-prompt-ok = OK
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = 進行状況
+multi-flash-col-current = 現在の進行状況
+multi-flash-no-preset = この端末に使用できるプリセットがありません
+multi-flash-device-finished = 完了
+multi-flash-device-failed = 失敗: { $error }
+multi-flash-run-failed = 実行を開始できませんでした: { $error }
+multi-flash-still-flashing = { $count } 台の端末をまだ書き込み中です。完了するまでウィンドウを閉じないでください。
+multi-flash-log-directory = ログは { $path } に書き込まれます
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = 選択した ZIP アーカイブは有効なファームウェアパッケージではありません（flashfile.xml が含まれていません）
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = ファームウェアオプション
+multi-flash-options-reboot = このファームウェアの完了後に端末を再起動する
+multi-flash-options-conditions = 書き込み条件
+multi-flash-options-default = 既定
+multi-flash-options-default-desc = 端末の CID がこのファームウェアと一致する場合に書き込みます。engineering ブートローダーは実際の CID の代わりに 0xDEAD を報告しますが、これも一致とみなします。
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = エンジニアリング端末に一致させない
+multi-flash-options-custom = カスタム
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = 追加
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = プリセット
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = 中国小売
+cid-name-global = グローバル
+cid-name-usa-lockdown = 米国ロックダウン
+cid-name-super = スーパーCID
+cid-name-factory = 工場CID
+cid-name-invalid = 無効
+cid-name-unknown = 不明
+cid-name-korea-sk-kt = 韓国 SK/KT
+cid-name-europe-apac-retail = 欧州/アジア太平洋 小売
+cid-name-us-retail = 米国小売
+cid-name-latam-retail = 中南米小売
+cid-name-unknown-deprecated = 不明（廃止）
+cid-name-canada-retail = カナダ小売
+cid-name-google-developer = Google 開発者版
+multi-flash-options-states = ブートローダーのロック解除状態
+multi-flash-options-incomplete = CID を1つ以上追加し、ロック解除状態を1つ以上選択してください。
+multi-flash-options-confirm = 確定
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = 展開先
+multi-flash-options-extract-choose = 選択…
+multi-flash-options-extract-required = このファームウェアを展開するフォルダーを選択してください。
+multi-flash-options-unpacking = ファームウェアを展開しています…
+multi-flash-preset-reboot = 完了後に再起動
+multi-flash-preset-edit = 編集
+multi-flash-preset-remove = 削除
+multi-flash-preset-codename = コードネーム
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = 保存
+multi-flash-preset-load = 読み込み
+multi-flash-preset-saved = プリセットを { $path } に保存しました。
+multi-flash-preset-loaded = { $path } から { $count } 件のプリセットを読み込みました。
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = { $count } 件の項目を読み込めませんでした:
+multi-flash-preset-invalid = このファイルは LMN Flash が保存したプリセットファイルではありません。
+multi-flash-preset-newer = このプリセットファイルは、より新しいバージョンの LMN Flash で作成されています（バージョン { $version }）。
+multi-flash-preset-failed = プリセットファイルを読み書きできませんでした: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = MD5 チェックをスキップ
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } 個のプリセットが同じ端末に書き込まれます: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = ADB ワイヤレス接続

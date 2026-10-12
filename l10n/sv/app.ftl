@@ -92,6 +92,7 @@ factory-reset-blocked-fdr = Bootloadern tillåter inte fabriksåterställning. S
 factory-reset-refresh = Uppdatera
 
 flash-firmware-title = Flasha firmware
+flash-multi-flashing-title = Multi-flash
 flash-firmware-smartphone-button = Smarttelefon
 flash-firmware-tablet-button = Surfplatta
 firmware-flash-desc = Flashar ett komplett firmwarepaket till en telefon som är ansluten i fastboot-läge. Välj firmware-ZIP-filen, eller flashfile.xml tillsammans med dess bildfiler. Detta skriver över firmware och raderar all data på telefonen.
@@ -267,7 +268,7 @@ cn-latest-version = Senaste version
 cn-id = Resurs-ID
 
 retcn-sn-label = Serienummer
-retcn-model-label = XT-modellkod
+retcn-model-label = XT-kod
 retcn-fingerprint-label = Byggfingeravtryck
 retcn-carrier-label = Operatör
 retcn-platform-label = Plattform
@@ -277,7 +278,7 @@ platform-qualcomm = Qualcomm
 platform-mediatek = MediaTek eller Unisoc
 sim-single = Enkelt SIM
 sim-dual = Dubbla SIM
-retcn-error-model = XT-modellkod krävs
+retcn-error-model = XT-kod krävs
 retcn-error-fingerprint = Byggfingeravtryck krävs
 retcn-error-carrier = Operatör krävs
 retcn-error-sn = Serienummer krävs
@@ -539,19 +540,92 @@ pac-repack-col-size = Storlek
 pac-repack-col-file = Filnamn
 
 # "Multi Flashing" page (Mode 2): entered from the Firmware Flash dialog.
-firmware-flash-multi-flashing = Gå till multi-flashläge
-multi-flash-placeholder = Multi-flashläget är inte tillgängligt än. Dess kontroller visas här.
+flash-multi-flashing-button = Öppna
+multi-flash-idle = Ingen enhet flashas än.
 multi-flash-exit = Avsluta
 multi-flash-preset-manage = Hantera förinställningar
-multi-flash-preset-add = Lägg till fastvarubild…
+multi-flash-preset-add = Lägg till
+multi-flash-preset-finish = Klart
 multi-flash-preset-empty = Ingen fastvarubild har lästs in än.
 multi-flash-start = Starta
 multi-flash-stop = Stoppa
 multi-flash-close-prompt = Stoppa åtgärden innan du stänger.
 multi-flash-close-prompt-ok = OK
 
+# The run itself: the table of the devices the session finds, and what it says
+# about each of them.
+multi-flash-col-progress = Förlopp
+multi-flash-col-current = Aktuellt förlopp
+multi-flash-no-preset = Inga tillgängliga förinställningar för den här enheten
+multi-flash-device-finished = Klart
+multi-flash-device-failed = Misslyckades: { $error }
+multi-flash-run-failed = Kunde inte starta körningen: { $error }
+multi-flash-still-flashing = { $count } enheter flashas fortfarande. Stäng inte fönstret förrän de är klara.
+multi-flash-log-directory = Loggar skrivs till { $path }
+
 # Firmware Flash: the selected ZIP is not a firmware package.
 firmware-flash-invalid-package = Den valda ZIP-filen är inte ett giltigt fastvarupaket (ingen flashfile.xml i den)
+
+# Multi Flashing: the options a preset is set up with.
+multi-flash-options-title = Firmwarealternativ
+multi-flash-options-reboot = Starta om enheten när denna firmware är klar
+multi-flash-options-conditions = Flashvillkor
+multi-flash-options-default = Standard
+multi-flash-options-default-desc = Flashar när enhetens CID matchar denna firmware. En engineering-bootloader rapporterar 0xDEAD i stället för ett riktigt CID och matchar också.
+# A preset whose default rule is told not to take an engineering unit (see en-US).
+multi-flash-options-no-engineering = Matcha inte engineering-enheter
+multi-flash-options-custom = Anpassade
+multi-flash-options-cid = CID
+multi-flash-options-cid-add = Lägg till
+# The dropdown beside the CID field: the codes the community documents (see en-US).
+multi-flash-options-cid-preset = Förinställning
+# The names of the CIDs the dropdown offers (see en-US; a carrier's name is not
+# translated).
+cid-name-retcn = Kina-detaljhandel
+cid-name-global = Global
+cid-name-usa-lockdown = USA-låsning
+cid-name-super = SuperCID
+cid-name-factory = FactoryCID
+cid-name-invalid = Ogiltig
+cid-name-unknown = Okänd
+cid-name-korea-sk-kt = Korea SK/KT
+cid-name-europe-apac-retail = Europa/Asien-Stillahavsområdet detaljhandel
+cid-name-us-retail = USA-detaljhandel
+cid-name-latam-retail = Latinamerika-detaljhandel
+cid-name-unknown-deprecated = Okänd (utgången)
+cid-name-canada-retail = Kanada-detaljhandel
+cid-name-google-developer = Google-utvecklarversion
+multi-flash-options-states = Upplåsningsstatus för startladdaren
+multi-flash-options-incomplete = Lägg till minst ett CID och välj minst en upplåsningsstatus.
+multi-flash-options-confirm = Bekräfta
+# Where a ZIP package is unpacked, since a factory package is gigabytes of
+# images: the user picks the directory, the firmware is checked first, and
+# only then is anything written into it.
+multi-flash-options-extract = Packa upp till
+multi-flash-options-extract-choose = Välj…
+multi-flash-options-extract-required = Välj en mapp att packa upp den här fasta mjukvaran i.
+multi-flash-options-unpacking = Packar upp den fasta mjukvaran…
+multi-flash-preset-reboot = Starta om när klar
+multi-flash-preset-edit = Redigera
+multi-flash-preset-remove = Ta bort
+multi-flash-preset-codename = Kodnamn
+
+# Saving and loading the preset list: the file itself is JSON, so the two
+# buttons only write and read it.
+multi-flash-preset-save = Spara
+multi-flash-preset-load = Ladda
+multi-flash-preset-saved = Förval sparade i { $path }.
+multi-flash-preset-loaded = Läste in { $count } förval från { $path }.
+# An entry whose firmware package is gone (or names something an older release
+# does not know) is left out, and the user has to see which ones.
+multi-flash-preset-load-skipped = Kunde inte läsa in { $count } poster:
+multi-flash-preset-invalid = Den här filen är inte en förvalsfil som sparats av LMN Flash.
+multi-flash-preset-newer = Den här förvalsfilen skrevs av en nyare version av LMN Flash (version { $version }).
+multi-flash-preset-failed = Kunde inte läsa eller skriva förvalsfilen: { $error }
+# Shown in the preset list while the MD5 of every image is not checked.
+multi-flash-preset-no-verify = MD5-kontroll överhoppad
+# Two presets that would both be flashed to the same phone (see en-US).
+multi-flash-preset-conflict = { $count } förinställningar skulle flashea samma telefon: { $presets }
 
 # "Connect ADB Wireless Debugging" dialog (Mode 2).
 flash-wireless-title = Anslut trådlös ADB
