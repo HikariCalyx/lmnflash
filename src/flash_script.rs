@@ -6,11 +6,21 @@
 //! command line is used — which is why the built-in fastboot, that has none,
 //! is written out as `fastboot` from the Android platform-tools.
 //!
+//! An external tool can also be copied next to the script ([`copy_tool`]) and
+//! started from there, so the script runs on a machine that has no `fastboot`
+//! installed at all.
+//!
 //! Comments are English, like every other generated file: they are part of
 //! the script, not of the interface.
 
-use crate::flash_engine::Engine;
+use std::path::Path;
+
+use crate::flash_engine::{Engine, Mfastboot};
 use crate::flashfile::{FlashOp, FlashPackage};
+
+/// The files a Windows `fastboot` loads from its own folder. They are copied
+/// next to the script together with the tool, or it would not start there.
+const WINDOWS_HELPERS: &[&str] = &["AdbWinApi.dll", "AdbWinUsbApi.dll"];
 
 /// The shell a script is written for; the host decides which one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +94,10 @@ pub struct ScriptJob<'a> {
     /// The tool the app would flash with, so the script starts the same one.
     /// A built-in flash has no command line, so it becomes `fastboot`.
     pub engine: &'a Engine,
+    /// The file name the tool was copied to next to the script, when the user
+    /// asked for that: the script then starts that copy instead of the
+    /// installed tool. `None` addresses the tool where it is installed.
+    pub copied_tool: Option<&'a str>,
     /// Device the script addresses; empty writes it without `-s`.
     pub serial: &'a str,
     pub shell: Shell,
@@ -145,11 +159,9 @@ pub fn render(job: &ScriptJob<'_>) -> String {
         "{comment} Tool and device: edit these lines, not the commands below.\n"
     ));
 
-    let (tool, tool_note) = tool_of(job.engine);
-    match shell {
-        Shell::Cmd => out.push_str(&format!("set \"FASTBOOT={tool}\"\n")),
-        Shell::Sh => out.push_str(&format!("FASTBOOT={}\n", shell.quote(&tool))),
-    }
+    let (tool_line, tool_note) = tool_assignment(shell, job.engine, job.copied_tool);
+    out.push_str(&tool_line);
+    out.push('\n');
 
     if let Some(note) = tool_note {
         for line in note.lines() {
@@ -201,6 +213,47 @@ pub fn render(job: &ScriptJob<'_>) -> String {
     out
 }
 
+/// The line that points `FASTBOOT` at the tool, plus a note for the header
+/// when it is not simply the selected build.
+///
+/// Complete lines are built here rather than a bare value: the copy next to
+/// the script is addressed with a shell expression (`%~dp0`, `$(dirname …)`),
+/// which must not be escaped like a file path.
+fn tool_assignment(
+    shell: Shell,
+    engine: &Engine,
+    copied_tool: Option<&str>,
+) -> (String, Option<&'static str>) {
+    if let (Engine::Mfastboot(_), Some(name)) = (engine, copied_tool) {
+        let line = match shell {
+            // `%~dp0` is the folder the script itself sits in, whatever the
+            // working directory is.
+            Shell::Cmd => format!("set \"FASTBOOT=%~dp0{name}\""),
+            // The script changes into the package folder first, so the folder
+            // of the script is resolved while this line runs.
+            Shell::Sh => {
+                format!("FASTBOOT=\"$(cd \"$(dirname \"$0\")\" && pwd)/{name}\"")
+            }
+        };
+
+        return (
+            line,
+            Some(
+                "The tool is copied into the folder of this script, and the line above\n\
+                 starts that copy; the files written next to the script belong to it.",
+            ),
+        );
+    }
+
+    let (tool, note) = tool_of(engine);
+    let line = match shell {
+        Shell::Cmd => format!("set \"FASTBOOT={tool}\""),
+        Shell::Sh => format!("FASTBOOT={}", shell.quote(&tool)),
+    };
+
+    (line, note)
+}
+
 /// The command that starts the steps, plus a note for the header when it is
 /// not simply the selected build.
 fn tool_of(engine: &Engine) -> (String, Option<&'static str>) {
@@ -216,6 +269,66 @@ fn tool_of(engine: &Engine) -> (String, Option<&'static str>) {
             ),
         ),
     }
+}
+
+/// Copies the tool the script starts into `directory` and returns the file
+/// name it was written as, so the script can address it there.
+///
+/// A Windows build loads two DLLs from its own folder, so those are copied
+/// with it — a helper that is not there (every other platform) is skipped
+/// rather than reported. A file that is already the one being copied (the
+/// script is written into the tool's own folder) is left alone: copying it
+/// onto itself would empty it.
+pub(crate) fn copy_tool(tool: &Mfastboot, directory: &Path) -> Result<String, String> {
+    copy_tool_into(tool, directory, cfg!(windows))
+}
+
+/// [`copy_tool`] with the platform stated, so a test can check the Windows
+/// behaviour everywhere.
+fn copy_tool_into(
+    tool: &Mfastboot,
+    directory: &Path,
+    windows: bool,
+) -> Result<String, String> {
+    let name = tool
+        .path
+        .file_name()
+        .map(|name| sanitize(&name.to_string_lossy()))
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("{} has no file name", tool.path.display()))?;
+
+    write_copy(&tool.path, &directory.join(&name))?;
+
+    if windows {
+        if let Some(folder) = tool.path.parent() {
+            for helper in WINDOWS_HELPERS {
+                let source = folder.join(helper);
+
+                if source.is_file() {
+                    write_copy(&source, &directory.join(helper))?;
+                }
+            }
+        }
+    }
+
+    Ok(name)
+}
+
+/// Copies one file, unless the destination already is the source.
+fn write_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    if source == destination
+        || matches!(
+            (source.canonicalize(), destination.canonicalize()),
+            (Ok(source), Ok(destination)) if source == destination
+        )
+    {
+        return Ok(());
+    }
+
+    std::fs::copy(source, destination)
+        .map_err(|error| format!("{}: {error}", destination.display()))?;
+
+    Ok(())
 }
 
 /// One procedure as the tool's arguments (`flash boot "boot.img"`).
@@ -292,6 +405,7 @@ mod tests {
             steps,
             extra_erases,
             engine,
+            copied_tool: None,
             serial,
             shell,
         }
@@ -356,6 +470,137 @@ mod tests {
         // No device selected: no `SERIAL` line and no `-s`.
         assert!(!script.contains("SERIAL="));
         assert!(!script.contains(" -s "));
+    }
+
+    /// A directory of its own for a test, removed first so leftovers from an
+    /// interrupted run cannot pass for a result.
+    fn test_dir(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("lmnflash-flash-script-{name}"));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        directory
+    }
+
+    /// A shipped `mfastboot` build at `path`.
+    fn tool(path: &str) -> Engine {
+        Engine::Mfastboot(crate::flash_engine::Mfastboot {
+            version: "34.0.4".to_owned(),
+            path: PathBuf::from(path),
+            emulator: crate::flash_engine::Emulator::Native,
+            origin: crate::flash_engine::Origin::Shipped,
+        })
+    }
+
+    #[test]
+    fn a_copied_tool_is_started_from_the_scripts_own_folder() {
+        let package = package();
+        let steps = vec![FlashOp::Flash {
+            partition: "boot".to_owned(),
+            file: "boot.img".to_owned(),
+            md5: None,
+        }];
+        let engine = tool("/opt/mfastboot/mfastboot.exe");
+
+        for (shell, assignment, command) in [
+            (
+                Shell::Cmd,
+                "set \"FASTBOOT=%~dp0mfastboot.exe\"\n",
+                "\"%FASTBOOT%\" flash boot \"boot.img\"\n",
+            ),
+            (
+                Shell::Sh,
+                "FASTBOOT=\"$(cd \"$(dirname \"$0\")\" && pwd)/mfastboot.exe\"\n",
+                "\"$FASTBOOT\" flash boot \"boot.img\"\n",
+            ),
+        ] {
+            let mut job = job(&package, &steps, &[], &engine, "", shell);
+            job.copied_tool = Some("mfastboot.exe");
+
+            let script = render(&job);
+
+            assert!(script.contains(assignment), "{shell:?}: {script}");
+            assert!(script.contains(command), "{shell:?}: {script}");
+            // The tool where it is installed is not named any more.
+            assert!(!script.contains("/opt/mfastboot"), "{shell:?}: {script}");
+        }
+    }
+
+    #[test]
+    fn the_tool_is_copied_with_the_helpers_it_loads_on_windows() {
+        let source = test_dir("tool");
+        let target = test_dir("target");
+
+        for name in ["mfastboot.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"] {
+            std::fs::write(source.join(name), name).unwrap();
+        }
+
+        let tool = crate::flash_engine::Mfastboot {
+            version: "34.0.4".to_owned(),
+            path: source.join("mfastboot.exe"),
+            emulator: crate::flash_engine::Emulator::Native,
+            origin: crate::flash_engine::Origin::Shipped,
+        };
+
+        // A Windows build loads the two DLLs from its own folder, so they are
+        // written beside the tool.
+        assert_eq!(copy_tool_into(&tool, &target, true).unwrap(), "mfastboot.exe");
+        assert!(target.join("mfastboot.exe").is_file());
+        assert!(target.join("AdbWinApi.dll").is_file());
+        assert!(target.join("AdbWinUsbApi.dll").is_file());
+
+        // Everywhere else only the tool itself is written.
+        let plain = test_dir("plain");
+        assert_eq!(
+            copy_tool_into(&tool, &plain, false).unwrap(),
+            "mfastboot.exe"
+        );
+        assert!(plain.join("mfastboot.exe").is_file());
+        assert!(!plain.join("AdbWinApi.dll").exists());
+    }
+
+    #[test]
+    fn a_copy_gets_a_name_a_script_can_write() {
+        let source = test_dir("spaced");
+        let target = test_dir("spaced-copy");
+        std::fs::write(source.join("mfastboot 34.exe"), "binary").unwrap();
+
+        let tool = crate::flash_engine::Mfastboot {
+            version: "34.0.4".to_owned(),
+            path: source.join("mfastboot 34.exe"),
+            emulator: crate::flash_engine::Emulator::Native,
+            origin: crate::flash_engine::Origin::Shipped,
+        };
+
+        let name = copy_tool_into(&tool, &target, false).unwrap();
+
+        // A space would split the command in both shells.
+        assert_eq!(name, "mfastboot_34.exe");
+        assert!(target.join("mfastboot_34.exe").is_file());
+    }
+
+    #[test]
+    fn a_script_in_the_tools_own_folder_leaves_the_tool_alone() {
+        let folder = test_dir("same-folder");
+        std::fs::write(folder.join("mfastboot.exe"), "binary").unwrap();
+
+        let tool = crate::flash_engine::Mfastboot {
+            version: "34.0.4".to_owned(),
+            path: folder.join("mfastboot.exe"),
+            emulator: crate::flash_engine::Emulator::Native,
+            origin: crate::flash_engine::Origin::Shipped,
+        };
+
+        // The folder of the script can be the folder of the tool; copying a
+        // file onto itself would empty it.
+        assert_eq!(
+            copy_tool_into(&tool, &folder, false).unwrap(),
+            "mfastboot.exe"
+        );
+        assert_eq!(
+            std::fs::read_to_string(folder.join("mfastboot.exe")).unwrap(),
+            "binary"
+        );
     }
 
     #[test]

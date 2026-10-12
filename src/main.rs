@@ -1866,6 +1866,9 @@ struct FirmwareFlashState {
     rebooting: bool,
     /// Outcome of that reboot, once it ran.
     reboot_result: Option<Result<(), String>>,
+    /// `true` while the question is on screen whether the tool the script
+    /// starts should be copied next to it.
+    export_confirming: bool,
     /// Where the last "Export to script" wrote the plan to, or why it could
     /// not be written.
     export_result: Option<Result<std::path::PathBuf, String>>,
@@ -1924,6 +1927,7 @@ impl Default for FirmwareFlashState {
             result: None,
             rebooting: false,
             reboot_result: None,
+            export_confirming: false,
             export_result: None,
         }
     }
@@ -2380,6 +2384,9 @@ enum Message {
     /// Firmware Flash: write the selected procedures into a script
     /// (`*.cmd` on Windows, `*.sh` elsewhere).
     FirmwareFlashExport,
+    /// Firmware Flash: whether the tool the script starts is copied next to
+    /// it, as the question before the export asked.
+    FirmwareFlashExportCopy(bool),
     /// Firmware Flash: that script was written (or the save dialog was
     /// cancelled, or the write failed).
     FirmwareFlashExported(Result<Option<std::path::PathBuf>, String>),
@@ -3114,7 +3121,8 @@ fn overlay_key(state: &State) -> u8 {
 
     if firmware_flash::is_open(state) {
         // The running flash and its result share a card; the procedure
-        // checklist, the confirmation and the read-info view each have one.
+        // checklist, the confirmation, the read-info view and the question
+        // before an export each have one.
         let flash = &state.flash.firmware;
         let step = if flash.running || flash.result.is_some() {
             3
@@ -3124,6 +3132,8 @@ fn overlay_key(state: &State) -> u8 {
             2
         } else if flash.info_view {
             4
+        } else if flash.export_confirming {
+            5
         } else {
             0
         };
@@ -3957,6 +3967,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             flash.confirm_countdown = 0;
             flash.result = None;
             flash.reboot_result = None;
+            flash.export_confirming = false;
             flash.export_result = None;
             flash.progress = None;
             flash.step_index = 0;
@@ -5984,7 +5995,10 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::PacRepackBackdropPressed => Task::none(),
-        Message::FirmwareFlashExport => start_firmware_flash_export(state),
+        Message::FirmwareFlashExport => request_firmware_flash_export(state),
+        Message::FirmwareFlashExportCopy(copy) => {
+            start_firmware_flash_export(state, copy)
+        }
         Message::FirmwareFlashExported(result) => {
             let flash = &mut state.flash.firmware;
 
@@ -7892,13 +7906,40 @@ fn start_firmware_flash(state: &mut State) -> Task<Message> {
     Task::batch([producer, consumer])
 }
 
+/// Starts the export, or asks first whether the tool the script starts should
+/// be copied next to it.
+///
+/// Only an external `fastboot` is a file that can be copied: the built-in
+/// engine has no binary, so its script always runs the `fastboot` of the
+/// Android platform-tools and there is nothing to ask.
+fn request_firmware_flash_export(state: &mut State) -> Task<Message> {
+    if !firmware_flash::export_ready(state) {
+        return Task::none();
+    }
+
+    let flash = &mut state.flash.firmware;
+
+    if flash.engine.tool().is_some() {
+        flash.export_confirming = true;
+        flash.export_result = None;
+        Task::none()
+    } else {
+        start_firmware_flash_export(state, false)
+    }
+}
+
 /// Writes the checked procedures (and the added erases) into a script the
 /// user picks the name of: `*.cmd` on Windows, `*.sh` elsewhere.
 ///
 /// The script is written from the same selection `start_firmware_flash` would
 /// run, so both describe the same flash. A device is not required — the serial
 /// is only written into the script when one is selected.
-fn start_firmware_flash_export(state: &mut State) -> Task<Message> {
+///
+/// `copy_tool` writes the selected `fastboot` (and the DLLs it loads on
+/// Windows) into the folder the script is saved in, and points the script at
+/// that copy — so the script also works where the tool is not installed. The
+/// built-in engine has no file to copy, so the flag is ignored for it.
+fn start_firmware_flash_export(state: &mut State, copy_tool: bool) -> Task<Message> {
     let flash = &mut state.flash.firmware;
 
     if flash.loading || flash.running || flash.rebooting {
@@ -7924,11 +7965,13 @@ fn start_firmware_flash_export(state: &mut State) -> Task<Message> {
 
     let extra_erases = extra_erase_partitions(flash);
     let engine = flash.engine.clone();
+    let copy = if copy_tool { engine.tool().cloned() } else { None };
     let serial = flash.selected.clone().unwrap_or_default();
     let shell = flash_script::Shell::for_host();
     let suggested = shell.file_name(package.model.as_deref());
     let extension = shell.extension();
 
+    flash.export_confirming = false;
     flash.export_result = None;
 
     // The save dialog blocks, so it runs on a worker thread; the script is
@@ -7936,16 +7979,6 @@ fn start_firmware_flash_export(state: &mut State) -> Task<Message> {
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || {
-                let job = flash_script::ScriptJob {
-                    package: &package,
-                    steps: &steps,
-                    extra_erases: &extra_erases,
-                    engine: &engine,
-                    serial: &serial,
-                    shell,
-                };
-                let script = flash_script::render(&job);
-
                 let Some(path) = rfd::FileDialog::new()
                     .set_file_name(&suggested)
                     .add_filter("Script", &[extension])
@@ -7953,6 +7986,25 @@ fn start_firmware_flash_export(state: &mut State) -> Task<Message> {
                 else {
                     return Ok(None);
                 };
+
+                // The tool is written first: a script that starts a copy that
+                // is not there would be worse than no script at all.
+                let folder = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let copied = match &copy {
+                    Some(tool) => Some(flash_script::copy_tool(tool, folder)?),
+                    None => None,
+                };
+
+                let job = flash_script::ScriptJob {
+                    package: &package,
+                    steps: &steps,
+                    extra_erases: &extra_erases,
+                    engine: &engine,
+                    copied_tool: copied.as_deref(),
+                    serial: &serial,
+                    shell,
+                };
+                let script = flash_script::render(&job);
 
                 std::fs::write(&path, script)
                     .map_err(|error| format!("{}: {error}", path.display()))?;

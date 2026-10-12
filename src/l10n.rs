@@ -1192,5 +1192,30 @@ mod tests {
             }
         }
     }
+
+    /// The question asked before an export, and the line naming which tool the
+    /// copy is: a locale that spells the argument differently would leave a
+    /// hole in the sentence, which the id parity test cannot see.
+    #[test]
+    fn the_export_copy_question_renders_in_every_locale() {
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            let question = bundle.tr("firmware-flash-export-copy-question");
+            assert!(!question.trim().is_empty(), "{language:?}");
+            assert!(!question.contains('\u{2068}'), "{language:?}");
+
+            let note = bundle.tr_with_args(
+                "firmware-flash-export-copy-note",
+                &[("tool", "mfastboot 34.0.4".to_owned())],
+            );
+
+            assert!(
+                note.contains("mfastboot 34.0.4"),
+                "{language:?}: {note}"
+            );
+            assert!(!note.contains('\u{2068}'), "{language:?}: {note}");
+        }
+    }
 }
 

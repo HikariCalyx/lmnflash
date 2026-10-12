@@ -117,6 +117,8 @@ fn card(state: &State) -> Element<'_, Message> {
         content = content.push(confirmation_section(state));
     } else if flash.info_view {
         content = content.push(info_section(state));
+    } else if flash.export_confirming {
+        content = content.push(export_section(state));
     } else {
         content = content.push(setup_section(state));
     }
@@ -127,8 +129,11 @@ fn card(state: &State) -> Element<'_, Message> {
     // It is hidden once the user committed to a flash: the warning page and
     // the running/result page carry their own way back, and leaving them from
     // the footer would either skip the warning or abandon a half-flashed
-    // phone.
-    let footer = !flash.confirming && !(flash.running || flash.result.is_some());
+    // phone. The question before an export asks about the dialog's own work,
+    // so it carries its own way back as well.
+    let footer = !flash.confirming
+        && !flash.export_confirming
+        && !(flash.running || flash.result.is_some());
 
     if footer {
         content = content.push(horizontal_rule(1));
@@ -183,6 +188,21 @@ fn erases_user_data(state: &State) -> bool {
                 )
         })
     })
+}
+
+/// Whether "Export to Script" can run: a parsed package with at least one
+/// checked procedure, and no job in flight.
+///
+/// A device is deliberately not required — the script can be written before
+/// the phone is plugged in, or for someone else to run.
+pub(crate) fn export_ready(state: &State) -> bool {
+    let flash = &state.flash.firmware;
+
+    !flash.loading
+        && !flash.running
+        && !flash.rebooting
+        && flash.plan.is_some()
+        && enabled_procedures(flash) > 0
 }
 
 /// Package selection, tool selection, and device selection.
@@ -422,7 +442,7 @@ fn setup_section(state: &State) -> Element<'_, Message> {
     // checked procedures, so it can be prepared before the device is plugged
     // in (or for someone else to run).
     let export = button(text(l10n.tr("firmware-flash-export")));
-    let export = if !busy && flash.plan.is_some() && enabled_procedures(flash) > 0 {
+    let export = if export_ready(state) {
         export.on_press(Message::FirmwareFlashExport)
     } else {
         export
@@ -824,6 +844,62 @@ fn confirmation_section(state: &State) -> Element<'_, Message> {
         .align_y(Alignment::Center),
     )
     .into()
+}
+
+/// The question asked before an export when the selected engine is an
+/// external `fastboot`: whether a copy of the tool is written next to the
+/// script.
+///
+/// The copy is what makes the script runnable on a machine that has no
+/// `fastboot` installed — on Windows together with the two DLLs the tool
+/// loads — so it is offered, not assumed.
+fn export_section(state: &State) -> Element<'_, Message> {
+    let l10n = &state.l10n;
+    let flash = &state.flash.firmware;
+
+    let mut content = column![
+        text(l10n.tr("firmware-flash-export-copy-question"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    if let Some(tool) = flash.engine.tool() {
+        content = content.push(
+            text(l10n.tr_with_args(
+                "firmware-flash-export-copy-note",
+                &[("tool", tool.label())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+        );
+    }
+
+    content
+        .push(
+            row![
+                button(text(l10n.tr("guided-yes")))
+                    .width(Fill)
+                    .on_press(Message::FirmwareFlashExportCopy(true)),
+                button(text(l10n.tr("guided-no")))
+                    .width(Fill)
+                    .on_press(Message::FirmwareFlashExportCopy(false)),
+                // Neither answer has to be given: this returns to the form the
+                // button was pressed on, with the package still loaded.
+                button(text(format!(
+                    "< {}",
+                    l10n.tr("flash-bootloader-return")
+                )))
+                .width(Fill)
+                .on_press(Message::FirmwareFlashBack),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .into()
 }
 
 /// The two project codes of a mismatched package and phone, saying what they
