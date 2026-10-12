@@ -112,6 +112,168 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
           if-no-files-found: error
 
+  # ── Debian package (x86_64) ────────────────────────────────────────────────
+  #
+  # The package is wrapped around the executable the Linux build already made,
+  # so nothing is compiled here: the tree is laid out and packed with
+  # `dpkg-deb`. The file name is the one a Debian repository shows —
+  # `<package>_<version>_<architecture>.deb`, the version taken from
+  # `Cargo.toml` — and `Depends` names the runtime libraries the application
+  # needs: the GTK3/WebKitGTK stack behind the WebView dialog and the file
+  # pickers, and the X11/Wayland libraries iced starts with. USB is static and
+  # therefore absent from the list (see below).
+  build-deb:
+    name: Debian package (amd64)
+    runs-on: ubuntu-24.04
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules: nothing is compiled here. `prebuilt_binary` and the
+        # icon are in the repository, and the executable comes from `build`.
+
+      - name: Download the Linux executable
+        uses: actions/download-artifact@v4
+        with:
+          name: lmnflash-x86_64-unknown-linux-gnu
+          path: deb
+
+      - name: Read the package version
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Package version: $version"
+
+      - name: Assemble the package tree
+        run: |
+          set -euo pipefail
+          root=pkg
+          folder="$root/usr/lib/lmnflash"
+
+          # The executable sits in its own folder with the `mfastboot` build
+          # beside it, because that is where the application looks for one: the
+          # `mfastboot/<platform>/<version>/` layout, relative to the running
+          # executable. `/usr/bin` gets a symlink to it, so the command is on
+          # `PATH` — a symlink is enough, since `current_exe()` resolves it and
+          # the app still finds the folder next to the real file.
+          install -D -m755 deb/lmnflash "$folder/lmnflash"
+          install -D -m755 prebuilt_binary/linux_amd64/31.0.2/mfastboot \
+            "$folder/mfastboot/linux_amd64/31.0.2/mfastboot"
+          install -d "$root/usr/bin"
+          ln -s ../lib/lmnflash/lmnflash "$root/usr/bin/lmnflash"
+
+          # The launcher entry, so the application appears in the menu once the
+          # package is installed. Package and icon are named `lmnflash`, which
+          # is what makes `Icon=lmnflash` resolve; `MimeType` declares the
+          # `softwarefix://` scheme the app can take over (it also writes a
+          # per-user entry when it is asked to become the handler).
+          install -d "$root/usr/share/applications"
+          cat > "$root/usr/share/applications/lmnflash.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=LMN Flash
+          GenericName=Firmware Flashing Tool
+          Comment=Firmware lookup and flashing utility for Lenovo, Motorola and NEC devices
+          Exec=lmnflash %u
+          Icon=lmnflash
+          Terminal=false
+          Categories=Utility;System;
+          Keywords=firmware;flash;fastboot;adb;motorola;lenovo;
+          MimeType=x-scheme-handler/softwarefix;
+          DESKTOP
+
+          # 512x512 is a size hicolor lists; the source icon is larger than
+          # that, which only makes it sharper.
+          install -D -m644 src/icon.png \
+            "$root/usr/share/icons/hicolor/512x512/apps/lmnflash.png"
+
+          # Debian policy: the copyright of everything shipped, and a changelog.
+          install -D -m644 LICENSE "$root/usr/share/doc/lmnflash/copyright"
+          cat > "$root/usr/share/doc/lmnflash/changelog.Debian" <<CHANGELOG
+          lmnflash ($VERSION) unstable; urgency=medium
+
+            * Release $VERSION.
+
+           -- HikariCalyx <HikariCalyx@users.noreply.github.com>  $(date -R)
+          CHANGELOG
+          gzip -9n "$root/usr/share/doc/lmnflash/changelog.Debian"
+
+          # The control file. `libgtk-3-0`/`libglib2.0-0`/`libsoup-3.0-0`/
+          # `libwebkit2gtk-4.1-0` are spelled with an alternative because
+          # Ubuntu 24.04 and Debian 13 renamed them for the 64-bit `time_t`
+          # transition, while older releases kept the plain names.
+          #
+          # libusb is NOT in the list: the `fastboot` crate enables rusb's
+          # `vendored` feature, so libusb is compiled into the executable
+          # rather than loaded from the system. X11 and xkbcommon are named even
+          # though iced opens them at runtime (they are loaded with dlopen, so
+          # they are not in the executable's `NEEDED` list): without them the
+          # window cannot be created at all.
+          mkdir -p "$root/DEBIAN"
+          installed_size=$(du -k -s "$root/usr" | cut -f1)
+          cat > "$root/DEBIAN/control" <<CONTROL
+          Package: lmnflash
+          Version: $VERSION
+          Architecture: amd64
+          Maintainer: HikariCalyx <HikariCalyx@users.noreply.github.com>
+          Installed-Size: $installed_size
+          Section: utils
+          Priority: optional
+          Homepage: https://github.com/HikariCalyx/lmnflash
+          Depends: libc6 (>= 2.39), libgcc-s1, libglib2.0-0 (>= 2.66.0) | libglib2.0-0t64, libgtk-3-0 (>= 3.24.24) | libgtk-3-0t64, libsoup-3.0-0 | libsoup-3.0-0t64, libwebkit2gtk-4.1-0 | libwebkit2gtk-4.1-0t64, libx11-6, libxcb1, libxkbcommon0 (>= 1.0.0), libwayland-client0 (>= 1.20.0)
+          Recommends: xdg-utils
+          Description: firmware lookup and flashing utility for Lenovo, Motorola and NEC devices
+           LMN Flash looks up and flashes firmware for Lenovo/Motorola smartphones
+           and tablets, unlocks bootloaders, resets a phone to its factory state,
+           removes preinstalled applications over ADB, and unpacks Lenovo,
+           Motorola and Unisoc firmware packages.
+           .
+           The devices are spoken to directly over USB (fastboot/ADB); Google's
+           platform-tools are downloaded when they are needed.
+          CONTROL
+
+      - name: Build the .deb
+        run: |
+          set -euo pipefail
+          dpkg-deb --build --root-owner-group pkg "lmnflash_${VERSION}_amd64.deb"
+          dpkg-deb --info "lmnflash_${VERSION}_amd64.deb"
+          dpkg-deb --contents "lmnflash_${VERSION}_amd64.deb"
+
+      # A hand-written `Depends` is only worth anything if it is complete, so
+      # every library the executable loads is mapped to the package that ships
+      # it. The list is printed either way, and a library whose package is
+      # missing only warns (the package is usable — `apt` resolves the rest of
+      # the library tree through the dependencies above — and the fix is one
+      # line in that list).
+      - name: Check the declared dependencies
+        run: |
+          set -uo pipefail
+          executable=pkg/usr/lib/lmnflash/lmnflash
+          declared=$(dpkg-deb --field "lmnflash_${VERSION}_amd64.deb" Depends \
+            | tr ',' '\n' | tr '|' '\n' | awk '{ print $1 }')
+
+          echo "Libraries the executable loads:"
+          ldd "$executable" | sed 's/^/  /'
+
+          for library in $(ldd "$executable" | awk '/=>/ { print $3 }'); do
+            owner=$(dpkg -S "$(readlink -f "$library")" 2>/dev/null \
+              | head -1 | cut -d: -f1) || continue
+
+            if [ -z "$owner" ]; then
+              continue
+            elif ! printf '%s\n' "$declared" | grep -qx "$owner"; then
+              echo "::warning file=.github/workflows/build.yml::$executable loads $library, which $owner ships — add it to Depends"
+            fi
+          done
+
+      - name: Upload the Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmnflash-deb
+          path: lmnflash_*_amd64.deb
+          if-no-files-found: error
+
   # ── macOS .app bundle + DMG (universal: x86_64 + aarch64) ────────────────
   build-macos:
     name: macOS (.app + DMG)
@@ -166,7 +328,7 @@ jobs:
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [build, build-macos]
+    needs: [build, build-deb, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -195,6 +357,11 @@ jobs:
           # Linux
           # cp artifacts/lmnflash-x86_64-unknown-linux-gnu/lmnflash     release/lmnflash-linux-x86_64
           # cp artifacts/lmnflash-aarch64-unknown-linux-gnu/lmnflash    release/lmnflash-linux-arm64
+
+          # Debian package, built by the `build-deb` job out of the same x86_64
+          # executable; it already carries the name a Debian repository uses
+          # (`lmnflash_<version>_amd64.deb`), so it is published as it is.
+          cp artifacts/lmnflash-deb/lmnflash_*_amd64.deb release/
 
           # macOS
           cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg

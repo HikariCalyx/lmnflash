@@ -44,6 +44,7 @@ The release workflow bundles the contents of `prebuilt_binary` this way:
 | `lmnflash-win-arm64.zip` | `mfastboot/windows_x86/{34.0.4,28.0.2,26.0.0}` (via Windows' x86 emulation) |
 | `lmnflash-linux-x86_64.tar.gz` | `mfastboot/linux_amd64/31.0.2` |
 | `lmnflash-linux-arm64.tar.gz` | `mfastboot/linux_amd64/31.0.2` (via box64) |
+| `lmnflash_<version>_amd64.deb` | `mfastboot/linux_amd64/31.0.2` |
 | `lmnflash-macos_unsigned.dmg` | `Contents/Resources/mfastboot/darwin_amd64/29.0.6` |
 
 The Windows payload is the 32-bit build, which is the only one Motorola
@@ -53,6 +54,25 @@ it travels with.
 The single-file artifacts (`lmnflash-win64.exe`, `lmnflash-win32.exe`,
 `lmnflash-win-arm64.exe`, `lmnflash-linux-x86_64`, …) do not carry `mfastboot`
 and therefore use the built-in fastboot.
+
+### Debian / Ubuntu package
+
+`lmnflash_<version>_amd64.deb` is the same x86_64 build as the tarball, laid out
+the way a distribution expects, so `apt install ./lmnflash_<version>_amd64.deb`
+is all it takes:
+
+* `/usr/lib/lmnflash/lmnflash` — the executable, with
+  `mfastboot/linux_amd64/31.0.2` beside it (where the application looks for it),
+  plus a `/usr/bin/lmnflash` symlink so the command is on `PATH`.
+* `/usr/share/applications/lmnflash.desktop` — the launcher entry, with the icon
+  in `/usr/share/icons/hicolor/512x512/apps/lmnflash.png`.
+* `Depends` — the runtime libraries the executable links or opens (`libgtk-3-0`,
+  `libwebkit2gtk-4.1-0`, `libsoup-3.0-0`, the X11/Wayland libraries …), so
+  `apt` pulls them in. libusb is missing from the list on purpose: it is compiled
+  into the executable (rusb's `vendored` feature), not loaded from the system.
+
+It is built on Ubuntu 24.04 and therefore needs glibc 2.39 or newer (Ubuntu
+24.04+, Debian 13+); older releases can use the tarball instead.
 
 ### Google's platform-tools
 
