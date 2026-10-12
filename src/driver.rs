@@ -77,6 +77,11 @@ fn card(state: &State) -> Element<'_, Message> {
     .spacing(10)
     .width(Fill);
 
+    // Whether anything was written under the description: the rule that
+    // separates it from the controls is only drawn when there is something to
+    // separate (otherwise it would sit right under the first one).
+    let mut has_status = false;
+
     if let Some(error) = &driver.error {
         content = content.push(
             text(error_text(l10n, error))
@@ -85,9 +90,11 @@ fn card(state: &State) -> Element<'_, Message> {
                 .wrapping(Wrapping::WordOrGlyph)
                 .style(iced::widget::text::danger),
         );
+        has_status = true;
     } else if driver.stage == DriverStage::Done {
         content = content
             .push(text(l10n.tr(strings.done)).size(13.0).style(bright_success));
+        has_status = true;
     } else if driver.busy {
         let label = if driver.stage == DriverStage::Installing {
             strings.installing
@@ -96,6 +103,7 @@ fn card(state: &State) -> Element<'_, Message> {
         };
 
         content = content.push(busy_row(state, l10n.tr(label)));
+        has_status = true;
 
         // The size is unknown only while a server sends no length at all.
         if driver.stage == DriverStage::Downloading && driver.total > 0 {
@@ -106,44 +114,53 @@ fn card(state: &State) -> Element<'_, Message> {
     // The installation starts from here, so this is where the password `sudo`
     // needs is asked for; Windows needs none. Both stay on screen after a
     // failure — a rejected password is what has to be tried again.
-    if !driver.busy && driver.stage != DriverStage::Done {
-        if linux {
-            content = content.push(
-                row![
-                    text(l10n.tr("driver-password")).size(13.0),
-                    // The password is never shown, and never leaves this
-                    // process except through `sudo`.
-                    text_input("", &driver.password)
-                        .secure(true)
-                        .padding(6)
-                        .width(Fill)
-                        .on_input(Message::DriverPasswordChanged)
-                        .on_submit(Message::DriverInstallConfirmed),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .width(Fill),
-            );
-        }
-
-        // Nothing to install with until Linux has been given a password; on
-        // Windows the click is the whole confirmation.
-        let ready = !linux || !driver.password.is_empty();
-
-        content = content.push(install_button(state, ready));
+    if linux && !driver.busy && driver.stage != DriverStage::Done {
+        content = content.push(
+            row![
+                text(l10n.tr("driver-password")).size(13.0),
+                // The password is never shown, and never leaves this
+                // process except through `sudo`.
+                text_input("", &driver.password)
+                    .secure(true)
+                    .padding(6)
+                    .width(Fill)
+                    .on_input(Message::DriverPasswordChanged)
+                    .on_submit(Message::DriverInstallConfirmed),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .width(Fill),
+        );
+        has_status = true;
     }
 
-    // Footer: Cancel closes the dialog, but never while the installation is
-    // running.
-    content = content.push(horizontal_rule(1));
+    if has_status {
+        content = content.push(horizontal_rule(1));
+    }
 
+    // Footer: the installation and the way out share one line, so the dialog
+    // ends with the two things it offers. Cancel closes the dialog, but never
+    // while a job runs, and once the installation is done there is nothing
+    // left to start — then it is on its own. On Linux it has nothing to hand
+    // to `sudo` until a password was typed, so it stays greyed out until then.
     let cancel = button(text(l10n.tr("login-cancel"))).width(Fill);
-
-    content = content.push(if driver.busy {
+    let cancel = if driver.busy {
         cancel
     } else {
         cancel.on_press(Message::DriverCancel)
-    });
+    };
+
+    if driver.busy || driver.stage == DriverStage::Done {
+        content = content.push(cancel);
+    } else {
+        let ready = !linux || !driver.password.is_empty();
+
+        content = content.push(
+            row![install_button(state, ready), cancel]
+                .spacing(8)
+                .align_y(Alignment::Center),
+        );
+    }
 
     // The padding sits inside the scrollable, so the card's border is the
     // viewport: the scrollbar rides on the right border instead of floating
