@@ -446,6 +446,10 @@ jobs:
       # In particular there is no x86_64 Homebrew prefix to set up: Homebrew
       # refuses to install on Intel macOS (including under Rosetta 2), and it
       # was never needed here anyway.
+      #
+      # `macos/build.sh` also signs the bundle with `macos/entitlements.plist`,
+      # which is what lets it start the Developer-ID signed x86_64 `mfastboot`
+      # it carries on Apple silicon (Rosetta 2 has to translate that child).
 
       - name: Install Python dependencies
         run: pip3 install --break-system-packages semver toml mako dmgbuild

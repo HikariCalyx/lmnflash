@@ -149,6 +149,17 @@ installed, and when it is missing it says how to get it:
   `/usr/bin` and `/usr/local/sbin`. The binary is started as
   `box64 mfastboot …`.
 
+On macOS both halves of that are signed. The bundled `mfastboot` is a
+Developer-ID signed build (hardened runtime) carrying the entitlements an
+x86_64 binary needs to be translated, and `macos/build.sh` signs the
+application itself with the same entitlements
+([`macos/entitlements.plist`](macos/entitlements.plist)) — JIT, unsigned
+executable memory, library validation and `DYLD` environment variables. The
+signature is *ad-hoc*: the build holds no Developer ID certificate of its own
+and the DMG is not notarized, so Gatekeeper still asks before the first launch.
+Without those entitlements macOS kills the child process Rosetta 2 has to
+translate, which is exactly what made `mfastboot` fail on Apple silicon.
+
 `Start Flashing` stays disabled until the translator is installed and the dialog
 is reopened, or the built-in fastboot engine is picked instead. Apple ships
 Rosetta 2 for Apple silicon from macOS 11 through macOS 27. Where the Intel build

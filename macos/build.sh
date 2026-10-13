@@ -41,10 +41,41 @@ lipo -create target/{aarch64-apple-darwin,x86_64-apple-darwin}/release/lmnflash 
 # over the built-in fastboot. Only an x86_64 build is available, so it lives in a
 # platform folder and is ignored when the bundle runs on Apple silicon (where it
 # would need Rosetta).
+#
+# This is the Developer-ID signed build (hardened runtime, with the same
+# entitlements as below): an x86_64 executable has to be signed to run on Apple
+# silicon at all, and an unsigned one is killed before Rosetta 2 can translate
+# it.
 mkdir -p LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6
 cp prebuilt_binary/darwin_amd64/29.0.6/mfastboot \
    LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6/mfastboot
-chmod +x LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6/mfastboot
+chmod +x LMNFlash.app/Contents/MacOS/lmnflash \
+         LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6/mfastboot
+
+# Sign the bundle with `macos/entitlements.plist` (the hardened runtime is what
+# makes those entitlements mean anything). They are what lets the bundle start
+# an x86_64 `mfastboot` on Apple silicon: without them macOS kills a child whose
+# code Rosetta 2 has to translate, and the WebView needs the JIT exception as
+# well.
+#
+# The signature is AD-HOC (`--sign -`): this workflow holds no Developer ID
+# certificate, and the DMG is not notarized. Swap in `--sign "$IDENTITY"` once
+# one is available.
+#
+# `--deep` is deliberately NOT used: it would replace the signature of the
+# `mfastboot` inside the bundle with this ad-hoc one, and the Developer-ID
+# signature it ships with is what lets macOS run it.
+codesign --force --options runtime --timestamp=none \
+         --entitlements "$(dirname "${BASH_SOURCE[0]}")/entitlements.plist" \
+         --sign - LMNFlash.app
+
+# Check what was signed, and that the bundled `mfastboot` kept its own
+# signature (the DMG is built from this bundle, so this is the last moment the
+# change could be noticed).
+codesign --verify --verbose=2 LMNFlash.app
+codesign --verify --verbose=2 \
+         LMNFlash.app/Contents/Resources/mfastboot/darwin_amd64/29.0.6/mfastboot
+codesign --display --verbose=4 LMNFlash.app
 
 # Build DMG.
 mkdir -p dist

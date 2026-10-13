@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 允许 JIT 动态指令编译，解决 Rosetta 2 在 Apple Silicon 上转译 x86_64 mfastboot 时的指令分配 -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- 允许未签名的可执行内存页，避免 mfastboot 申请 W^X 内存时触发内核 SIGKILL 闪退 -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- 放宽动态库校验 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- 允许向子进程传递 DYLD 环境变量 -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
