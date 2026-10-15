@@ -1033,8 +1033,9 @@ fn running_section(state: &State) -> Element<'_, Message> {
 
     if !flash.log.is_empty() {
         // The log is tool output, so it is shown in a monospace font. iced's
-        // text cannot be selected, so the whole log is offered as a copy
-        // button instead.
+        // text cannot be selected, so the button beside the heading opens the
+        // file this run writes instead: the log outlives the dialog there, and
+        // a line that has to be sent on can be selected in an editor.
         let lines = iced::widget::Column::with_children(
             flash.log.iter().map(|line| {
                 text(line.clone())
@@ -1050,8 +1051,8 @@ fn running_section(state: &State) -> Element<'_, Message> {
             column![
                 row![
                     text(l10n.tr("firmware-flash-log")).size(13.0),
-                    button(text(l10n.tr("firmware-flash-copy-log")).size(12.0))
-                        .on_press(Message::FirmwareFlashCopyLog),
+                    button(text(l10n.tr("firmware-flash-locate-log")).size(12.0))
+                        .on_press(Message::FirmwareFlashLocateLog),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -1067,21 +1068,6 @@ fn running_section(state: &State) -> Element<'_, Message> {
             ]
             .spacing(4),
         );
-
-        // Where the file this run writes is, so the log outlives the dialog:
-        // the package's own load output is not part of it, and a dialog that
-        // never flashed anything has no file to point at.
-        if let Some(path) = flash.log_file.as_ref().map(|file| file.path().display()) {
-            content = content.push(
-                text(l10n.tr_with_args(
-                    "multi-flash-log-directory",
-                    &[("path", path.to_string())],
-                ))
-                .size(12.0)
-                .width(Fill)
-                .wrapping(Wrapping::WordOrGlyph),
-            );
-        }
     }
 
     content.into()

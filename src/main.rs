@@ -2390,8 +2390,13 @@ enum Message {
     /// Firmware Flash: that script was written (or the save dialog was
     /// cancelled, or the write failed).
     FirmwareFlashExported(Result<Option<std::path::PathBuf>, String>),
-    /// Firmware Flash: copy the flashing log to the clipboard.
-    FirmwareFlashCopyLog,
+    /// Firmware Flash: show the file this run's flashing log is written to in
+    /// the system's file manager (the folder both modes write into when the
+    /// dialog has no file of its own yet).
+    FirmwareFlashLocateLog,
+    /// Firmware Flash: the log was handed to the file manager (only logs a
+    /// failure).
+    FirmwareFlashLogOpened,
     /// Firmware Flash: leave fastboot for Android once the flash is done.
     FirmwareFlashReboot,
     /// Firmware Flash: a mode was picked from the Reboot dropdown.
@@ -2723,6 +2728,13 @@ enum Message {
     MultiFlashStart,
     /// Multi Flashing: stop the running job.
     MultiFlashStop,
+    /// Multi Flashing: show the folder this run writes its per-device logs
+    /// into in the system's file manager (the button that takes "Preset
+    /// Manage"'s place while a run goes on).
+    MultiFlashLocateLog,
+    /// Multi Flashing: that folder was handed to the file manager (only logs a
+    /// failure).
+    MultiFlashLogOpened,
     /// Multi Flashing: what the running session reports (a device it found, the
     /// progress of a flash, its end). The number is the run the report belongs
     /// to, so a session that was stopped never writes into the table of the
@@ -4550,6 +4562,30 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             Task::none()
         }
+        Message::MultiFlashLocateLog => {
+            // The button is drawn once the session said where it writes, so a
+            // stray event (or a run that could not make its directory) has
+            // nothing to show.
+            let Some(directory) = state.flash.multi_flash.log_directory.clone() else {
+                return Task::none();
+            };
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || flash_log::reveal(&directory))
+                        .await
+                        .unwrap_or_else(|error| Err(error.to_string()))
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the log folder: {error}");
+                    }
+
+                    Message::MultiFlashLogOpened
+                },
+            )
+        }
+        Message::MultiFlashLogOpened => Task::none(),
         Message::MultiFlashSessionEvent(session, event) => {
             let multi = &mut state.flash.multi_flash;
 
@@ -6065,15 +6101,36 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             flash.reboot_result = Some(result);
             scroll_flash_log_to_end()
         }
-        Message::FirmwareFlashCopyLog => {
-            let log = &state.flash.firmware.log;
+        Message::FirmwareFlashLocateLog => {
+            // The file this run writes; a dialog that only rebooted a phone has
+            // a log on screen but no file of its own — and a log file that
+            // could not be created has none either — so the folder both modes
+            // write into is opened for those.
+            let path = state
+                .flash
+                .firmware
+                .log_file
+                .as_ref()
+                .map(|file| file.path().to_path_buf())
+                .filter(|path| path.is_file())
+                .unwrap_or_else(flash_log::logs_root);
 
-            if log.is_empty() {
-                return Task::none();
-            }
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || flash_log::reveal(&path))
+                        .await
+                        .unwrap_or_else(|error| Err(error.to_string()))
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the log folder: {error}");
+                    }
 
-            iced::clipboard::write::<Message>(log.join("\n"))
+                    Message::FirmwareFlashLogOpened
+                },
+            )
         }
+        Message::FirmwareFlashLogOpened => Task::none(),
         Message::BootloaderManualSelected => {
             state.flash.bootloader.dialog = BootloaderDialog::Manual;
             Task::none()

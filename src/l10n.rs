@@ -1061,6 +1061,7 @@ mod tests {
                 "multi-flash-idle",
                 "multi-flash-exit",
                 "multi-flash-preset-manage",
+                "firmware-flash-locate-log",
                 "multi-flash-preset-add",
                 "multi-flash-preset-finish",
                 "multi-flash-preset-empty",

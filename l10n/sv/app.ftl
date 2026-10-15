@@ -65,7 +65,7 @@ flash-bootloader-unlock = Lås upp
 flash-bootloader-copied = Device ID kopierat till urklipp.
 flash-bootloader-unlocked = Bootloadern är upplåst.
 flash-bootloader-key-required = Ange upplåsningsnyckeln först.
-flash-bootloader-oem-unlocking-required = Aktivera “OEM-upplåsning” i Utvecklaralternativ och försök igen.
+flash-bootloader-oem-unlocking-required = Aktivera "OEM-upplåsning" i Utvecklaralternativ och försök igen.
 flash-bootloader-unlock-cancelled = Begäran om upplåsning av bootloadern har avbrutits.
 flash-bootloader-unlock-wrong-key = Upplåsningen av bootloadern misslyckades på grund av fel upplåsningsnyckel.
 flash-bootloader-obtain-key = Du måste skicka in ditt Device ID till Motorolas webbplats för upplåsning av bootloader för att få upplåsningsnyckeln.
@@ -88,7 +88,7 @@ factory-reset-resetting = Utför fabriksåterställning… Koppla inte från tel
 factory-reset-done = Fabriksåterställningen är klar.
 factory-reset-failed = Fabriksåterställningen misslyckades
 factory-reset-blocked-locked = Bootloadern är återlåst. Lås upp bootloadern eller försök göra det i återställningsläge (recovery).
-factory-reset-blocked-fdr = Bootloadern tillåter inte fabriksåterställning. Stäng av “Skydd mot återställning av enheten” i Inställningar - Säkerhet - Fler säkerhetsinställningar.
+factory-reset-blocked-fdr = Bootloadern tillåter inte fabriksåterställning. Stäng av "Skydd mot återställning av enheten" i Inställningar - Säkerhet - Fler säkerhetsinställningar.
 factory-reset-refresh = Uppdatera
 
 flash-firmware-title = Flasha firmware
@@ -116,7 +116,7 @@ firmware-flash-terminal-opened = Terminalen öppnades i { $path }.
 firmware-flash-terminal-failed = Kunde inte öppna terminalen: { $error }
 firmware-flash-terminal-minimal-adb = Minimal ADB and Fastboot är installerat på den här datorn. Avinstallera det innan du använder den här terminalen: annars används dess adb och fastboot i stället för verktygen som laddas ner här.
 firmware-flash-rosetta-needed = Motorolas mfastboot är ett Intel-program och den här Macen har inget Rosetta 2 att köra det med.
-firmware-flash-rosetta-install = Installera Rosetta 2 med ”softwareupdate --install-rosetta --agree-to-license” i Terminal och öppna den här dialogen igen. Använd den inbyggda fastbooten tills dess.
+firmware-flash-rosetta-install = Installera Rosetta 2 med "softwareupdate --install-rosetta --agree-to-license" i Terminal och öppna den här dialogen igen. Använd den inbyggda fastbooten tills dess.
 firmware-flash-box64-needed = Motorolas mfastboot är ett Intel-program och det här ARM Linux-systemet har inget box64 att köra det med.
 firmware-flash-box64-install = Installera box64 (github.com/ptitSeb/box64) och öppna den här dialogen igen. Använd den inbyggda fastbooten tills dess.
 firmware-flash-verify = Verifiera kontrollsummor för bilder (MD5)
@@ -125,8 +125,8 @@ firmware-flash-version = Programvaruversion
 firmware-flash-cid = CID
 firmware-flash-project-code = Projektkod
 firmware-flash-cid-mismatch = Detta firmwarepaket är för CID { $package }, men den anslutna telefonen rapporterar { $device }.
-firmware-flash-project-mismatch = Detta firmwarepaket är för projektkoden “{ $package }”, men den anslutna telefonen är “{ $device }”. Flashning gör telefonen obrukbar!
-firmware-flash-brick-countdown = Flashning av fel projektkod gör telefonen obrukbar. “Ja” går att klicka om { $seconds } s.
+firmware-flash-project-mismatch = Detta firmwarepaket är för projektkoden "{ $package }", men den anslutna telefonen är "{ $device }". Flashning gör telefonen obrukbar!
+firmware-flash-brick-countdown = Flashning av fel projektkod gör telefonen obrukbar. "Ja" går att klicka om { $seconds } s.
 firmware-flash-device-securestate = Upplåsningsstatus
 firmware-flash-device-cid = CID
 firmware-flash-cid-ignored = { $cid } (ignoreras)
@@ -178,7 +178,7 @@ firmware-flash-confirm = Flashning skriver över telefonens firmware och raderar
 firmware-flash-flashing = Flashar… Koppla inte bort telefonen.
 firmware-flash-step = Steg { $index }/{ $total }: { $step }
 firmware-flash-log = Logg
-firmware-flash-copy-log = Kopiera logg
+firmware-flash-locate-log = Visa logg
 firmware-flash-done = Flashning klar.
 firmware-flash-failed = Flashning misslyckades
 firmware-flash-reboot = Starta om
@@ -370,7 +370,7 @@ bloatware-checking = Kontrollerar installerade appar…
 bloatware-found-heading = Välj de appar som ska tas bort:
 bloatware-search = Sök appar…
 bloatware-none-found = Ingen av de kända apparna är installerade på den här enheten.
-bloatware-no-match = Ingen appar matchar ”{ $query }”.
+bloatware-no-match = Ingen appar matchar "{ $query }".
 bloatware-select-all = Markera alla
 bloatware-select-none = Avmarkera alla
 bloatware-remove = Ta bort valda
@@ -470,7 +470,7 @@ flash-bootloader-tablet-confirm-qualcomm = Använd volymknappen för att välja 
 flash-bootloader-tablet-cancel-restart = Avbryt och starta om
 flash-bootloader-tablet-cancelling = Avbryter…
 
-# Dialogrutan ”Packa upp avbildning” (läge 2).
+# Dialogrutan "Packa upp avbildning" (läge 2).
 unpack-title = Packa upp avbildning
 unpack-button = Packa upp
 unpack-description = Extraherar filerna i en M-branded Smartphone-fastvaruavbildning med headermagin SINGLE_N_LONELY, till exempel radio.img.
@@ -500,7 +500,7 @@ pac-select-all = Markera alla
 pac-select-none = Avmarkera alla
 pac-none-chosen = Markera minst en fil att packa upp.
 pac-search = Sök filer…
-pac-no-match = Ingen filer matchar ”{ $query }”.
+pac-no-match = Ingen filer matchar "{ $query }".
 pac-partial = Paketet är ofullständigt ({ $found } av { $expected }), så några av dess filer saknas eller är avkortade.
 pac-incomplete = ofullständig
 # A script names the two download agents in its command, so both have to be part
@@ -515,7 +515,7 @@ pac-spd-written = Skript skrivna: { $files }
 pac-spd-failed = Skripten kunde inte skrivas: { $error }
 pac-spd-no-config = Det här paketet innehåller ingen konfigurations-XML, så partitionsnamnen är okända.
 
-# Dialogrutan ”Packa paketet igen” (läge 3): bygger ett PAC-paket av en flash.cfg
+# Dialogrutan "Packa paketet igen" (läge 3): bygger ett PAC-paket av en flash.cfg
 # eller en scatter-XML och filerna bredvid.
 pac-repack-title = Packa paketet igen
 pac-repack-description = Bygg ett Unisoc PAC-paket av en flash.cfg eller en scatter-XML och filerna bredvid: varje post i källan matchas med filen den behöver.

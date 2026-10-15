@@ -86,13 +86,23 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     // stays as locked as it is while the run watches for devices.
     let busy = running || !multi.flashing.is_empty();
 
-    // [Preset Manage]. Locked while a run goes on: what is being flashed must
-    // not change under it.
-    let preset = button(text(l10n.tr("multi-flash-preset-manage"))).width(Fill);
-    let preset = if busy {
-        preset
+    // The page's first button belongs to the run: while one goes on — or a
+    // device of it is still being written to — there is nothing to manage
+    // ("Preset Manage" is locked then), so the folder this run writes its logs
+    // into takes its place. It is only live once the session said where that
+    // folder is.
+    let manage = if busy {
+        let locate = button(text(l10n.tr("firmware-flash-locate-log"))).width(Fill);
+
+        if multi.log_directory.is_some() {
+            locate.on_press(Message::MultiFlashLocateLog)
+        } else {
+            locate
+        }
     } else {
-        preset.on_press(Message::MultiFlashPresetManage)
+        button(text(l10n.tr("multi-flash-preset-manage")))
+            .width(Fill)
+            .on_press(Message::MultiFlashPresetManage)
     };
 
     // [Start] / [Stop]. Starting needs something to flash, and no device of the
@@ -124,7 +134,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         exit.on_press(Message::MultiFlashExit)
     };
 
-    let mut content = column![row![preset, start, exit].spacing(8).width(Fill)]
+    let mut content = column![row![manage, start, exit].spacing(8).width(Fill)]
         .spacing(12)
         .width(Fill)
         .align_x(Alignment::Start);

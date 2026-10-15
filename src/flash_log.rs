@@ -14,6 +14,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use chrono::Local;
 
@@ -108,6 +109,47 @@ impl FlashLog {
         // it.
         let _ = file.flush();
     }
+}
+
+/// Shows a log in the system's file manager.
+///
+/// A folder — a multi-device run's directory, with one file per phone in it —
+/// is opened as it is. A file is handed to the file manager where the platform
+/// can point at one (Windows and macOS both have a switch for it, and the
+/// folder holds one file per run, so the user is after the newest one); a Linux
+/// desktop has no such switch and gets the folder the file is in instead. The
+/// file manager is the user's own window, so the call only ever starts it —
+/// nothing waits for it, and nothing is reported but a failure to start it at
+/// all.
+pub(crate) fn reveal(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        return open::that(path)
+            .map_err(|error| format!("could not open the file manager: {error}"));
+    }
+
+    if cfg!(target_os = "windows") {
+        // One argument, not two: `explorer.exe` reads the switch and the path
+        // as a single word, which is also what keeps a path with a space in it
+        // in one piece.
+        return Command::new("explorer.exe")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("could not open the file manager: {error}"));
+    }
+
+    if cfg!(target_os = "macos") {
+        return Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("could not open the file manager: {error}"));
+    }
+
+    // No way to point at the file, so the directory it is in has to do.
+    open::that(path.parent().unwrap_or(path))
+        .map_err(|error| format!("could not open the file manager: {error}"))
 }
 
 #[cfg(test)]
