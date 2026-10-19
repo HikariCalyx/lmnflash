@@ -12,6 +12,10 @@ use crate::compat_iced::*;
 use crate::text;
 use crate::{driver_install, Message, State};
 
+/// The room a tile's action buttons keep around their labels when the tile
+/// sizes them to their content instead of sharing its width.
+const COMPACT_ACTION_PADDING: [f32; 2] = [3.0, 8.0];
+
 /// A feature tile offered by the smartphone-firmware-flash mode (Mode 2).
 ///
 /// Each variant maps to a localized title and action button; new flashing
@@ -23,6 +27,7 @@ pub(crate) enum SmartphoneFeature {
     FirmwareFlash,
     PartitionFlash,
     MultiFlashing,
+    PartitionManager,
     InstallDriver,
     RemoveBloatware,
     WirelessDebugging,
@@ -30,12 +35,13 @@ pub(crate) enum SmartphoneFeature {
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
         Self::PartitionFlash,
         Self::MultiFlashing,
+        Self::PartitionManager,
         Self::InstallDriver,
         Self::RemoveBloatware,
         Self::WirelessDebugging,
@@ -49,6 +55,7 @@ impl SmartphoneFeature {
             Self::FirmwareFlash => "flash-firmware-title",
             Self::PartitionFlash => "flash-partition-title",
             Self::MultiFlashing => "flash-multi-flashing-title",
+            Self::PartitionManager => "flash-partition-manager-title",
             Self::InstallDriver => "flash-driver-title",
             Self::RemoveBloatware => "flash-bloatware-title",
             Self::WirelessDebugging => "flash-wireless-title",
@@ -67,6 +74,16 @@ impl SmartphoneFeature {
             Self::InstallDriver => driver_install::target().is_some(),
             _ => true,
         }
+    }
+
+    /// Whether the tile's action buttons size themselves to their labels
+    /// instead of sharing the tile's width.
+    ///
+    /// The Partition Manager offers three vendors, and an equal third of the
+    /// card is narrower than the word "Qualcomm" — the label would bleed out
+    /// of its button.
+    fn actions_fit_content(self) -> bool {
+        matches!(self, Self::PartitionManager)
     }
 
     /// The action buttons of the tile, paired with the FTL id of their label
@@ -108,6 +125,19 @@ impl SmartphoneFeature {
                 "flash-multi-flashing-button",
                 Some(Message::MultiFlashingSelected),
             )],
+            // The partition manager is a workspace of its own as well: it reads
+            // the partition table of a phone through its vendor's download mode
+            // and writes to the ranges in it. Only the Qualcomm side exists so
+            // far; the other vendors' buttons are drawn disabled until their
+            // flow is implemented.
+            Self::PartitionManager => vec![
+                (
+                    "flash-partition-manager-qualcomm-button",
+                    Some(Message::QualcommManagerSelected),
+                ),
+                ("flash-partition-manager-mediatek-button", None),
+                ("flash-partition-manager-unisoc-button", None),
+            ],
             // Windows installs a driver per device type: phones take
             // Motorola's Mobile Drivers, tablets are flashed with Lenovo's
             // "Software Fix", which is a download page of its own. Linux has a
@@ -166,11 +196,19 @@ pub(crate) fn smartphone_flash_view(state: &State) -> Element<'_, Message> {
 fn smartphone_feature_tile(state: &State, feature: SmartphoneFeature) -> Element<'_, Message> {
     let l10n = &state.l10n;
 
+    let fit_content = feature.actions_fit_content();
+
     let actions: Vec<Element<'_, Message>> = feature
         .actions()
         .into_iter()
         .map(|(label_id, message)| -> Element<'_, Message> {
-            let action = button(text(l10n.tr(label_id))).width(Fill);
+            let action = button(text(l10n.tr(label_id)));
+
+            let action = if fit_content {
+                action.padding(COMPACT_ACTION_PADDING)
+            } else {
+                action.width(Fill)
+            };
 
             match message {
                 Some(message) => action.on_press(message).into(),
@@ -181,10 +219,19 @@ fn smartphone_feature_tile(state: &State, feature: SmartphoneFeature) -> Element
         })
         .collect();
 
+    // Buttons that size themselves to their labels may not fit one line in
+    // every locale, so their row wraps. A wrapping row has no `spacing`, so
+    // the spacing is set before `.wrap()`.
+    let actions: Element<'_, Message> = if fit_content {
+        Row::with_children(actions).spacing(8).wrap().into()
+    } else {
+        Row::with_children(actions).spacing(8).into()
+    };
+
     container(
         column![
             text(l10n.tr(feature.title_id())).size(16.0),
-            Row::with_children(actions).spacing(8),
+            actions,
         ]
         .spacing(12)
         .align_x(Alignment::Start),

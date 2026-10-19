@@ -1219,6 +1219,117 @@ mod tests {
         }
     }
 
+    /// The Partition Manager has a tile of its own in the Mode 2 grid: its
+    /// vendor buttons, the table, the actions above it and the tools below it
+    /// must be present in every locale.
+    #[test]
+    fn the_partition_manager_page_renders_in_every_locale() {
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in [
+                "flash-partition-manager-title",
+                "flash-partition-manager-qualcomm-button",
+                "flash-partition-manager-mediatek-button",
+                "flash-partition-manager-unisoc-button",
+                "qc-inject-firehose",
+                "qc-dump",
+                "qc-write",
+                "qc-erase",
+                "qc-flash-xml",
+                "qc-col-lun",
+                "qc-col-begin",
+                "qc-col-end",
+                "qc-idle",
+                "qc-search",
+                "qc-dump-entire-storage",
+                "qc-danger-zone",
+                "qc-danger-repartition",
+                "qc-danger-flash-storage",
+                "qc-danger-flash-backup",
+                "qc-danger-erase-storage",
+                "qc-view-log",
+                "qc-storage-type",
+                "qc-storage-autodetect",
+                "qc-storage-emmc",
+                "qc-storage-ufs",
+                "qc-storage-spi-nor",
+                "qc-storage-nand",
+                "qc-storage-nvme",
+                "qc-port",
+                "qc-device-manager-tooltip",
+                "qc-reboot-normal",
+                "qc-reboot-oem-unlock",
+                "qc-reboot-recovery",
+                "qc-reboot-fastbootd",
+                "qc-firehose-programmer",
+                "qc-firehose-programmer-filter",
+                "qc-select-port",
+                "qc-firehose-injecting",
+                "qc-reading-partitions",
+                "qc-partitions-none",
+                "qc-rebooting",
+                "qc-reboot-sent",
+                "qc-select-partition",
+                "qc-select-one-partition",
+                "qc-dump-folder-title",
+                "qc-dump-file-title",
+                "qc-erase-confirm-title",
+                "qc-write-file-title",
+                "qc-image-filter",
+                // The table head and the controls reused from other pages are
+                // as much a part of this page as its own strings.
+                "partition-flash-partition",
+                "pac-repack-col-size",
+                "multi-flash-exit",
+                "firmware-flash-reboot",
+                "flash-factory-reset-title",
+            ] {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            // The parameterized lines: a locale that names `$count`, `$error`
+            // or `$query` differently leaves a hole the parity test cannot
+            // see, so the value has to land in the sentence.
+            for (id, args) in [
+                ("qc-partitions-found", vec![("count", "7"), ("storage", "UFS")]),
+                ("qc-firehose-failed", vec![("error", "NAK")]),
+                ("qc-reboot-failed", vec![("error", "NAK")]),
+                ("qc-no-match", vec![("query", "boot")]),
+                ("qc-dumping", vec![("name", "boot_a"), ("percent", "42")]),
+                ("qc-writing", vec![("name", "boot_a"), ("percent", "42")]),
+                (
+                    "qc-dump-done",
+                    vec![("count", "2"), ("path", "C:\\dumps")],
+                ),
+                ("qc-dump-failed", vec![("error", "NAK")]),
+                ("qc-write-done", vec![("name", "boot_a")]),
+                ("qc-write-failed", vec![("error", "NAK")]),
+                ("qc-erasing", vec![("name", "boot_a"), ("percent", "42")]),
+                ("qc-erase-done", vec![("count", "2")]),
+                ("qc-erase-failed", vec![("error", "NAK")]),
+                ("qc-erase-confirm", vec![("count", "2")]),
+                ("qc-refresh-failed", vec![("error", "NAK")]),
+            ] {
+                let text = bundle.tr_with_args(
+                    id,
+                    &args
+                        .iter()
+                        .map(|(key, value)| (*key, (*value).to_owned()))
+                        .collect::<Vec<_>>(),
+                );
+
+                for (_, value) in args {
+                    assert!(text.contains(value), "{language:?}: {id}: {text}");
+                }
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+        }
+    }
+
     /// The Firmware Flash description exists in two variants: the plain one,
     /// and one without the "erases all data" clause shown while no user-data
     /// erase is selected. Both must be present in every locale.

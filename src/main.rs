@@ -22,6 +22,7 @@ mod driver;
 mod driver_install;
 mod factory_reset;
 mod fastboot_info;
+mod firehose;
 mod firmware;
 mod firmware_flash;
 mod flash_engine;
@@ -46,6 +47,8 @@ mod partition_flash;
 mod platform_tools;
 mod preset_file;
 mod protocol;
+mod qualcomm;
+mod qualcomm_ports;
 mod scatter;
 mod smartphone;
 mod spd_script;
@@ -927,6 +930,193 @@ struct MultiFlashState {
     close_prompt: bool,
 }
 
+/// State of the "Partition Manager" page (Mode 2), in its Qualcomm form.
+///
+/// The page is reached from the feature grid and takes its place; it shows the
+/// partition table of a phone read through Firehose. The table stays empty
+/// until the programmer is injected; after that, its rows can be dumped,
+/// written, erased or read again.
+#[derive(Default)]
+struct QualcommState {
+    /// Whether the page is shown instead of the feature grid.
+    open: bool,
+    /// What the partition search box contains. It only filters what the table
+    /// shows.
+    filter: String,
+    /// The port the Firehose connection will use, once the dropdown offers
+    /// the ones that enumerate as 05C6:9008.
+    port: Option<String>,
+    /// The COM ports (or `ttyUSB*` devices) a Firehose device offers right
+    /// now; the dropdown is refreshed from this list about once a second.
+    ports: Vec<String>,
+    /// The storage the session talks to; the default lets the phone report it.
+    storage: StorageType,
+    /// The storage the phone actually reported, once a table was read.
+    detected: Option<StorageType>,
+    /// The partition table the injection read.
+    partitions: Vec<firehose::Partition>,
+    /// Which rows of the table are selected, parallel to `partitions`. The
+    /// table is a multi-select list: a plain click selects one row, Command
+    /// (or Control) toggles a row, Shift extends a range, and Control+A takes
+    /// every row on screen.
+    selected: Vec<bool>,
+    /// Which row a Shift-click extends a range from, as a partition index.
+    anchor: Option<usize>,
+    /// The modifiers of the last keyboard event, so a row click knows whether
+    /// Command/Control (toggle one row) or Shift (extend a range) was held.
+    modifiers: iced::keyboard::Modifiers,
+    /// How far the running job is, over every selected partition: the bar
+    /// under the table. `None` when nothing runs.
+    progress: Option<firehose::Progress>,
+    /// What the page is doing, or how the last action went.
+    status: QualcommStatus,
+    /// Whether a Firehose job (an injection, a dump, a write or a reset) is
+    /// running.
+    busy: bool,
+    /// Whether the programmer is running on the phone. It stays in RAM after
+    /// the injection's port was closed, so "Inject Firehose" has nothing to
+    /// do until the phone is reset or another port is picked.
+    programmer_uploaded: bool,
+    /// The detailed log the last Firehose session wrote, so the page can show
+    /// it in the file manager.
+    log_path: Option<std::path::PathBuf>,
+}
+
+/// What the Qualcomm page's status line says.
+///
+/// The error text is kept as the raw message the failing step produced, and
+/// is only put into a sentence when the page is drawn — a language switch
+/// then re-renders it in the new language.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum QualcommStatus {
+    /// Nothing has been done yet (or the last table was discarded).
+    #[default]
+    Idle,
+    /// The programmer is being uploaded and the table read.
+    Injecting,
+    /// The programmer is running and its partition table is being read.
+    Reading,
+    /// The table was read; the count is how many partitions it holds.
+    Table { count: usize },
+    /// The injection failed; the text says why.
+    InjectFailed(String),
+    /// The phone is being reset.
+    Rebooting,
+    /// The reset command went through.
+    Rebooted,
+    /// The reset failed; the text says why.
+    RebootFailed(String),
+    /// One partition is being read into a file; `done` of `total` bytes.
+    Dumping { name: String, done: u64, total: u64 },
+    /// One image is being written to a partition.
+    Writing { name: String, done: u64, total: u64 },
+    /// The sectors of one partition are being erased.
+    Erasing { name: String, done: u64, total: u64 },
+    /// The partitions were dumped into a folder.
+    DumpDone {
+        count: usize,
+        directory: std::path::PathBuf,
+    },
+    /// The dump failed; the text says why.
+    DumpFailed(String),
+    /// An image was written to a partition.
+    WriteDone(String),
+    /// The write failed; the text says why.
+    WriteFailed(String),
+    /// The selected partitions were erased.
+    EraseDone { count: usize },
+    /// The erase failed; the text says why.
+    EraseFailed(String),
+    /// The partition table is being read again.
+    Refreshing,
+    /// Reading the table again failed; the text says why.
+    RefreshFailed(String),
+}
+
+/// The modes the page's Reboot menu offers.
+///
+/// Every one of them is a Firehose session of its own: the mode decides what is
+/// written into the storage — the OEM-unlocking flag in FRP/config, or a boot
+/// command in `misc` — before the phone is reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RebootMode {
+    Normal,
+    FactoryReset,
+    OemUnlock,
+    Recovery,
+    Fastbootd,
+}
+
+impl RebootMode {
+    /// The entries the menu shows, in order.
+    const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::FactoryReset,
+        Self::OemUnlock,
+        Self::Recovery,
+        Self::Fastbootd,
+    ];
+
+    /// The FTL id of its label.
+    fn message_id(self) -> &'static str {
+        match self {
+            Self::Normal => "qc-reboot-normal",
+            Self::FactoryReset => "flash-factory-reset-title",
+            Self::OemUnlock => "qc-reboot-oem-unlock",
+            Self::Recovery => "qc-reboot-recovery",
+            Self::Fastbootd => "qc-reboot-fastbootd",
+        }
+    }
+
+    /// The work the mode asks the programmer for.
+    fn action(self) -> firehose::RebootAction {
+        match self {
+            Self::Normal => firehose::RebootAction::Normal,
+            Self::FactoryReset => firehose::RebootAction::FactoryReset,
+            Self::OemUnlock => firehose::RebootAction::OemUnlock,
+            Self::Recovery => firehose::RebootAction::Recovery,
+            Self::Fastbootd => firehose::RebootAction::Fastbootd,
+        }
+    }
+}
+
+/// The storage a Qualcomm phone can be told to work with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum StorageType {
+    /// Ask the phone which storage it has.
+    #[default]
+    Autodetect,
+    Emmc,
+    Ufs,
+    SpiNor,
+    Nand,
+    Nvme,
+}
+
+impl StorageType {
+    /// The choices the storage dropdown offers, in the order it shows them.
+    const ALL: [Self; 6] = [
+        Self::Autodetect,
+        Self::Emmc,
+        Self::Ufs,
+        Self::SpiNor,
+        Self::Nand,
+        Self::Nvme,
+    ];
+
+    /// The FTL id of its label.
+    fn message_id(self) -> &'static str {
+        match self {
+            Self::Autodetect => "qc-storage-autodetect",
+            Self::Emmc => "qc-storage-emmc",
+            Self::Ufs => "qc-storage-ufs",
+            Self::SpiNor => "qc-storage-spi-nor",
+            Self::Nand => "qc-storage-nand",
+            Self::Nvme => "qc-storage-nvme",
+        }
+    }
+}
+
 /// One device of a run, as the table shows it.
 struct MultiFlashDevice {
     serial: String,
@@ -1018,6 +1208,7 @@ struct SmartphoneFlashState {
     wireless: WirelessState,
     captive_portal: CaptivePortalState,
     multi_flash: MultiFlashState,
+    qualcomm: QualcommState,
 }
 
 /// State of the "Unpack Image" feature (Mode 3, firmware-file tools).
@@ -2580,6 +2771,98 @@ enum Message {
     /// Multi Flashing: open the workspace that flashes a whole batch of
     /// phones, which takes the place of the Mode 2 feature grid.
     MultiFlashingSelected,
+    /// Qualcomm Partition Manager: open the workspace that lists the
+    /// partitions of a phone read through Firehose, which takes the place of
+    /// the Mode 2 feature grid.
+    QualcommManagerSelected,
+    /// Qualcomm Partition Manager: leave the workspace.
+    QualcommExit,
+    /// Qualcomm Partition Manager: the partition search box was edited.
+    QualcommFilterChanged(String),
+    /// Qualcomm Partition Manager: a port of the dropdown was picked.
+    QualcommPortSelected(String),
+    /// Qualcomm Partition Manager: a row of the partition table was clicked.
+    /// Command/Control toggles it, Shift extends a range from the row clicked
+    /// before, and a plain click selects it alone.
+    QualcommPartitionClicked(usize),
+    /// Qualcomm Partition Manager: the modifier keys changed.
+    QualcommModifiersChanged(iced::keyboard::Modifiers),
+    /// Qualcomm Partition Manager: Control+A asked for every row on screen.
+    QualcommSelectAll,
+    /// Qualcomm Partition Manager: "Erase" was pressed — a destructive action
+    /// asks first.
+    QualcommErase,
+    /// Qualcomm Partition Manager: the erase confirmation was answered.
+    QualcommEraseConfirmed(bool),
+    /// Qualcomm Partition Manager: progress of an erase.
+    QualcommEraseProgress(firehose::Progress),
+    /// Qualcomm Partition Manager: the erase ended with how many partitions it
+    /// cleared (or the reason it could not).
+    QualcommEraseFinished(Result<usize, String>),
+    /// Qualcomm Partition Manager: the refresh button was pressed — the table
+    /// is cleared and read again.
+    QualcommRefresh,
+    /// Qualcomm Partition Manager: the table was read again (or the reason it
+    /// could not be).
+    QualcommRefreshed(Result<firehose::Table, String>),
+    /// Qualcomm Partition Manager: a storage type was picked.
+    QualcommStorageTypeSelected(StorageType),
+    /// Qualcomm Partition Manager: time to look the Firehose ports up again
+    /// (the page polls them while it is open).
+    QualcommPortsPolled,
+    /// Qualcomm Partition Manager: the ports a Firehose device offers now.
+    QualcommPortsScanned(Vec<String>),
+    /// Qualcomm Partition Manager: open Windows' Device Manager, where the
+    /// phone appears as a serial port.
+    QualcommOpenDeviceManager,
+    /// Qualcomm Partition Manager: show the last Firehose session's log in the
+    /// file manager.
+    QualcommLocateLog,
+    /// Qualcomm Partition Manager: an entry of the danger-zone menu was
+    /// picked. The entries are placeholders, so the pick is ignored.
+    QualcommDangerZoneSelected,
+    /// Qualcomm Partition Manager: "Inject Firehose" was pressed — ask for
+    /// the programmer file.
+    QualcommInjectFirehose,
+    /// Qualcomm Partition Manager: the programmer file the picker returned.
+    QualcommProgrammerPicked(Option<std::path::PathBuf>),
+    /// Qualcomm Partition Manager: the injection moved on from the upload to
+    /// reading the partition table.
+    QualcommFirehoseReading,
+    /// Qualcomm Partition Manager: the injection ended with the table it read
+    /// (or the reason it could not).
+    QualcommFirehoseReady(Result<firehose::Table, String>),
+    /// Qualcomm Partition Manager: an entry of the reboot menu was picked.
+    /// Only a normal reboot is implemented so far.
+    QualcommRebootModeSelected(RebootMode),
+    /// Qualcomm Partition Manager: the reset command was sent (or failed).
+    QualcommResetFinished(Result<(), String>),
+    /// Qualcomm Partition Manager: progress of the writes a reboot mode does
+    /// before it resets.
+    QualcommRebootProgress(firehose::Progress),
+    /// Qualcomm Partition Manager: "Dump" was pressed — ask where the files
+    /// should go: a file for one selected row, a folder for several.
+    QualcommDump,
+    /// Qualcomm Partition Manager: the folder the dump should be written to.
+    QualcommDumpFolderPicked(Option<std::path::PathBuf>),
+    /// Qualcomm Partition Manager: the file a single-partition dump should be
+    /// written to.
+    QualcommDumpFilePicked(Option<std::path::PathBuf>),
+    /// Qualcomm Partition Manager: progress of a dump (partition, bytes done,
+    /// total bytes of the job).
+    QualcommDumpProgress(firehose::Progress),
+    /// Qualcomm Partition Manager: the dump ended with the number of files it
+    /// wrote and where they are (or the reason it could not).
+    QualcommDumpFinished(Result<(usize, std::path::PathBuf), String>),
+    /// Qualcomm Partition Manager: "Write" was pressed — ask for the image.
+    QualcommWrite,
+    /// Qualcomm Partition Manager: the image the picker returned.
+    QualcommWriteFilePicked(Option<std::path::PathBuf>),
+    /// Qualcomm Partition Manager: progress of a write (bytes done, total).
+    QualcommWriteProgress(firehose::Progress),
+    /// Qualcomm Partition Manager: the write ended with the partition it wrote
+    /// to (or the reason it could not).
+    QualcommWriteFinished(Result<String, String>),
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     FirmwareFlashBackdropPressed,
@@ -3000,7 +3283,10 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || state.flash.multi_flash.pending.unpacking
         // The decrypt dialog only has text while it works, but its spinner
         // ticks along with the others.
-        || matches!(state.decrypt.status, DecryptStatus::Working);
+        || matches!(state.decrypt.status, DecryptStatus::Working)
+        // Injecting a programmer — and resetting the phone afterwards — keep
+        // the status line's spinner turning.
+        || state.flash.qualcomm.busy;
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
@@ -3011,6 +3297,32 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let countdown = if firmware.confirm_countdown > 0 {
         iced::time::every(std::time::Duration::from_secs(1))
             .map(|_| Message::FirmwareFlashCountdownTick)
+    } else {
+        iced::Subscription::none()
+    };
+    // While the Qualcomm Partition Manager is open, the ports a Firehose
+    // device offers are looked up once a second: plugging the phone in or out
+    // has to show up in its dropdown without the user refreshing anything.
+    let port_poll = if qualcomm::is_open(state) {
+        iced::time::every(std::time::Duration::from_secs(1))
+            .map(|_| Message::QualcommPortsPolled)
+    } else {
+        iced::Subscription::none()
+    };
+    // The table's rows read the modifier keys, and Control+A takes every row on
+    // screen: the page listens to the keyboard while it is open.
+    let page_input = if qualcomm::is_open(state) {
+        iced::event::listen_with(|event, status, _window| match event {
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                Some(Message::QualcommModifiersChanged(modifiers))
+            }
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. })
+                if status == iced::event::Status::Ignored =>
+            {
+                table_shortcut(&key, modifiers)
+            }
+            _ => None,
+        })
     } else {
         iced::Subscription::none()
     };
@@ -3054,11 +3366,31 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     iced::Subscription::batch([
         ticks,
         countdown,
+        port_poll,
+        page_input,
         transition,
         close_requests,
         system_theme,
         dropped_files,
     ])
+}
+
+/// The keys the partition table answers to.
+///
+/// Control (Command on macOS) plus A takes every row on screen. A key a focused
+/// widget already took — the search box's own Control+A — never reaches here.
+fn table_shortcut(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<Message> {
+    match key {
+        iced::keyboard::Key::Character(character)
+            if modifiers.command() && character.eq_ignore_ascii_case("a") =>
+        {
+            Some(Message::QualcommSelectAll)
+        }
+        _ => None,
+    }
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -3648,6 +3980,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
             SmartphoneFeature::PartitionFlash => start_partition_flash_dialog(state),
             SmartphoneFeature::MultiFlashing => start_multi_flashing_page(state),
+            SmartphoneFeature::PartitionManager => start_qualcomm_page(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
             SmartphoneFeature::WirelessDebugging => start_wireless_dialog(state),
@@ -4243,6 +4576,565 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             // The chrome comes back with the grid, fading in over the same
             // pose as the content around it.
             state.content_transition_covers_chrome = true;
+            Task::none()
+        }
+        Message::QualcommManagerSelected => start_qualcomm_page(state),
+        Message::QualcommExit => {
+            state.flash.qualcomm.open = false;
+            // Leaving plays the same slide the other way round, so the
+            // feature grid comes back the way the page went in.
+            state.content_transition = Some(anim::Transition::settle(
+                anim::content_start(false),
+                anim::content_rest(),
+            ));
+            // The chrome comes back with the grid, fading in over the same
+            // pose as the content around it.
+            state.content_transition_covers_chrome = true;
+            Task::none()
+        }
+        Message::QualcommFilterChanged(value) => {
+            state.flash.qualcomm.filter = value;
+            Task::none()
+        }
+        Message::QualcommPortSelected(port) => {
+            state.flash.qualcomm.port = Some(port);
+            // Another phone (or another port of the same one) says nothing
+            // about the table that was read from the previous one, and the
+            // programmer does not run on it either — so "Inject Firehose" is
+            // offered again.
+            state.flash.qualcomm.partitions.clear();
+            state.flash.qualcomm.selected.clear();
+            state.flash.qualcomm.anchor = None;
+            state.flash.qualcomm.progress = None;
+            state.flash.qualcomm.detected = None;
+            state.flash.qualcomm.status = QualcommStatus::Idle;
+            state.flash.qualcomm.programmer_uploaded = false;
+            Task::none()
+        }
+        Message::QualcommPartitionClicked(index) => {
+            if index >= state.flash.qualcomm.partitions.len() || state.flash.qualcomm.busy {
+                return Task::none();
+            }
+
+            let visible = qualcomm_visible_indices(&state.flash.qualcomm);
+            let modifiers = state.flash.qualcomm.modifiers;
+            select_qualcomm_row(&mut state.flash.qualcomm, &visible, index, modifiers);
+
+            Task::none()
+        }
+        Message::QualcommModifiersChanged(modifiers) => {
+            state.flash.qualcomm.modifiers = modifiers;
+            Task::none()
+        }
+        Message::QualcommSelectAll => {
+            if state.flash.qualcomm.busy || state.flash.qualcomm.partitions.is_empty() {
+                return Task::none();
+            }
+
+            // Every row the table shows — the search box narrows what "all"
+            // means, the way a file list does.
+            let visible = qualcomm_visible_indices(&state.flash.qualcomm);
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.selected.fill(false);
+            for index in &visible {
+                if let Some(row) = qualcomm.selected.get_mut(*index) {
+                    *row = true;
+                }
+            }
+            qualcomm.anchor = visible.first().copied();
+
+            Task::none()
+        }
+        Message::QualcommStorageTypeSelected(storage) => {
+            state.flash.qualcomm.storage = storage;
+            // The table was read from the storage the phone reported, which
+            // the pick does not change.
+            Task::none()
+        }
+        Message::QualcommPortsPolled => start_qualcomm_port_scan(),
+        Message::QualcommPortsScanned(ports) => {
+            let qualcomm = &mut state.flash.qualcomm;
+
+            // A port that went away cannot stay selected: the dropdown would
+            // name a phone that is no longer there. The programmer went with
+            // it, so the next session has to upload it again.
+            if let Some(selected) = &qualcomm.port {
+                if !ports.iter().any(|port| port == selected) {
+                    qualcomm.port = None;
+                    qualcomm.programmer_uploaded = false;
+                }
+            }
+
+            // The first port a scan finds is selected on its own, so plugging
+            // the phone in is all it takes; a port that is already selected is
+            // left alone (the table read from it stays).
+            if qualcomm.port.is_none() && !qualcomm.busy {
+                if let Some(first) = ports.first() {
+                    qualcomm.port = Some(first.clone());
+                    // Nothing has been read from a port that was just found.
+                    qualcomm.partitions.clear();
+                    qualcomm.selected.clear();
+                    qualcomm.anchor = None;
+                    qualcomm.progress = None;
+                    qualcomm.detected = None;
+                    qualcomm.status = QualcommStatus::Idle;
+                }
+            }
+
+            qualcomm.ports = ports;
+            Task::none()
+        }
+        Message::QualcommOpenDeviceManager => {
+            if let Err(error) = qualcomm_ports::open_device_manager() {
+                eprintln!("[qualcomm] could not open Device Manager: {error}");
+            }
+
+            Task::none()
+        }
+        Message::QualcommLocateLog => {
+            if let Some(path) = state.flash.qualcomm.log_path.clone() {
+                if let Err(error) = flash_log::reveal(&path) {
+                    eprintln!("[qualcomm] could not open the log: {error}");
+                }
+            }
+
+            Task::none()
+        }
+        // Nothing of the danger zone is implemented yet: the pick is ignored
+        // and the control keeps showing its placeholder, the way the page's
+        // greyed-out buttons do.
+        Message::QualcommDangerZoneSelected => Task::none(),
+        Message::QualcommInjectFirehose => start_qualcomm_injection(state),
+        Message::QualcommProgrammerPicked(path) => {
+            let Some(path) = path else {
+                // The picker was cancelled; nothing was touched.
+                return Task::none();
+            };
+            let Some(port) = state.flash.qualcomm.port.clone() else {
+                state.flash.qualcomm.status =
+                    QualcommStatus::InjectFailed(state.l10n.tr("qc-select-port"));
+                return Task::none();
+            };
+
+            let storage = state.flash.qualcomm.storage;
+            // Every session gets its own file, named after the port and the
+            // moment it started: an injection that fails is exactly what the
+            // log is for, so the file is created before anything is sent.
+            let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+            state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+            state.flash.qualcomm.busy = true;
+            state.flash.qualcomm.status = QualcommStatus::Injecting;
+
+            // The worker reports when the upload is over, so the status line
+            // can say "Reading Partition Table…" for the second half of the
+            // job instead of claiming an upload that has finished.
+            let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+            Task::batch([
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let mut log = log;
+                            let reading = move || {
+                                let _ = progress.unbounded_send(Message::QualcommFirehoseReading);
+                            };
+
+                            firehose::inject(&port, &path, storage, &mut log, &reading)
+                        })
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(format!("the Firehose worker stopped: {error}"))
+                        })
+                    },
+                    Message::QualcommFirehoseReady,
+                ),
+                Task::run(events, |message| message),
+            ])
+        }
+        Message::QualcommFirehoseReading => {
+            // A report from a job that already ended is dropped, like every
+            // other late answer.
+            if state.flash.qualcomm.busy {
+                state.flash.qualcomm.status = QualcommStatus::Reading;
+                // The programmer is running now: uploading it again would be
+                // a no-op at best, so the button waits for another port.
+                state.flash.qualcomm.programmer_uploaded = true;
+            }
+
+            Task::none()
+        }
+        Message::QualcommFirehoseReady(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+
+            match result {
+                Ok(table) => apply_qualcomm_table(qualcomm, table),
+                Err(error) => {
+                    qualcomm.partitions.clear();
+                    qualcomm.selected.clear();
+                    qualcomm.anchor = None;
+                    qualcomm.detected = None;
+                    qualcomm.status = QualcommStatus::InjectFailed(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::QualcommRebootModeSelected(mode) => {
+            if state.flash.qualcomm.busy {
+                return Task::none();
+            }
+            let Some(port) = state.flash.qualcomm.port.clone() else {
+                state.flash.qualcomm.status =
+                    QualcommStatus::RebootFailed(state.l10n.tr("qc-select-port"));
+                return Task::none();
+            };
+
+            // The modes act on the table the injection read: the partitions
+            // they clear and the `misc` block they write are named in it.
+            let partitions = state.flash.qualcomm.partitions.clone();
+            let action = mode.action();
+
+            state.flash.qualcomm.busy = true;
+            state.flash.qualcomm.status = QualcommStatus::Rebooting;
+            state.flash.qualcomm.progress = Some(firehose::Progress::default());
+
+            // A reboot is a Firehose command like any other, so it gets its own
+            // logged session: the phone may have been left in a strange state
+            // by whatever ran before it.
+            let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+            state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+
+            let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+            Task::batch([
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let mut log = log;
+                            let report = move |step: firehose::Progress| {
+                                let _ = progress
+                                    .unbounded_send(Message::QualcommRebootProgress(step));
+                            };
+
+                            firehose::reboot(&port, &partitions, action, &mut log, &report)
+                        })
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(format!("the Firehose worker stopped: {error}"))
+                        })
+                    },
+                    Message::QualcommResetFinished,
+                ),
+                Task::run(events, |message| message),
+            ])
+        }
+        Message::QualcommRebootProgress(progress) => {
+            if state.flash.qualcomm.busy {
+                state.flash.qualcomm.progress = Some(progress);
+            }
+
+            Task::none()
+        }
+        Message::QualcommResetFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            // The phone leaves Firehose mode as it resets, so the next session
+            // has to upload the programmer again — and the table it answered
+            // with belonged to the session that just ended.
+            qualcomm.programmer_uploaded = false;
+            qualcomm.partitions.clear();
+            qualcomm.selected.clear();
+            qualcomm.anchor = None;
+            qualcomm.progress = None;
+            qualcomm.detected = None;
+            qualcomm.status = match result {
+                Ok(()) => QualcommStatus::Rebooted,
+                Err(error) => QualcommStatus::RebootFailed(error),
+            };
+
+            Task::none()
+        }
+        Message::QualcommDump => {
+            if state.flash.qualcomm.busy {
+                return Task::none();
+            }
+
+            let regions = qualcomm_selected_regions(state);
+            if regions.is_empty() {
+                state.flash.qualcomm.status =
+                    QualcommStatus::DumpFailed(state.l10n.tr("qc-select-partition"));
+                return Task::none();
+            }
+
+            // One selected row is one file, so the save dialog lets it be
+            // named and placed where the user wants it. Several rows need a
+            // folder that holds one file each.
+            if let [region] = regions.as_slice() {
+                let title = state.l10n.tr("qc-dump-file-title");
+                let filter = state.l10n.tr("qc-image-filter");
+                let name = format!("{}.img", flash_log::file_name_part(&region.name));
+
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            rfd::FileDialog::new()
+                                .set_title(&title)
+                                .set_file_name(&name)
+                                .add_filter(&filter, &["img"])
+                                .save_file()
+                        })
+                        .await
+                        .unwrap_or(None)
+                    },
+                    Message::QualcommDumpFilePicked,
+                );
+            }
+
+            let title = state.l10n.tr("qc-dump-folder-title");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_folder()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::QualcommDumpFolderPicked,
+            )
+        }
+        Message::QualcommDumpFolderPicked(directory) => match directory {
+            Some(directory) => start_qualcomm_dump(state, firehose::DumpTarget::Folder(directory)),
+            // The picker was cancelled; nothing was touched.
+            None => Task::none(),
+        },
+        Message::QualcommDumpFilePicked(file) => match file {
+            Some(file) => start_qualcomm_dump(state, firehose::DumpTarget::File(file)),
+            None => Task::none(),
+        },
+        Message::QualcommDumpProgress(progress) => {
+            if state.flash.qualcomm.busy {
+                state.flash.qualcomm.status = QualcommStatus::Dumping {
+                    name: progress.name.clone(),
+                    done: progress.done,
+                    total: progress.total,
+                };
+                state.flash.qualcomm.progress = Some(progress);
+            }
+
+            Task::none()
+        }
+        Message::QualcommDumpFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            qualcomm.status = match result {
+                Ok((count, directory)) => QualcommStatus::DumpDone { count, directory },
+                Err(error) => QualcommStatus::DumpFailed(error),
+            };
+
+            Task::none()
+        }
+        Message::QualcommWrite => {
+            if state.flash.qualcomm.busy {
+                return Task::none();
+            }
+
+            let selected = qualcomm_selected_regions(state);
+            let status = match selected.len() {
+                0 => Some("qc-select-partition"),
+                1 => None,
+                _ => Some("qc-select-one-partition"),
+            };
+            if let Some(id) = status {
+                state.flash.qualcomm.status = QualcommStatus::WriteFailed(state.l10n.tr(id));
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("qc-write-file-title");
+            let filter = state.l10n.tr("qc-image-filter");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter(&filter, &["img", "bin"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::QualcommWriteFilePicked,
+            )
+        }
+        Message::QualcommWriteFilePicked(image) => {
+            let Some(image) = image else {
+                return Task::none();
+            };
+            if state.flash.qualcomm.busy {
+                return Task::none();
+            }
+            let selected = qualcomm_selected_regions(state);
+            let [region] = selected.as_slice() else {
+                return Task::none();
+            };
+            let Some(port) = state.flash.qualcomm.port.clone() else {
+                state.flash.qualcomm.status =
+                    QualcommStatus::WriteFailed(state.l10n.tr("qc-select-port"));
+                return Task::none();
+            };
+
+            let region = region.clone();
+            let name = region.name.clone();
+            let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+            state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+            state.flash.qualcomm.busy = true;
+            state.flash.qualcomm.progress = Some(firehose::Progress::default());
+            state.flash.qualcomm.status = QualcommStatus::Writing {
+                name: name.clone(),
+                done: 0,
+                total: 0,
+            };
+
+            let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+            Task::batch([
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let mut log = log;
+                            let report = move |step: firehose::Progress| {
+                                let _ =
+                                    progress.unbounded_send(Message::QualcommWriteProgress(step));
+                            };
+
+                            firehose::write_partition(
+                                &port,
+                                &region,
+                                &image,
+                                &mut log,
+                                &report,
+                            )
+                            .map(|()| name)
+                        })
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(format!("the Firehose worker stopped: {error}"))
+                        })
+                    },
+                    Message::QualcommWriteFinished,
+                ),
+                Task::run(events, |message| message),
+            ])
+        }
+        Message::QualcommWriteProgress(progress) => {
+            if let QualcommStatus::Writing { name, .. } = &state.flash.qualcomm.status {
+                let name = name.clone();
+                state.flash.qualcomm.status = QualcommStatus::Writing {
+                    name,
+                    done: progress.done,
+                    total: progress.total,
+                };
+                state.flash.qualcomm.progress = Some(progress);
+            }
+
+            Task::none()
+        }
+        Message::QualcommWriteFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            qualcomm.status = match result {
+                Ok(name) => QualcommStatus::WriteDone(name),
+                Err(error) => QualcommStatus::WriteFailed(error),
+            };
+
+            Task::none()
+        }
+        Message::QualcommErase => {
+            if state.flash.qualcomm.busy {
+                return Task::none();
+            }
+
+            let regions = qualcomm_selected_regions(state);
+            if regions.is_empty() {
+                state.flash.qualcomm.status =
+                    QualcommStatus::EraseFailed(state.l10n.tr("qc-select-partition"));
+                return Task::none();
+            }
+
+            // Erasing cannot be undone, so it asks first. The dialog is a
+            // native one, so its buttons carry the system's language.
+            let title = state.l10n.tr("qc-erase-confirm-title");
+            let question = state
+                .l10n
+                .tr_with_args("qc-erase-confirm", &[("count", regions.len().to_string())]);
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        matches!(
+                            rfd::MessageDialog::new()
+                                .set_title(&title)
+                                .set_description(&question)
+                                .set_level(rfd::MessageLevel::Warning)
+                                .set_buttons(rfd::MessageButtons::YesNo)
+                                .show(),
+                            rfd::MessageDialogResult::Yes
+                        )
+                    })
+                    .await
+                    .unwrap_or(false)
+                },
+                Message::QualcommEraseConfirmed,
+            )
+        }
+        Message::QualcommEraseConfirmed(confirmed) => {
+            if confirmed {
+                start_qualcomm_erase(state)
+            } else {
+                Task::none()
+            }
+        }
+        Message::QualcommEraseProgress(progress) => {
+            if state.flash.qualcomm.busy {
+                state.flash.qualcomm.status = QualcommStatus::Erasing {
+                    name: progress.name.clone(),
+                    done: progress.done,
+                    total: progress.total,
+                };
+                state.flash.qualcomm.progress = Some(progress);
+            }
+
+            Task::none()
+        }
+        Message::QualcommEraseFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            qualcomm.status = match result {
+                Ok(count) => QualcommStatus::EraseDone { count },
+                Err(error) => QualcommStatus::EraseFailed(error),
+            };
+
+            Task::none()
+        }
+        Message::QualcommRefresh => start_qualcomm_refresh(state),
+        Message::QualcommRefreshed(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+
+            match result {
+                Ok(table) => apply_qualcomm_table(qualcomm, table),
+                Err(error) => {
+                    // The table was cleared when the refresh started, so the
+                    // page keeps its rows until a read goes through again.
+                    qualcomm.status = QualcommStatus::RefreshFailed(error);
+                }
+            }
+
             Task::none()
         }
         Message::MultiFlashPresetManage => {
@@ -8144,6 +9036,307 @@ fn start_multi_flashing_page(state: &mut State) -> Task<Message> {
     Task::none()
 }
 
+/// Opens the Qualcomm Partition Manager: the page takes the place of the Mode 2
+/// feature grid, so the whole window is its own.
+fn start_qualcomm_page(state: &mut State) -> Task<Message> {
+    state.flash.qualcomm.open = true;
+    // A result from the last visit says nothing about this one — but a job
+    // that is still running (a dump can take a while) keeps the page busy.
+    // The table itself is kept: re-reading it is a deliberate action
+    // ("Inject Firehose").
+    if !state.flash.qualcomm.busy {
+        state.flash.qualcomm.status = QualcommStatus::Idle;
+    }
+
+    // The workspace slides in the way a tab does, and the whole window is
+    // animated: the tab bar and the language selector disappear together with
+    // the grid instead of popping while the page fades in.
+    state.content_transition = Some(anim::Transition::settle(
+        anim::content_start(true),
+        anim::content_rest(),
+    ));
+    state.content_transition_covers_chrome = true;
+
+    // The table is empty, but the port dropdown is filled at once: the page
+    // polls the ports while it is open (see `subscription`).
+    start_qualcomm_port_scan()
+}
+
+/// Asks for the Firehose programmer that "Inject Firehose" uploads.
+///
+/// The picker takes `mbn`, `elf` and `melf` files — a plain programmer or the
+/// multi-image archive newer platforms ship — and the injection itself runs
+/// on a worker thread once a file was picked.
+fn start_qualcomm_injection(state: &State) -> Task<Message> {
+    if state.flash.qualcomm.busy || state.flash.qualcomm.port.is_none() {
+        return Task::none();
+    }
+    let title = state.l10n.tr("qc-firehose-programmer");
+    let filter = state.l10n.tr("qc-firehose-programmer-filter");
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                rfd::FileDialog::new()
+                    .set_title(&title)
+                    .add_filter(&filter, &firehose::PROGRAMMER_EXTENSIONS)
+                    .pick_file()
+            })
+            .await
+            .unwrap_or(None)
+        },
+        Message::QualcommProgrammerPicked,
+    )
+}
+
+/// The partitions the table has selected, as regions a dump or a write can
+/// work on.
+fn qualcomm_selected_regions(state: &State) -> Vec<firehose::Region> {
+    let qualcomm = &state.flash.qualcomm;
+
+    qualcomm
+        .partitions
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| qualcomm.selected.get(*index).copied().unwrap_or(false))
+        .map(|(_, partition)| firehose::Region::of(partition))
+        .collect()
+}
+
+/// The rows the table shows, as partition indices: the search box narrows the
+/// table down, and a Shift-click extends over the rows that are on screen.
+fn qualcomm_visible_indices(qualcomm: &QualcommState) -> Vec<usize> {
+    let query = qualcomm.filter.trim().to_lowercase();
+
+    qualcomm
+        .partitions
+        .iter()
+        .enumerate()
+        .filter(|(_, partition)| query.is_empty() || partition.name.to_lowercase().contains(&query))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Applies one click of the table's rows.
+///
+/// Command (Control on Windows and Linux) toggles the row and makes it the
+/// anchor; Shift extends the selection from the anchor to the clicked row over
+/// the rows the table shows; a plain click selects that row alone. The anchor
+/// stays where it is while extending, so a second Shift-click extends from the
+/// same row again.
+fn select_qualcomm_row(
+    qualcomm: &mut QualcommState,
+    visible: &[usize],
+    index: usize,
+    modifiers: iced::keyboard::Modifiers,
+) {
+    if index >= qualcomm.partitions.len() {
+        return;
+    }
+    qualcomm.selected.resize(qualcomm.partitions.len(), false);
+
+    if modifiers.command() {
+        let row = &mut qualcomm.selected[index];
+        *row = !*row;
+        qualcomm.anchor = Some(index);
+        return;
+    }
+
+    // A range only exists between two rows the table shows: an anchor that the
+    // search box filtered away is no anchor.
+    if modifiers.shift() {
+        if let (Some(anchor), Some(from), Some(to)) = (
+            qualcomm.anchor,
+            qualcomm.anchor.and_then(|anchor| visible.iter().position(|row| *row == anchor)),
+            visible.iter().position(|row| *row == index),
+        ) {
+            let (from, to) = (from.min(to), from.max(to));
+            qualcomm.selected.fill(false);
+            for row in &visible[from..=to] {
+                qualcomm.selected[*row] = true;
+            }
+            qualcomm.anchor = Some(anchor);
+            return;
+        }
+    }
+
+    qualcomm.selected.fill(false);
+    qualcomm.selected[index] = true;
+    qualcomm.anchor = Some(index);
+}
+
+/// Hands a table that was just read to the page: the rows, and a selection that
+/// starts empty because a new table is a new list of rows.
+fn apply_qualcomm_table(qualcomm: &mut QualcommState, table: firehose::Table) {
+    qualcomm.detected = Some(table.storage);
+    qualcomm.status = QualcommStatus::Table {
+        count: table.partitions.len(),
+    };
+    qualcomm.selected = vec![false; table.partitions.len()];
+    qualcomm.partitions = table.partitions;
+    qualcomm.anchor = None;
+}
+
+/// Dumps the selected partitions into `target` on a worker thread, reporting
+/// every chunk as it goes.
+///
+/// The programmer is still running in the phone, so this only reopens the port
+/// the table was read from.
+fn start_qualcomm_dump(state: &mut State, target: firehose::DumpTarget) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let regions = qualcomm_selected_regions(state);
+    if regions.is_empty() {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.status = QualcommStatus::DumpFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    // The bar is there from the first moment, empty until the first chunk.
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+    state.flash.qualcomm.status = QualcommStatus::Dumping {
+        name: regions[0].name.clone(),
+        done: 0,
+        total: 0,
+    };
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+    // Where the dump went, for the status line: the folder, or the one file.
+    let place = target.path().to_path_buf();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    let report = move |step: firehose::Progress| {
+                        let _ = progress.unbounded_send(Message::QualcommDumpProgress(step));
+                    };
+
+                    firehose::dump(&port, &regions, &target, &mut log, &report)
+                        .map(|paths| (paths.len(), place))
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            Message::QualcommDumpFinished,
+        ),
+        Task::run(events, |message| message),
+    ])
+}
+
+/// Erases the sectors of the selected partitions on a worker thread.
+///
+/// Like a dump, this reuses the programmer that is still running: the storage
+/// the table came from is already configured.
+fn start_qualcomm_erase(state: &mut State) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let regions = qualcomm_selected_regions(state);
+    if regions.is_empty() {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.status = QualcommStatus::EraseFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+    state.flash.qualcomm.status = QualcommStatus::Erasing {
+        name: regions[0].name.clone(),
+        done: 0,
+        total: 0,
+    };
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    let report = move |step: firehose::Progress| {
+                        let _ = progress.unbounded_send(Message::QualcommEraseProgress(step));
+                    };
+
+                    firehose::erase(&port, &regions, &mut log, &report)
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            Message::QualcommEraseFinished,
+        ),
+        Task::run(events, |message| message),
+    ])
+}
+
+/// Clears the table and reads it again from the phone.
+///
+/// The programmer is still running, so this only re-opens the port and repeats
+/// the `<configure>` and the GPT reads — the storage that was detected is the
+/// one that is read again.
+fn start_qualcomm_refresh(state: &mut State) -> Task<Message> {
+    let qualcomm = &mut state.flash.qualcomm;
+    if qualcomm.busy {
+        return Task::none();
+    }
+
+    // Whatever the table showed is about to be replaced, so the rows and the
+    // selection go first: a stale row must not be acted on while the read runs.
+    let port = qualcomm.port.clone();
+    let storage = qualcomm.detected;
+    qualcomm.partitions.clear();
+    qualcomm.selected.clear();
+    qualcomm.anchor = None;
+    qualcomm.progress = None;
+    qualcomm.status = QualcommStatus::Idle;
+
+    // A table can only be read while the programmer runs: without it, the
+    // button is disabled, and the cleared page is all a refresh can do.
+    let (Some(port), Some(storage), true) = (port, storage, qualcomm.programmer_uploaded) else {
+        return Task::none();
+    };
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    qualcomm.log_path = Some(log.path().to_path_buf());
+    qualcomm.busy = true;
+    qualcomm.status = QualcommStatus::Refreshing;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut log = log;
+                firehose::refresh(&port, storage, &mut log)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+        },
+        Message::QualcommRefreshed,
+    )
+}
+
+/// Looks up the 05C6:9008 serial ports in the background.
+fn start_qualcomm_port_scan() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(qualcomm_ports::enumerate)
+                .await
+                .unwrap_or_default()
+        },
+        Message::QualcommPortsScanned,
+    )
+}
+
 /// Opens the Firmware Flash dialog: finds the `mfastboot` builds shipped next
 /// to the application, notes whether Google's platform-tools can be offered,
 /// and lists the connected devices.
@@ -10862,6 +12055,8 @@ fn view(state: &State) -> Element<'_, Message> {
         // The Multi Flashing page (entered from the Firmware Flash dialog)
         // takes the place of the Mode 2 feature grid.
         Mode::Mode2 if state.flash.multi_flash.open => multi_flash::view(state),
+        // The Partition Manager is a workspace of its own as well.
+        Mode::Mode2 if qualcomm::is_open(state) => qualcomm::view(state),
         Mode::Mode2 => smartphone::smartphone_flash_view(state),
         Mode::Mode3 => decrypt_mode::view(state),
     };
@@ -10947,10 +12142,17 @@ fn view(state: &State) -> Element<'_, Message> {
     // own Exit button.
     let multi_flashing = state.flash.multi_flash.open;
 
+    // The Partition Manager is a full-window workspace as well, left
+    // through its own Exit button.
+    let qualcomm_page = qualcomm::is_open(state);
+
     // The Repack Package dialog is a full-window card as well, so the language
     // selector would show through while that card animates in and out: it is
     // left out while the dialog is open.
-    let full_window = multi_flashing || pac_repack::is_open(state) || pac_unpack::is_open(state);
+    let full_window = multi_flashing
+        || qualcomm_page
+        || pac_repack::is_open(state)
+        || pac_unpack::is_open(state);
 
     // The language selector sits in the top-right corner; on the Firmware
     // Lookup page a round "About" button is drawn to its left. They stay above
@@ -10994,9 +12196,10 @@ fn view(state: &State) -> Element<'_, Message> {
     .padding(8)
     .width(Fill);
 
-    // The mode tabs are left out of the Multi Flashing page entirely (see
-    // `multi_flashing` above), so no tab is ever clickable during a run.
-    let base: Element<'_, Message> = if multi_flashing {
+    // The mode tabs are left out of the full-window pages entirely (see
+    // `multi_flashing` and `qualcomm_page` above), so no tab is ever
+    // clickable while one of them is open.
+    let base: Element<'_, Message> = if multi_flashing || qualcomm_page {
         content_area.into()
     } else {
         column![content_area, horizontal_rule(1), tab_bar].into()
@@ -11779,6 +12982,548 @@ mod tests {
         // board shows what it found.
         assert!(state.flash.partition.listing);
         assert!(state.flash.partition.devices.is_empty());
+    }
+
+    /// The Partition Manager tile takes over the window, and its Exit button
+    /// gives the feature grid back.
+    #[test]
+    fn the_tile_opens_the_partition_manager() {
+        let mut state = State::default();
+
+        let _ = update(
+            &mut state,
+            Message::SmartphoneFeaturePressed(SmartphoneFeature::PartitionManager),
+        );
+        assert!(qualcomm::is_open(&state));
+        // The page hides the tab bar and the language selector, so the whole
+        // window travels with it.
+        assert!(state.content_transition_covers_chrome);
+
+        let _ = update(&mut state, Message::QualcommFilterChanged("boot".into()));
+        assert_eq!(state.flash.qualcomm.filter, "boot");
+
+        let _ = update(&mut state, Message::QualcommExit);
+        assert!(!qualcomm::is_open(&state));
+        // The search box keeps what was typed, so opening the page again finds
+        // the same filter.
+        assert_eq!(state.flash.qualcomm.filter, "boot");
+    }
+
+    /// A port that disappears from the scan cannot stay selected: the page
+    /// would claim a phone that is no longer plugged in. Another port the scan
+    /// does find takes its place, since the first one is selected by default.
+    #[test]
+    fn a_disappeared_port_is_dropped_from_the_selection() {
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+        // The programmer lives in the phone, so it left with the port.
+        state.flash.qualcomm.programmer_uploaded = true;
+
+        let _ = update(
+            &mut state,
+            Message::QualcommPortsScanned(vec!["COM7".to_owned(), "COM8".to_owned()]),
+        );
+
+        assert_eq!(state.flash.qualcomm.port.as_deref(), Some("COM7"));
+        assert_eq!(state.flash.qualcomm.ports, ["COM7", "COM8"]);
+        assert!(state.flash.qualcomm.programmer_uploaded);
+
+        let _ = update(
+            &mut state,
+            Message::QualcommPortsScanned(vec!["COM8".to_owned()]),
+        );
+
+        assert_eq!(state.flash.qualcomm.port.as_deref(), Some("COM8"));
+        assert_eq!(state.flash.qualcomm.ports, ["COM8"]);
+        assert!(!state.flash.qualcomm.programmer_uploaded);
+
+        // With no port left nothing is selected.
+        let _ = update(&mut state, Message::QualcommPortsScanned(Vec::new()));
+        assert_eq!(state.flash.qualcomm.port, None);
+    }
+
+    /// The first port a scan finds is selected on its own, so plugging the
+    /// phone in is all it takes; a port that is already selected is left
+    /// alone, and so is the table read from it.
+    #[test]
+    fn the_first_port_a_scan_finds_is_selected() {
+        let mut state = State::default();
+        let _ = update(
+            &mut state,
+            Message::QualcommPortsScanned(vec!["COM7".to_owned(), "COM8".to_owned()]),
+        );
+        assert_eq!(state.flash.qualcomm.port.as_deref(), Some("COM7"));
+
+        // A table read from that port survives a scan that still lists it.
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(firehose::Table {
+                storage: StorageType::Ufs,
+                partitions: vec![firehose::Partition {
+                    name: "boot_a".to_owned(),
+                    lun: 0,
+                    start_lba: 0,
+                    end_lba: 4095,
+                    sector_size: 4096,
+                }],
+            })),
+        );
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(
+            &mut state,
+            Message::QualcommPortsScanned(vec!["COM7".to_owned(), "COM8".to_owned()]),
+        );
+        assert_eq!(state.flash.qualcomm.port.as_deref(), Some("COM7"));
+        assert_eq!(state.flash.qualcomm.partitions.len(), 1);
+        assert!(state.flash.qualcomm.programmer_uploaded);
+    }
+
+    /// A finished injection hands the table to the page; a failed one clears
+    /// it, so a stale table never sits next to an error.
+    #[test]
+    fn a_firehose_injection_fills_the_partition_table() {
+        let mut state = State::default();
+
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(firehose::Table {
+                storage: StorageType::Ufs,
+                partitions: vec![
+                    firehose::Partition {
+                        name: "xbl_a".to_owned(),
+                        lun: 0,
+                        start_lba: 0,
+                        end_lba: 1023,
+                        sector_size: 4096,
+                    },
+                    firehose::Partition {
+                        name: "super".to_owned(),
+                        lun: 2,
+                        start_lba: 2048,
+                        end_lba: 4095,
+                        sector_size: 4096,
+                    },
+                ],
+            })),
+        );
+
+        assert_eq!(state.flash.qualcomm.partitions.len(), 2);
+        assert_eq!(state.flash.qualcomm.detected, Some(StorageType::Ufs));
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::Table { count: 2 }
+        );
+        assert!(!state.flash.qualcomm.busy);
+
+        // A second attempt that fails drops the table the first one read.
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Err("no GUID partition table".to_owned())),
+        );
+
+        assert!(state.flash.qualcomm.partitions.is_empty());
+        assert_eq!(state.flash.qualcomm.detected, None);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::InjectFailed("no GUID partition table".to_owned())
+        );
+    }
+
+    /// The partition table is a multi-select list, the way a file list is: a
+    /// plain click selects one row, Command/Control toggles a row, Shift takes
+    /// the range from the row clicked before, and a new table starts empty.
+    #[test]
+    fn partition_rows_are_selected_the_way_a_file_list_is() {
+        let mut state = State::default();
+
+        let table = |name: &str| firehose::Table {
+            storage: StorageType::Ufs,
+            partitions: (0..5_u64)
+                .map(|index| firehose::Partition {
+                    name: format!("{name}{index}"),
+                    lun: 0,
+                    start_lba: index * 4096,
+                    end_lba: index * 4096 + 4095,
+                    sector_size: 4096,
+                })
+                .collect(),
+        };
+
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(table("boot"))),
+        );
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, false, false, false, false]
+        );
+
+        // A plain click is one row, and it replaces whatever was selected.
+        let _ = update(&mut state, Message::QualcommPartitionClicked(2));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, false, true, false, false]
+        );
+        let _ = update(&mut state, Message::QualcommPartitionClicked(4));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, false, false, false, true]
+        );
+
+        // Command (Control here) toggles a row without touching the others,
+        // and makes it the anchor.
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::CTRL;
+        let _ = update(&mut state, Message::QualcommPartitionClicked(1));
+        let _ = update(&mut state, Message::QualcommPartitionClicked(3));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, true, false, true, true]
+        );
+        // The same chord on a selected row takes it off again.
+        let _ = update(&mut state, Message::QualcommPartitionClicked(3));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, true, false, false, true]
+        );
+
+        // A plain click again selects one row, and makes it the anchor.
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::default();
+        let _ = update(&mut state, Message::QualcommPartitionClicked(1));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, true, false, false, false]
+        );
+
+        // Shift takes the range between the anchor (1) and the clicked row.
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::SHIFT;
+        let _ = update(&mut state, Message::QualcommPartitionClicked(4));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, true, true, true, true]
+        );
+        // The anchor does not move, so a second Shift-click starts from it
+        // again — over the rows the table shows, not over what was selected.
+        let _ = update(&mut state, Message::QualcommPartitionClicked(2));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, true, true, false, false]
+        );
+        // A range also works upwards.
+        let _ = update(&mut state, Message::QualcommPartitionClicked(0));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [true, true, false, false, false]
+        );
+
+        // Control+A takes every row on screen, and the search box narrows what
+        // that means: `boot3` leaves one row.
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::default();
+        let _ = update(&mut state, Message::QualcommSelectAll);
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [true, true, true, true, true]
+        );
+        state.flash.qualcomm.filter = "boot3".to_owned();
+        let _ = update(&mut state, Message::QualcommSelectAll);
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, false, false, true, false]
+        );
+        // A row the filter hides cannot start a range either, so Shift there
+        // is just a click on that row.
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::SHIFT;
+        let _ = update(&mut state, Message::QualcommPartitionClicked(0));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [true, false, false, false, false]
+        );
+        state.flash.qualcomm.filter.clear();
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::default();
+
+        // An index the table does not have is ignored.
+        let _ = update(&mut state, Message::QualcommPartitionClicked(9));
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [true, false, false, false, false]
+        );
+
+        // A new table is a new list of rows, so no selection carries over.
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(table("system"))),
+        );
+        assert_eq!(
+            state.flash.qualcomm.selected,
+            [false, false, false, false, false]
+        );
+    }
+
+    /// The refresh button clears the table and reads it again — but only while
+    /// the programmer runs, since a table cannot be read without one.
+    #[test]
+    fn a_refresh_clears_the_table_and_reads_it_again() {
+        let mut state = State::default();
+        let table = firehose::Table {
+            storage: StorageType::Ufs,
+            partitions: (0..2_u64)
+                .map(|index| firehose::Partition {
+                    name: format!("boot{index}"),
+                    lun: 0,
+                    start_lba: index * 4096,
+                    end_lba: index * 4096 + 4095,
+                    sector_size: 4096,
+                })
+                .collect(),
+        };
+
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(table.clone())),
+        );
+        assert_eq!(state.flash.qualcomm.partitions.len(), 2);
+
+        // Without a programmer (or without a port) a refresh can only clear
+        // what is on screen.
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+        let _ = update(&mut state, Message::QualcommRefresh);
+        assert!(state.flash.qualcomm.partitions.is_empty());
+        assert!(!state.flash.qualcomm.busy);
+        assert_eq!(state.flash.qualcomm.status, QualcommStatus::Idle);
+
+        // With one, the page is busy until the read answers.
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(table.clone())),
+        );
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(&mut state, Message::QualcommRefresh);
+        assert!(state.flash.qualcomm.partitions.is_empty());
+        assert!(state.flash.qualcomm.busy);
+        assert_eq!(state.flash.qualcomm.status, QualcommStatus::Refreshing);
+
+        let _ = update(&mut state, Message::QualcommRefreshed(Ok(table)));
+        assert!(!state.flash.qualcomm.busy);
+        assert_eq!(state.flash.qualcomm.partitions.len(), 2);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::Table { count: 2 }
+        );
+
+        // A failed read leaves the page empty and says why.
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(&mut state, Message::QualcommRefresh);
+        let _ = update(
+            &mut state,
+            Message::QualcommRefreshed(Err("no GUID partition table".to_owned())),
+        );
+        assert!(state.flash.qualcomm.partitions.is_empty());
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::RefreshFailed("no GUID partition table".to_owned())
+        );
+    }
+
+    /// A reboot ends the session the table was read in, so the rows, the
+    /// selection and the programmer go with it.
+    #[test]
+    fn a_reboot_clears_the_table() {
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(firehose::Table {
+                storage: StorageType::Ufs,
+                partitions: (0..2_u64)
+                    .map(|index| firehose::Partition {
+                        name: format!("boot{index}"),
+                        lun: 0,
+                        start_lba: index * 4096,
+                        end_lba: index * 4096 + 4095,
+                        sector_size: 4096,
+                    })
+                    .collect(),
+            })),
+        );
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(&mut state, Message::QualcommPartitionClicked(0));
+        assert_eq!(state.flash.qualcomm.partitions.len(), 2);
+
+        let _ = update(
+            &mut state,
+            Message::QualcommRebootModeSelected(RebootMode::Normal),
+        );
+        let _ = update(&mut state, Message::QualcommResetFinished(Ok(())));
+
+        assert!(state.flash.qualcomm.partitions.is_empty());
+        assert!(state.flash.qualcomm.selected.is_empty());
+        assert_eq!(state.flash.qualcomm.anchor, None);
+        assert_eq!(state.flash.qualcomm.detected, None);
+        assert!(!state.flash.qualcomm.programmer_uploaded);
+        assert_eq!(state.flash.qualcomm.status, QualcommStatus::Rebooted);
+    }
+
+    /// The danger zone's entries are placeholders: picking one changes nothing
+    /// at all, the way the page's greyed-out buttons cannot be pressed.
+    #[test]
+    fn the_danger_zone_entries_do_nothing() {
+        let mut state = State::default();
+        let _ = update(
+            &mut state,
+            Message::QualcommFirehoseReady(Ok(firehose::Table {
+                storage: StorageType::Ufs,
+                partitions: vec![firehose::Partition {
+                    name: "boot_a".to_owned(),
+                    lun: 0,
+                    start_lba: 0,
+                    end_lba: 4095,
+                    sector_size: 4096,
+                }],
+            })),
+        );
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(&mut state, Message::QualcommPartitionClicked(0));
+
+        let before = state.flash.qualcomm.status.clone();
+        let _ = update(&mut state, Message::QualcommDangerZoneSelected);
+
+        assert_eq!(state.flash.qualcomm.status, before);
+        assert_eq!(state.flash.qualcomm.partitions.len(), 1);
+        assert_eq!(state.flash.qualcomm.selected, [true]);
+        assert!(!state.flash.qualcomm.busy);
+    }
+
+    /// Erasing needs a selection, and the selection is what it reports about.
+    #[test]
+    fn erase_needs_a_selected_partition() {
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+
+        let _ = update(&mut state, Message::QualcommErase);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::EraseFailed(state.l10n.tr("qc-select-partition"))
+        );
+        assert!(!state.flash.qualcomm.busy);
+    }
+
+    /// Every reboot mode starts its own job, and each one reports its outcome.
+    #[test]
+    fn every_reboot_mode_starts_a_job() {
+        for mode in RebootMode::ALL {
+            let mut state = State::default();
+            state.flash.qualcomm.port = Some("COM7".to_owned());
+
+            let _ = update(
+                &mut state,
+                Message::QualcommRebootModeSelected(mode),
+            );
+
+            assert!(state.flash.qualcomm.busy, "{mode:?} did not start");
+            assert_eq!(
+                state.flash.qualcomm.status,
+                QualcommStatus::Rebooting,
+                "{mode:?} did not say it was rebooting"
+            );
+            assert!(state.flash.qualcomm.progress.is_some(), "{mode:?} has no progress");
+
+            let _ = update(
+                &mut state,
+                Message::QualcommResetFinished(Err("the phone did not answer".to_owned())),
+            );
+            assert!(!state.flash.qualcomm.busy);
+            assert_eq!(
+                state.flash.qualcomm.status,
+                QualcommStatus::RebootFailed("the phone did not answer".to_owned())
+            );
+        }
+    }
+
+    /// Without a port there is nothing to talk to, so no mode starts a job.
+    #[test]
+    fn a_reboot_mode_needs_a_port() {
+        let mut state = State::default();
+
+        let _ = update(
+            &mut state,
+            Message::QualcommRebootModeSelected(RebootMode::OemUnlock),
+        );
+
+        assert!(!state.flash.qualcomm.busy);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::RebootFailed(state.l10n.tr("qc-select-port"))
+        );
+    }
+
+    /// The programmer stays in the phone after the upload, so a second inject
+    /// would talk to a port that is no longer in Sahara. Selecting a port
+    /// starts a new session, and so does a finished reset; Dump and Write need
+    /// rows for the same reason.
+    #[test]
+    fn the_table_actions_follow_the_session_and_the_selection() {
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+        state.flash.qualcomm.programmer_uploaded = true;
+
+        // A newly picked port is a new device to inject into.
+        let _ = update(
+            &mut state,
+            Message::QualcommPortSelected("COM8".to_owned()),
+        );
+        assert!(!state.flash.qualcomm.programmer_uploaded);
+
+        // The upload phase is what locks the button again.
+        state.flash.qualcomm.busy = true;
+        let _ = update(&mut state, Message::QualcommFirehoseReading);
+        assert!(state.flash.qualcomm.programmer_uploaded);
+        state.flash.qualcomm.busy = false;
+
+        // So does a reset, which hands the phone back to Android.
+        let _ = update(&mut state, Message::QualcommResetFinished(Ok(())));
+        assert!(!state.flash.qualcomm.programmer_uploaded);
+
+        // Nothing is selected, so there is nothing to dump.
+        let _ = update(&mut state, Message::QualcommDump);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::DumpFailed(state.l10n.tr("qc-select-partition"))
+        );
+
+        // Write takes exactly one row; two is a mistake worth reporting.
+        let table = firehose::Table {
+            storage: StorageType::Ufs,
+            partitions: ["boot", "system", "vendor"]
+                .iter()
+                .enumerate()
+                .map(|(index, name)| firehose::Partition {
+                    name: (*name).to_owned(),
+                    lun: 0,
+                    start_lba: index as u64 * 4096,
+                    end_lba: index as u64 * 4096 + 4095,
+                    sector_size: 4096,
+                })
+                .collect(),
+        };
+        let _ = update(&mut state, Message::QualcommFirehoseReady(Ok(table)));
+        assert_eq!(state.flash.qualcomm.selected.len(), 3);
+        state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::CTRL;
+        let _ = update(&mut state, Message::QualcommPartitionClicked(0));
+        let _ = update(&mut state, Message::QualcommPartitionClicked(1));
+        let _ = update(&mut state, Message::QualcommWrite);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::WriteFailed(state.l10n.tr("qc-select-one-partition"))
+        );
+
+        // The rows map onto the table by name, in the order they were picked.
+        let regions = qualcomm_selected_regions(&state);
+        let names: Vec<&str> = regions.iter().map(|region| region.name.as_str()).collect();
+        assert_eq!(names, ["boot", "system"]);
+        // UFS reports 4096-byte sectors, and a region spans whole sectors.
+        assert_eq!(regions[0].sector_size, 4096);
+        assert_eq!(regions[0].start_lba, 0);
+        assert_eq!(regions[0].end_lba, 4095);
+        assert_eq!(regions[1].start_lba, 4096);
     }
 
     /// A file dropped onto the window is an image for the Single Partition

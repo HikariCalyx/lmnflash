@@ -2904,7 +2904,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lmnflash"
-version = "0.2.1"
+version = "0.2.1-prerelease1"
 dependencies = [
  "aes",
  "base64",
@@ -2928,6 +2928,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "serial2",
  "sha2",
  "sys-locale",
  "tokio",
@@ -2935,6 +2936,7 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "winit",
  "winreg",
  "wry",
@@ -4951,6 +4953,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "serial2"
+version = "0.2.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b16809bc35793b19ce4e0c53924bc0dce3937f15487997cfdaed936004180730"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

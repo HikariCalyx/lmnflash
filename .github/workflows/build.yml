@@ -3,6 +3,22 @@ name: Build
 on:
   push:
     tags: ["v*"]
+  # A push of a `v*` tag publishes that tag: `v0.2.1-prerelease1` is marked as
+  # a pre-release because of the dash in it, `v0.2.1` is a full release. A
+  # dispatch needs no tag locally: it is derived from the version in
+  # `Cargo.toml` (`0.2.1-prerelease1` → `v0.2.1-prerelease1`) and the release
+  # step creates it at the commit the run was started on. It is published as a
+  # pre-release unless the switch below says otherwise.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (leave empty for v<version from Cargo.toml>)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Publish as a pre-release"
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -556,9 +572,61 @@ jobs:
             tar -C "bundle-linux-$arch" -czf "release/lmnflash-linux-$arch.tar.gz" .
           done
 
+      - name: Work out the release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          # The first `version =` line of the file is the package's own (the
+          # dependencies are indented or use the `name = "1"` shorthand).
+          version=$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            if [ "${{ github.event_name }}" = "push" ]; then
+              tag="$GITHUB_REF_NAME"
+            else
+              tag="v${version}"
+            fi
+          fi
+
+          # A pushed tag says what kind of build it is by itself: the suffix a
+          # pre-release carries (`v0.2.1-prerelease1`, `v0.2.1-rc1`) is the
+          # first dash in it. A dispatch is published as a pre-release unless
+          # the switch said otherwise.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            prerelease="${{ inputs.prerelease }}"
+          else
+            case "$tag" in
+              *-*) prerelease=true ;;
+              *)   prerelease=false ;;
+            esac
+          fi
+
+          echo "version:    $version"
+          echo "tag:        $tag"
+          echo "prerelease: $prerelease"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
+          # A tag that was pushed already points at its commit; a release made
+          # from a dispatch creates it at the commit the run was started on.
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: LMN Flash ${{ steps.tag.outputs.version }}
+          prerelease: ${{ steps.tag.outputs.prerelease }}
+          # The notes list what changed since the previous tag, which is what a
+          # pre-release build is a snapshot of.
+          generate_release_notes: true
           files: release/*
           fail_on_unmatched_files: true
         env:

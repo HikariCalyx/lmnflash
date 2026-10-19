@@ -5,7 +5,9 @@
 //! file per phone), a single-device flash in one file named after the phone it
 //! flashed and the moment it started
 //! (`single_flash_<serial>_<moment>.log`), and a single-partition flash the
-//! same way (`partition_flash_<serial>_<moment>.log`).
+//! same way (`partition_flash_<serial>_<moment>.log`). The Partition Manager's
+//! Firehose sessions write one file per session, named after the COM port they
+//! talked to (`pmgr_<port>_<moment>.log`).
 //!
 //! The documents directory is where a user looks for what they ran by hand; a
 //! machine that has none (a Linux account with no XDG directories) falls back
@@ -46,6 +48,15 @@ pub(crate) fn single_flash_path(serial: &str) -> PathBuf {
 /// are found in the same place.
 pub(crate) fn partition_flash_path(serial: &str) -> PathBuf {
     named_path("partition_flash", serial)
+}
+
+/// The file one Partition Manager Firehose session writes:
+/// `pmgr_<port>_<timestamp>.log`.
+///
+/// A phone in EDL mode is known by its COM port, so that is what the file is
+/// named after; every injection and every reboot gets its own file.
+pub(crate) fn partition_manager_path(port: &str) -> PathBuf {
+    named_path("pmgr", port)
 }
 
 /// `<kind>_<serial>_<timestamp>.log` in [`logs_root`].
@@ -109,15 +120,16 @@ impl FlashLog {
     }
 
     /// Writes one stamped line.
-    pub(crate) fn line(&mut self, line: &str) {
+    pub(crate) fn line(&mut self, line: impl AsRef<str>) {
         let Some(file) = self.file.as_mut() else {
             return;
         };
 
         let _ = writeln!(
             file,
-            "[{}] {line}",
-            Local::now().format("%Y-%m-%d %H:%M:%S")
+            "[{}] {}",
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            line.as_ref()
         );
         // Flushed per line: the log is what says what happened when a flash
         // goes wrong, and a run that is interrupted must not lose the last of
@@ -226,6 +238,30 @@ mod tests {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .starts_with("single_flash_AB_C_D_")
+        );
+    }
+
+    /// A Partition Manager session is named after the port it talked to.
+    #[test]
+    fn a_partition_manager_log_is_named_after_the_port() {
+        let path = partition_manager_path("COM7");
+
+        assert_eq!(path.parent(), Some(logs_root().as_path()));
+
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let stamp = name
+            .strip_prefix("pmgr_COM7_")
+            .and_then(|rest| rest.strip_suffix(".log"))
+            .expect("the file is named after the port and the moment");
+
+        assert_stamp(stamp);
+        // A port path is not a file name on every platform.
+        assert!(
+            partition_manager_path("/dev/ttyUSB0")
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .starts_with("pmgr__dev_ttyUSB0_")
         );
     }
 

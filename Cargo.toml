@@ -1,6 +1,6 @@
 [package]
 name = "lmnflash"
-version = "0.2.1"
+version = "0.2.1-prerelease1"
 edition = "2024"
 
 [dependencies]
@@ -37,6 +37,12 @@ serde = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
 tokio = { version = "1", features = ["rt"] }
 fastboot = { path = "fastboot" }
+# The Qualcomm Partition Manager talks to a phone in EDL mode over the USB
+# serial port (05C6:9008) it enumerates as: Sahara and Firehose are both
+# plain serial protocols. `serial2` is the same crate the reference `qdl`
+# implementation uses, and it opens `COM10` and above through the Win32
+# device namespace itself.
+serial2 = "0.2"
 aes = "0.8"
 cbc = "0.1"
 sha2 = "0.10"
@@ -76,9 +82,18 @@ rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
 gtk = "0.18"
 
 # Windows registry access (WebView2 runtime detection) without spawning
-# `reg.exe`.
+# `reg.exe`, and the shell call that opens Device Manager from the Qualcomm
+# page. `mmc.exe` auto-elevates, so `CreateProcess` refuses it
+# (ERROR_ELEVATION_REQUIRED) and `ShellExecuteW` has to ask for the elevation.
+# Both crates are already in the tree (via wry/winit), so this downloads
+# nothing new.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # macOS: the `softwarefix://` callback arrives as a `kAEGetURL` Apple Event,
 # which iced/winit provides no API for, so `src/protocol.rs` handles it with a
