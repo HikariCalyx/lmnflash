@@ -168,6 +168,32 @@ it is not offered and the built-in fastboot is used.
 
 
 
+## Single Partition Flash
+
+The **Single Partition Flash** tile writes one image file to one partition,
+without a firmware package behind it — the way back to a working phone when a
+single partition (a `boot.img` after a patch, a `vbmeta.img` after a rebuild)
+was written wrong. The dialog offers:
+
+* the connected phones as a dropdown (any vendor, and both modes: a phone in the
+  bootloader and one in userspace fastboot are listed), with **Refresh** to
+  re-scan the USB bus and **Switch to Fastbootd** to send a phone from the
+  bootloader to userspace fastboot (`reboot fastboot`) — which is where logical
+  partitions can be written. The mode the phone is in and the slot it runs from
+  are shown above the form, read from the phone when it is selected;
+* the **flashing tool** (its `--version` is shown below the picker) and the
+  partition name, with the three names used most of the time — `boot`,
+  `init_boot`, `vbmeta` — a click away in the dropdown beside the field;
+* the **image file**, picked with the button or dropped onto the window;
+* **Disable Verity** and **Disable Verification** (`--disable-verity`,
+  `--disable-verification`): they are enabled for an image that carries a vbmeta
+  struct, which is what they are written into.
+
+On a device with slots the partition is resolved the way `fastboot` resolves it
+(`boot` is written to `boot_a` in slot A), and the flash is logged to
+`Documents\lmnflash\logs\partition_flash_<serial>_<moment>.log`, which the
+button beside the log opens in the file manager.
+
 ## Install Driver
 
 The **Install Driver** tile installs the USB driver a phone in fastboot mode

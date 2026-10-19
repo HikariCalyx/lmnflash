@@ -595,6 +595,222 @@ pub fn run(job: FlashJob, emit: &(dyn Fn(FlashEvent) + Send + Sync)) {
     emit(FlashEvent::Finished(result));
 }
 
+/// One image file written to one partition, without a firmware package behind
+/// it (the "Single Partition Flash" feature).
+pub struct PartitionJob {
+    pub engine: Engine,
+    pub serial: String,
+    /// The partition as the user typed it (`boot`), which the engine resolves
+    /// against the device's slots itself.
+    pub partition: String,
+    pub image: PathBuf,
+    /// Write `AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED` into the image's
+    /// vbmeta struct before it is flashed (`fastboot --disable-verity`): the
+    /// phone then boots with dm-verity off.
+    pub disable_verity: bool,
+    /// The same for `AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED`
+    /// (`--disable-verification`).
+    pub disable_verification: bool,
+}
+
+/// Flashes one image to one partition, emitting [`FlashEvent`]s as it goes.
+///
+/// The two flags are handled the way Google's `fastboot` handles them: the
+/// external tool is handed `--disable-verity` / `--disable-verification` and
+/// writes the bits into the image itself, while the built-in engine does that
+/// with [`crate::avb`] before it downloads the image.
+pub fn flash_partition(
+    job: &PartitionJob,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) {
+    let result = match &job.engine {
+        Engine::Mfastboot(tool) => flash_partition_with_mfastboot(job, tool, emit),
+        Engine::Builtin => flash_partition_builtin(job, emit),
+    };
+
+    emit(FlashEvent::Finished(result));
+}
+
+/// [`flash_partition`] through the external `fastboot`.
+fn flash_partition_with_mfastboot(
+    job: &PartitionJob,
+    tool: &Mfastboot,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<(), String> {
+    emit(FlashEvent::Log(format!(
+        "using {} ({})",
+        tool.label(),
+        tool.path.display()
+    )));
+
+    let arguments = flash_arguments(
+        &job.partition,
+        &job.image,
+        job.disable_verity,
+        job.disable_verification,
+    );
+    let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
+
+    emit(FlashEvent::Log(tool_command_line(tool, &job.serial, &args)));
+
+    let directory = std::env::temp_dir();
+    let status = run_tool_command(tool_command(tool, &job.serial, &args), &directory, emit)?;
+
+    if !status.success() {
+        return Err(format!(
+            "{} failed to flash {}",
+            tool.label(),
+            job.partition
+        ));
+    }
+
+    Ok(())
+}
+
+/// The `fastboot` command line that flashes one partition, without the tool
+/// itself — the two flags are global options and come before the command.
+fn flash_arguments(
+    partition: &str,
+    image: &Path,
+    disable_verity: bool,
+    disable_verification: bool,
+) -> Vec<String> {
+    let mut arguments: Vec<String> = Vec::new();
+
+    if disable_verity {
+        arguments.push("--disable-verity".to_owned());
+    }
+
+    if disable_verification {
+        arguments.push("--disable-verification".to_owned());
+    }
+
+    arguments.push("flash".to_owned());
+    arguments.push(partition.to_owned());
+    arguments.push(image.display().to_string());
+
+    arguments
+}
+
+/// [`flash_partition`] through the built-in `fastboot` crate.
+fn flash_partition_builtin(
+    job: &PartitionJob,
+    emit: &(dyn Fn(FlashEvent) + Send + Sync),
+) -> Result<(), String> {
+    emit(FlashEvent::Log(format!(
+        "connecting to {} (built-in fastboot)",
+        if job.serial.is_empty() {
+            "device"
+        } else {
+            &job.serial
+        }
+    )));
+
+    let mut device = fastboot::FastbootDevice::connect(&job.serial)?;
+    // Every reply of the bootloader (INFO/DATA/FAIL) goes to the log: the
+    // built-in crate would otherwise drop the text that explains what the
+    // device is doing (close to what `mfastboot` prints).
+    device.set_packet_logger(Some(Box::new(|line| emit(FlashEvent::Log(line)))));
+    // The device knows how large a single download may be; without this the
+    // crate's conservative 128 MiB default is used.
+    device.refresh_max_download();
+
+    // The flags are written into the image, so an image that takes them is
+    // read into memory; every other image is streamed from disk, which is what
+    // keeps a multi-gigabyte one out of the dialog's memory.
+    let mut flagged = None;
+
+    if job.disable_verity || job.disable_verification {
+        let mut data = std::fs::read(&job.image)
+            .map_err(|error| format!("could not read {}: {error}", job.image.display()))?;
+
+        match crate::avb::set_flags(&mut data, job.disable_verity, job.disable_verification) {
+            Some(offset) => emit(FlashEvent::Log(format!(
+                "rewriting the vbmeta struct at offset {offset} ({})",
+                flagged_options(job)
+            ))),
+            // The dialog only offers the flags for an image that has one.
+            None => {
+                return Err(format!(
+                    "{} carries no vbmeta struct to write flags into",
+                    job.image.display()
+                ))
+            }
+        }
+
+        flagged = Some(data);
+    }
+
+    // `flash:` does not resolve slots itself: `boot` has to become the
+    // partition of the slot the phone is running from.
+    let partition = slot_partition(&device, &job.partition);
+    let size = match &flagged {
+        Some(data) => data.len() as u64,
+        None => std::fs::metadata(&job.image).map(|file| file.len()).unwrap_or(0),
+    };
+    emit(FlashEvent::Log(format!("flash {partition} ({size} bytes)")));
+
+    // Large partitions are written in 1 MiB chunks; only report when the
+    // percentage actually moves (the callback must be `Fn`, so the throttle
+    // state lives in a `Cell`).
+    let reported = std::cell::Cell::new(u64::MAX);
+    let on_progress = |done: usize, total: usize| {
+        let (done, total) = (done as u64, total as u64);
+        let permille = if total == 0 { 0 } else { done * 1000 / total };
+        if permille != reported.get() {
+            reported.set(permille);
+            emit(FlashEvent::Progress { done, total });
+        }
+    };
+
+    match &flagged {
+        Some(data) => device.flash(&partition, data, Some(&on_progress)),
+        None => device.flash_file(&partition, &job.image, Some(&on_progress)),
+    }
+}
+
+/// The flags of a job as one phrase, for the log line that says what was
+/// written into the image.
+fn flagged_options(job: &PartitionJob) -> String {
+    let mut options: Vec<&str> = Vec::new();
+
+    if job.disable_verity {
+        options.push("disable verity");
+    }
+
+    if job.disable_verification {
+        options.push("disable verification");
+    }
+
+    options.join(", ")
+}
+
+/// The partition a flash of `partition` actually goes to: on a device with
+/// slots that is the partition of the slot it is running from (`boot` →
+/// `boot_a`), the way `fastboot` resolves it.
+///
+/// The device is asked about the slot itself; a partition without slots, an
+/// unknown `has-slot` or a bootloader that reports no current slot keeps the
+/// name the user gave.
+fn slot_partition(device: &fastboot::FastbootDevice<'_>, partition: &str) -> String {
+    // A name that already carries a slot is taken as it is.
+    let has_slot = crate::fastboot_info::getvar_value(device, &format!("has-slot:{partition}"));
+
+    if !has_slot.is_ok_and(|value| value.trim().eq_ignore_ascii_case("yes")) {
+        return partition.to_owned();
+    }
+
+    let slot = crate::fastboot_info::getvar_value(device, "current-slot")
+        .map(|slot| slot.trim().trim_start_matches('_').to_owned())
+        .unwrap_or_default();
+
+    if slot.is_empty() {
+        return partition.to_owned();
+    }
+
+    format!("{partition}_{slot}")
+}
+
 /// Asks an external tool what version it reports (`<tool> --version`).
 ///
 /// Both tools answer with a version line (`fastboot version 37.0.1-15733141`,
@@ -1634,5 +1850,43 @@ mod tests {
         // Nothing printed is nothing to show.
         assert_eq!(reported_version(""), None);
         assert_eq!(reported_version("\n \n"), None);
+    }
+
+    #[test]
+    fn a_single_partition_flash_is_one_fastboot_command() {
+        let image = PathBuf::from("C:\\images\\vbmeta.img");
+
+        // Without the flags it is the plain `flash` command.
+        assert_eq!(
+            flash_arguments("vbmeta", &image, false, false),
+            vec![
+                "flash".to_owned(),
+                "vbmeta".to_owned(),
+                image.display().to_string(),
+            ]
+        );
+
+        // Both flags are global options of the tool, so they come first.
+        assert_eq!(
+            flash_arguments("vbmeta", &image, true, true),
+            vec![
+                "--disable-verity".to_owned(),
+                "--disable-verification".to_owned(),
+                "flash".to_owned(),
+                "vbmeta".to_owned(),
+                image.display().to_string(),
+            ]
+        );
+
+        // Either of them alone, in the order the CLI options are documented.
+        assert_eq!(
+            flash_arguments("boot", &image, false, true),
+            vec![
+                "--disable-verification".to_owned(),
+                "flash".to_owned(),
+                "boot".to_owned(),
+                image.display().to_string(),
+            ]
+        );
     }
 }

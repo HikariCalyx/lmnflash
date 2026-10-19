@@ -41,8 +41,9 @@ const BAR_HEIGHT: f32 = 6.0;
 /// Size of the tool output the dialog shows (the flashing log and `Read Info`).
 ///
 /// Monospace reads smaller than the proportional font at the same size, so it
-/// is a step up from the labels around it.
-const OUTPUT_SIZE: f32 = 13.0;
+/// is a step up from the labels around it. The Single Partition Flash dialog
+/// shows its log at the same size.
+pub(crate) const OUTPUT_SIZE: f32 = 13.0;
 
 /// A progress bar at the height used everywhere in this dialog (and in the
 /// Multi Flashing options card, whose unpacking shows the same kind of bar).
@@ -1581,8 +1582,9 @@ fn info_section(state: &State) -> Element<'_, Message> {
 ///
 /// The value wraps: the carrier row carries a channel code plus the name behind
 /// it, which is the longest thing in the box, and a translation can make it
-/// longer still.
-fn info_row(label: String, value: Option<String>) -> Element<'static, Message> {
+/// longer still. The Single Partition Flash dialog shows its own two lines
+/// (`Current Slot`, `Current Mode`) through this as well.
+pub(crate) fn info_row(label: String, value: Option<String>) -> Element<'static, Message> {
     let value = value.unwrap_or_else(|| "—".to_owned());
 
     row![
@@ -1657,7 +1659,7 @@ fn terminal_status(state: &State) -> Option<Element<'_, Message>> {
 }
 
 /// A spinner plus its status text.
-fn busy_row<'a>(state: &'a State, label: String) -> Element<'a, Message> {
+pub(crate) fn busy_row<'a>(state: &'a State, label: String) -> Element<'a, Message> {
     row![spinner(state.anim_tick), text(label).size(13.0)]
         .spacing(8)
         .align_y(Alignment::Center)

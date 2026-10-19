@@ -306,20 +306,13 @@ impl TabletDevice {
 /// Unlike the Motorola flows this keeps devices from any vendor: a tablet does
 /// not answer the `cid` variable that identifies a Motorola phone.
 pub fn list_devices() -> Result<Vec<TabletDevice>, String> {
-    let serials = fastboot::FastbootDevice::list_devices()?;
-    let mut devices = Vec::with_capacity(serials.len());
-
-    for serial in serials {
-        let product = fastboot::FastbootDevice::connect(&serial)
-            .ok()
-            .and_then(|device| crate::fastboot_info::getvar_value(&device, "product").ok())
-            .map(|product| product.trim().to_owned())
-            .unwrap_or_default();
-
-        devices.push(TabletDevice { serial, product });
-    }
-
-    Ok(devices)
+    Ok(crate::fastboot_info::list_all_devices()?
+        .into_iter()
+        .map(|device| TabletDevice {
+            serial: device.serial,
+            product: device.product,
+        })
+        .collect())
 }
 
 /// What happened during a guided (automatic) tablet unlock.

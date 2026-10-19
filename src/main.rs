@@ -4,6 +4,7 @@
 
 mod about;
 mod anim;
+mod avb;
 mod bloatware;
 mod bootloader;
 mod browser;
@@ -41,6 +42,7 @@ mod pac;
 mod pac_build;
 mod pac_repack;
 mod pac_unpack;
+mod partition_flash;
 mod platform_tools;
 mod preset_file;
 mod protocol;
@@ -1010,6 +1012,7 @@ struct SmartphoneFlashState {
     tablet_unlock: TabletUnlockState,
     factory_reset: FactoryResetState,
     firmware: FirmwareFlashState,
+    partition: PartitionFlashState,
     driver: DriverState,
     bloatware: BloatwareState,
     wireless: WirelessState,
@@ -1943,6 +1946,115 @@ enum TerminalError {
     Other(String),
 }
 
+/// A job the Single Partition Flash dialog runs.
+///
+/// One is in flight at a time, and the card shows a spinner for it: the flash
+/// itself, the reboot that leaves fastboot for Android, or the reboot that
+/// switches the phone to userspace fastboot (`fastbootd`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartitionFlashTask {
+    Flash,
+    Reboot,
+    SwitchToFastbootd,
+}
+
+/// State of the "Single Partition Flash" feature (Mode 2).
+struct PartitionFlashState {
+    /// Whether the dialog is on screen.
+    open: bool,
+    /// The job in flight, if any.
+    task: Option<PartitionFlashTask>,
+    /// Incremented for every job the dialog starts; events that carry an older
+    /// id belong to an abandoned job and are ignored.
+    job: u64,
+    /// `mfastboot` builds found next to the application (newest first).
+    mfastboot: Vec<flash_engine::Mfastboot>,
+    /// Google's `fastboot`, when it was downloaded already. This dialog does
+    /// not download it (the Firmware Flash dialog does, and both use the same
+    /// file), so it is only offered once it is there.
+    platform_tools: Option<flash_engine::Mfastboot>,
+    /// The backend that writes the image.
+    engine: flash_engine::Engine,
+    /// `true` while the selected tool is asked for its version.
+    reading_version: bool,
+    /// What it reported, or why it could not be asked.
+    tool_version: Option<Result<String, String>>,
+    /// `true` while the connected phones are listed.
+    listing: bool,
+    /// The phones found, whatever vendor they are: the dialog also works on a
+    /// phone it switched to `fastbootd`, which no longer reports the `cid` the
+    /// Motorola-only listing filters on.
+    devices: Vec<fastboot_info::DeviceSummary>,
+    /// Failure of the listing itself (e.g. a USB error).
+    list_error: Option<String>,
+    /// Serial of the phone the image is written to.
+    selected: Option<String>,
+    /// `true` while that phone's variables are read.
+    reading_device: bool,
+    /// `is-userspace` and `current-slot` of the selected phone.
+    vars: Option<fastboot_info::DeviceVars>,
+    /// Failure of that read (the phone may have been unplugged).
+    vars_error: Option<String>,
+    /// The partition the image is written to, as typed.
+    partition: String,
+    /// The image file to write.
+    image: Option<std::path::PathBuf>,
+    /// Whether that image carries a vbmeta struct, i.e. whether the two AVB
+    /// flags can be written into it.
+    image_avb: bool,
+    /// Write `AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED` into the image.
+    disable_verity: bool,
+    /// Write `AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED` into the image.
+    disable_verification: bool,
+    /// Byte progress inside the flash that is running.
+    progress: Option<(u64, u64)>,
+    /// Output of the flashing tool (and the engine's own notes).
+    log: Vec<String>,
+    /// The file this job's log is written to as well, once it started:
+    /// `Documents\lmnflash\logs\partition_flash_<serial>_<moment>.log`.
+    log_file: Option<flash_log::FlashLog>,
+    /// Result of the last flash.
+    result: Option<Result<(), String>>,
+    /// Outcome of the last reboot ([`PartitionFlashTask::Reboot`]).
+    reboot_result: Option<Result<(), String>>,
+    /// Outcome of the last switch to fastbootd
+    /// ([`PartitionFlashTask::SwitchToFastbootd`]).
+    switch_result: Option<Result<(), String>>,
+}
+
+impl Default for PartitionFlashState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            task: None,
+            job: 0,
+            mfastboot: Vec::new(),
+            platform_tools: None,
+            engine: flash_engine::Engine::Builtin,
+            reading_version: false,
+            tool_version: None,
+            listing: false,
+            devices: Vec::new(),
+            list_error: None,
+            selected: None,
+            reading_device: false,
+            vars: None,
+            vars_error: None,
+            partition: String::new(),
+            image: None,
+            image_avb: false,
+            disable_verity: false,
+            disable_verification: false,
+            progress: None,
+            log: Vec::new(),
+            log_file: None,
+            result: None,
+            reboot_result: None,
+            switch_result: None,
+        }
+    }
+}
+
 /// Inputs captured when a lookup starts, kept until it finishes so the
 /// best-effort telemetry event reflects the original request even if the user
 /// edits the form while the lookup runs (see `mod telemetry`).
@@ -2407,6 +2519,64 @@ enum Message {
     FirmwareFlashEditDone,
     /// Firmware Flash: close the dialog.
     FirmwareFlashCancel,
+    /// Single Partition Flash: re-scan the USB bus for connected phones.
+    PartitionFlashRescan,
+    /// Single Partition Flash: the connected phones were listed.
+    PartitionFlashDevicesFetched(Result<Vec<fastboot_info::DeviceSummary>, String>),
+    /// Single Partition Flash: the phone to write to was selected.
+    PartitionFlashDeviceSelected(String),
+    /// Single Partition Flash: that phone's variables were read (the serial
+    /// tells stale answers from a previous selection apart).
+    PartitionFlashDeviceVarsRead(String, Result<fastboot_info::DeviceVars, String>),
+    /// Single Partition Flash: the tool that writes the image was switched.
+    PartitionFlashEngineSelected(flash_engine::Engine),
+    /// Single Partition Flash: the selected tool answered `--version` (the
+    /// path tells an answer for a tool that is not selected any more apart).
+    PartitionFlashToolVersionRead(std::path::PathBuf, Result<String, String>),
+    /// Single Partition Flash: the partition name was edited.
+    PartitionFlashPartitionChanged(String),
+    /// Single Partition Flash: one of the usual partition names was picked
+    /// from the dropdown, which fills the field.
+    PartitionFlashPartitionPreset(&'static str),
+    /// Single Partition Flash: ask for the image file.
+    PartitionFlashPickImage,
+    /// Single Partition Flash: the picker closed (`None` = cancelled); a file
+    /// arrives with whether it carries a vbmeta struct.
+    PartitionFlashImagePicked(Option<(std::path::PathBuf, bool)>),
+    /// Single Partition Flash: an image file was dropped onto the window.
+    PartitionFlashImageDropped(std::path::PathBuf),
+    /// Single Partition Flash: the "disable verity" box was toggled.
+    PartitionFlashVerityToggled(bool),
+    /// Single Partition Flash: the "disable verification" box was toggled.
+    PartitionFlashVerificationToggled(bool),
+    /// Single Partition Flash: write the image to the partition.
+    PartitionFlashStart,
+    /// Single Partition Flash: progress and output of the running flash.
+    PartitionFlashEvent(u64, flash_engine::FlashEvent),
+    /// Single Partition Flash: leave fastboot for Android.
+    PartitionFlashReboot,
+    /// Single Partition Flash: the reboot that leaves fastboot for Android
+    /// finished (or failed).
+    PartitionFlashRebooted(u64, Result<(), String>),
+    /// Single Partition Flash: send the phone into userspace fastboot.
+    PartitionFlashSwitchToFastbootd,
+    /// Single Partition Flash: that switch finished, and the phones found
+    /// afterwards are carried back so the dialog can pick the same one up.
+    PartitionFlashSwitched(u64, Result<Vec<fastboot_info::DeviceSummary>, String>),
+    /// A background Single Partition Flash job ended (only completes the task;
+    /// the results arrive through the messages above).
+    PartitionFlashWorkerDone,
+    /// Single Partition Flash: show this run's log file in the file manager
+    /// (the folder the logs are written into when there is no such file yet).
+    PartitionFlashLocateLog,
+    /// Single Partition Flash: the log was handed to the file manager (only
+    /// logs a failure).
+    PartitionFlashLogOpened,
+    /// Single Partition Flash: close the dialog.
+    PartitionFlashCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    PartitionFlashBackdropPressed,
     /// Multi Flashing: open the workspace that flashes a whole batch of
     /// phones, which takes the place of the Mode 2 feature grid.
     MultiFlashingSelected,
@@ -2773,6 +2943,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let guided = &state.flash.bootloader.guided;
     let reset = &state.flash.factory_reset;
     let firmware = &state.flash.firmware;
+    let partition = &state.flash.partition;
     let driver = &state.flash.driver;
     let tablet = &state.flash.tablet_unlock;
     let bloatware = &state.flash.bloatware;
@@ -2801,6 +2972,12 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || firmware.installing_tools
         || firmware.terminal_busy
         || firmware.reading_version
+        // The Single Partition Flash dialog spins for every job it runs, and
+        // while it lists devices or asks a tool for its version.
+        || partition.task.is_some()
+        || partition.listing
+        || partition.reading_device
+        || partition.reading_version
         || driver.busy
         || bloatware.preparing
         || bloatware.checking
@@ -2861,12 +3038,26 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let system_theme =
         iced::system::theme_changes().map(Message::SystemTheme);
 
+    // An image file dropped onto the window is for the Single Partition Flash
+    // dialog: it is the only feature that takes one that way. (The window's
+    // drag-and-drop support is on by default; a message that arrives with no
+    // such dialog open is ignored by its handler.)
+    let dropped_files = iced::event::listen_with(
+        |event, _status, _window| match event {
+            iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                Some(Message::PartitionFlashImageDropped(path))
+            }
+            _ => None,
+        },
+    );
+
     iced::Subscription::batch([
         ticks,
         countdown,
         transition,
         close_requests,
         system_theme,
+        dropped_files,
     ])
 }
 
@@ -2962,6 +3153,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::TabletUnlockCancel
             | Message::FactoryResetCancel
             | Message::FirmwareFlashCancel
+            | Message::PartitionFlashCancel
             | Message::DriverCancel
             | Message::BloatwareCancel
             | Message::WirelessCancel
@@ -3017,6 +3209,9 @@ const OVERLAY_TABLET_PICKER: u8 = 0x72;
 const OVERLAY_TABLET_GUIDED_DEVICES: u8 = 0x73;
 const OVERLAY_TABLET_GUIDED_WORKING: u8 = 0x74;
 const OVERLAY_FIRMWARE_FLASH: u8 = 0x80;
+/// The Single Partition Flash dialog. It shares the Firmware Flash nibble —
+/// the two are never open at once, and the card is the only one it has.
+const OVERLAY_PARTITION_FLASH: u8 = 0x81;
 /// The About dialog opened from the Firmware Lookup page.
 const OVERLAY_ABOUT: u8 = 0x90;
 const OVERLAY_DRIVER: u8 = 0xA0;
@@ -3155,6 +3350,10 @@ fn overlay_key(state: &State) -> u8 {
 
     if driver::is_open(state) {
         return OVERLAY_DRIVER;
+    }
+
+    if partition_flash::is_open(state) {
+        return OVERLAY_PARTITION_FLASH;
     }
 
     if bloatware::is_open(state) {
@@ -3447,6 +3646,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
             SmartphoneFeature::FactoryReset => start_factory_reset_dialog(state),
             SmartphoneFeature::FirmwareFlash => start_firmware_flash_dialog(state),
+            SmartphoneFeature::PartitionFlash => start_partition_flash_dialog(state),
             SmartphoneFeature::MultiFlashing => start_multi_flashing_page(state),
             SmartphoneFeature::InstallDriver => start_driver_dialog(state),
             SmartphoneFeature::RemoveBloatware => start_bloatware_dialog(state),
@@ -4787,6 +4987,328 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
         }
         Message::FirmwareFlashWorkerDone => Task::none(),
+        Message::PartitionFlashRescan => {
+            let flash = &mut state.flash.partition;
+            if flash.listing || flash.task.is_some() {
+                return Task::none();
+            }
+
+            flash.listing = true;
+            flash.devices.clear();
+            flash.list_error = None;
+            flash.selected = None;
+            flash.reading_device = false;
+            flash.vars = None;
+            flash.vars_error = None;
+
+            start_partition_flash_list_devices()
+        }
+        Message::PartitionFlashDevicesFetched(result) => {
+            let flash = &mut state.flash.partition;
+            flash.listing = false;
+
+            match result {
+                Ok(devices) => {
+                    flash.devices = devices;
+                    flash.list_error = None;
+                }
+                Err(error) => {
+                    flash.devices.clear();
+                    flash.list_error = Some(error);
+                }
+            }
+
+            // A single phone is what the dialog would write to anyway, so it
+            // is selected right away (and its variables are read).
+            let only = match flash.devices.as_slice() {
+                [device] => Some(device.serial.clone()),
+                _ => None,
+            };
+
+            match only {
+                Some(serial) => select_partition_flash_device(state, serial),
+                None => Task::none(),
+            }
+        }
+        Message::PartitionFlashDeviceSelected(serial) => {
+            select_partition_flash_device(state, serial)
+        }
+        Message::PartitionFlashDeviceVarsRead(serial, result) => {
+            let flash = &mut state.flash.partition;
+            // Ignore an answer for a phone that is not selected any more.
+            if flash.selected.as_deref() != Some(serial.as_str()) {
+                return Task::none();
+            }
+
+            flash.reading_device = false;
+
+            match result {
+                Ok(vars) => {
+                    flash.vars = Some(vars);
+                    flash.vars_error = None;
+                }
+                Err(error) => {
+                    flash.vars = None;
+                    flash.vars_error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
+        Message::PartitionFlashEngineSelected(engine) => {
+            let flash = &mut state.flash.partition;
+            flash.engine = engine;
+            flash.tool_version = None;
+
+            // The versions differ per tool, so the new one is asked too.
+            start_partition_flash_tool_version(state)
+        }
+        Message::PartitionFlashToolVersionRead(path, result) => {
+            let flash = &mut state.flash.partition;
+
+            // A late answer about a tool that is not selected any more is
+            // dropped, like the device variables' serial guard.
+            if flash.engine.tool().map(|tool| tool.path.as_path()) != Some(path.as_path()) {
+                return Task::none();
+            }
+
+            flash.reading_version = false;
+            flash.tool_version = Some(result);
+            Task::none()
+        }
+        Message::PartitionFlashPartitionChanged(partition) => {
+            // The field cannot be typed into while a job runs; a change that
+            // arrives anyway would name a partition the run is not writing.
+            if state.flash.partition.task.is_some() {
+                return Task::none();
+            }
+
+            state.flash.partition.partition = partition;
+            Task::none()
+        }
+        Message::PartitionFlashPartitionPreset(partition) => {
+            if state.flash.partition.task.is_some() {
+                return Task::none();
+            }
+
+            state.flash.partition.partition = partition.to_owned();
+            Task::none()
+        }
+        Message::PartitionFlashPickImage => {
+            if partition_flash::busy(state) {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("partition-flash-select");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("Image", &PARTITION_IMAGE_EXTENSIONS)
+                            .pick_file()
+                            // Whether the image can take the AVB flags is read
+                            // once, here, rather than per frame or per flash.
+                            .map(|path| {
+                                let avb = avb::image_vbmeta_offset(&path).is_some();
+                                (path, avb)
+                            })
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::PartitionFlashImagePicked,
+            )
+        }
+        Message::PartitionFlashImagePicked(picked) => {
+            let Some((path, avb)) = picked else {
+                return Task::none();
+            };
+
+            if partition_flash::busy(state) {
+                return Task::none();
+            }
+
+            set_partition_flash_image(state, path, avb);
+            Task::none()
+        }
+        Message::PartitionFlashImageDropped(path) => {
+            // A dropped file belongs to the Single Partition Flash dialog: it
+            // is the only feature that takes an image that way.
+            if !partition_flash::is_open(state) || partition_flash::busy(state) {
+                return Task::none();
+            }
+
+            let avb = avb::image_vbmeta_offset(&path).is_some();
+            set_partition_flash_image(state, path, avb);
+            Task::none()
+        }
+        Message::PartitionFlashVerityToggled(disable) => {
+            let flash = &mut state.flash.partition;
+
+            // The boxes are drawn disabled for an image without a vbmeta
+            // struct; a stale click must not set the flag behind them.
+            if !flash.image_avb || flash.task.is_some() {
+                return Task::none();
+            }
+
+            flash.disable_verity = disable;
+            Task::none()
+        }
+        Message::PartitionFlashVerificationToggled(disable) => {
+            let flash = &mut state.flash.partition;
+
+            if !flash.image_avb || flash.task.is_some() {
+                return Task::none();
+            }
+
+            flash.disable_verification = disable;
+            Task::none()
+        }
+        Message::PartitionFlashStart => start_partition_flash(state),
+        Message::PartitionFlashEvent(job, event) => {
+            let flash = &mut state.flash.partition;
+            // Events of a job this dialog no longer runs.
+            if job != flash.job {
+                return Task::none();
+            }
+
+            let mut scroll_log = false;
+
+            match event {
+                // A single image has no steps: the tool's own lines are the
+                // progress that matters here.
+                flash_engine::FlashEvent::StepStarted { .. } => {}
+                flash_engine::FlashEvent::Progress { done, total } => {
+                    flash.progress = Some((done, total));
+                }
+                flash_engine::FlashEvent::Log(line) => {
+                    push_partition_flash_log(flash, line);
+                    scroll_log = true;
+                }
+                flash_engine::FlashEvent::Finished(result) => {
+                    flash.task = None;
+                    flash.progress = None;
+                    flash.result = Some(result);
+                }
+            }
+
+            if scroll_log {
+                scroll_flash_log_to_end()
+            } else {
+                Task::none()
+            }
+        }
+        Message::PartitionFlashReboot => start_partition_flash_reboot(state),
+        Message::PartitionFlashRebooted(job, result) => {
+            let flash = &mut state.flash.partition;
+            if job != flash.job || flash.task != Some(PartitionFlashTask::Reboot) {
+                return Task::none();
+            }
+
+            if let Err(error) = &result {
+                push_partition_flash_log(flash, format!("reboot failed: {error}"));
+            }
+
+            flash.task = None;
+            flash.reboot_result = Some(result);
+
+            scroll_flash_log_to_end()
+        }
+        Message::PartitionFlashSwitchToFastbootd => start_partition_flash_switch(state),
+        Message::PartitionFlashSwitched(job, result) => {
+            let flash = &mut state.flash.partition;
+            if job != flash.job || flash.task != Some(PartitionFlashTask::SwitchToFastbootd) {
+                return Task::none();
+            }
+
+            flash.task = None;
+
+            let devices = match result {
+                Ok(devices) => devices,
+                Err(error) => {
+                    flash.switch_result = Some(Err(error));
+                    return Task::none();
+                }
+            };
+
+            flash.devices = devices;
+            flash.list_error = None;
+            flash.switch_result = Some(Ok(()));
+            flash.vars = None;
+            flash.vars_error = None;
+
+            // The same phone is on the bus again, under the serial userspace
+            // fastboot reports; when only one phone is there at all, that is
+            // the one.
+            let previous = flash.selected.clone();
+            let next = previous
+                .filter(|serial| {
+                    flash
+                        .devices
+                        .iter()
+                        .any(|device| &device.serial == serial)
+                })
+                .or_else(|| match flash.devices.as_slice() {
+                    [device] => Some(device.serial.clone()),
+                    _ => None,
+                });
+
+            if next.is_none() {
+                flash.selected = None;
+            }
+
+            match next {
+                Some(serial) => select_partition_flash_device(state, serial),
+                None => Task::none(),
+            }
+        }
+        Message::PartitionFlashWorkerDone => Task::none(),
+        Message::PartitionFlashLocateLog => {
+            // The file this job writes; a dialog that was closed before the
+            // flash started has none of its own, so the folder all the logs
+            // are written into is opened for those.
+            let path = state
+                .flash
+                .partition
+                .log_file
+                .as_ref()
+                .map(|file| file.path().to_path_buf())
+                .filter(|path| path.is_file())
+                .unwrap_or_else(flash_log::logs_root);
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || flash_log::reveal(&path))
+                        .await
+                        .unwrap_or_else(|error| Err(error.to_string()))
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the log folder: {error}");
+                    }
+
+                    Message::PartitionFlashLogOpened
+                },
+            )
+        }
+        Message::PartitionFlashLogOpened => Task::none(),
+        Message::PartitionFlashCancel => {
+            let flash = &mut state.flash.partition;
+
+            // Never close the dialog while a job runs, so the phone is not
+            // left half-written with nothing to say what happened.
+            if flash.task.is_some() {
+                return Task::none();
+            }
+
+            *flash = PartitionFlashState::default();
+            Task::none()
+        }
+        // Clicks on empty modal space are swallowed here so they neither
+        // dismiss the dialog nor reach the UI underneath.
+        Message::PartitionFlashBackdropPressed => Task::none(),
         Message::DriverInstallRequested => start_driver_dialog(state),
         Message::DriverTabletSite => open_browser(driver_install::TABLET_SITE),
         Message::DriverPasswordChanged(password) => {
@@ -8170,6 +8692,315 @@ fn start_firmware_flash_reboot(
     Task::batch([producer, consumer])
 }
 
+/// Opens the Single Partition Flash dialog: finds the `mfastboot` builds
+/// shipped next to the application, notes whether Google's copy is already
+/// downloaded, and lists the connected phones.
+fn start_partition_flash_dialog(state: &mut State) -> Task<Message> {
+    // A fresh job id makes the events of a previous dialog stale.
+    let job = state.flash.partition.job + 1;
+    let mfastboot = flash_engine::discover_mfastboot();
+    // The newest shipped `mfastboot` is what both flashing dialogs prefer.
+    let engine = mfastboot
+        .first()
+        .cloned()
+        .map(flash_engine::Engine::Mfastboot)
+        .unwrap_or(flash_engine::Engine::Builtin);
+
+    state.flash.partition = PartitionFlashState {
+        open: true,
+        job,
+        mfastboot,
+        platform_tools: platform_tools::engine(),
+        engine,
+        listing: true,
+        ..PartitionFlashState::default()
+    };
+
+    Task::batch([
+        start_partition_flash_list_devices(),
+        start_partition_flash_tool_version(state),
+    ])
+}
+
+/// Lists the connected fastboot devices for the Single Partition Flash dialog.
+///
+/// Every vendor is kept (see [`fastboot_info::list_all_devices`]), so a phone
+/// the dialog switched to userspace fastboot stays in the list.
+fn start_partition_flash_list_devices() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(fastboot_info::list_all_devices)
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        Message::PartitionFlashDevicesFetched,
+    )
+}
+
+/// Asks the selected tool what version it reports (`fastboot --version`).
+///
+/// Nothing is asked of the built-in engine, which has no command line, or of a
+/// tool whose file is not there.
+fn start_partition_flash_tool_version(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.partition;
+    flash.tool_version = None;
+    flash.reading_version = false;
+
+    let Some(tool) = flash.engine.tool().filter(|tool| tool.path.is_file()) else {
+        return Task::none();
+    };
+
+    flash.reading_version = true;
+    let tool = tool.clone();
+    let path = tool.path.clone();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || flash_engine::tool_version(&tool))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        // The mapper runs more than once, so the path it carries is cloned.
+        move |result| Message::PartitionFlashToolVersionRead(path.clone(), result),
+    )
+}
+
+/// Marks a phone as the one the image is written to and reads the variables
+/// the dialog shows for it (`current-slot`, `is-userspace`).
+fn select_partition_flash_device(state: &mut State, serial: String) -> Task<Message> {
+    let flash = &mut state.flash.partition;
+    if flash.task.is_some() {
+        return Task::none();
+    }
+
+    flash.selected = Some(serial.clone());
+    flash.reading_device = true;
+    flash.vars = None;
+    flash.vars_error = None;
+
+    let worker_serial = serial.clone();
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || fastboot_info::read_device_vars(&worker_serial))
+                .await
+                .unwrap_or_else(|e| Err(format!("background task failed: {e}")))
+        },
+        move |result| Message::PartitionFlashDeviceVarsRead(serial.clone(), result),
+    )
+}
+
+/// Notes the image the flash will write, and whether the two AVB flags apply
+/// to it.
+///
+/// A new image starts without the flags: they are only written into one that
+/// carries a vbmeta struct, and the boxes are disabled for the others.
+fn set_partition_flash_image(
+    state: &mut State,
+    path: std::path::PathBuf,
+    avb: bool,
+) {
+    let flash = &mut state.flash.partition;
+
+    flash.image = Some(path);
+    flash.image_avb = avb;
+    flash.disable_verity = false;
+    flash.disable_verification = false;
+    flash.result = None;
+}
+
+/// Writes the selected image to the selected partition, streaming the progress
+/// into [`Message::PartitionFlashEvent`].
+fn start_partition_flash(state: &mut State) -> Task<Message> {
+    if partition_flash::busy(state) || !partition_flash::ready(state) {
+        return Task::none();
+    }
+
+    let flash = &mut state.flash.partition;
+    let (Some(serial), Some(image)) = (flash.selected.clone(), flash.image.clone()) else {
+        return Task::none();
+    };
+
+    let job = flash_engine::PartitionJob {
+        engine: flash.engine.clone(),
+        serial: serial.clone(),
+        partition: flash.partition.trim().to_owned(),
+        image,
+        disable_verity: flash.disable_verity,
+        disable_verification: flash.disable_verification,
+    };
+
+    flash.task = Some(PartitionFlashTask::Flash);
+    flash.progress = None;
+    flash.result = None;
+    flash.reboot_result = None;
+    flash.switch_result = None;
+    // The log of a previous job is not this one's, on screen or on disk.
+    flash.log.clear();
+    flash.log_file = None;
+
+    // The run's own log file, next to the other flashes' logs.
+    let mut log_file = flash_log::FlashLog::create(flash_log::partition_flash_path(&job.serial));
+    log_file.line(&format!(
+        "LMN Flash {} - flashing {} to {}",
+        env!("CARGO_PKG_VERSION"),
+        job.image.display(),
+        job.partition
+    ));
+    log_file.line(&format!("device {serial}"));
+    flash.log_file = Some(log_file);
+
+    let job_id = flash.job;
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    // Kept to report a worker panic, which would otherwise leave the dialog
+    // waiting for an event that never comes.
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker =
+                tokio::task::spawn_blocking(move || flash_engine::flash_partition(&job, &emit));
+
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(flash_engine::FlashEvent::Finished(Err(
+                    format!("background task failed: {error}"),
+                )));
+            }
+        },
+        |()| Message::PartitionFlashWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::PartitionFlashEvent(job_id, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// How long the bus waits between two lookups while a phone is switching to
+/// userspace fastboot, and how many times it is asked.
+///
+/// The phone leaves as one USB device and returns as another (userspace
+/// fastboot) under the same serial, which takes a few seconds; a phone that
+/// needs longer than this leaves the dialog with whatever the last lookup
+/// found, and the Refresh button picks it up once it is there.
+const SWITCH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const SWITCH_ATTEMPTS: usize = 15;
+
+/// Sends the phone to userspace fastboot (`reboot fastboot`), waits for it to
+/// come back, and reports the phones found afterwards.
+///
+/// The reboot is "send and forget" — a phone leaves fastboot while answering —
+/// so waiting for the device to reappear is what tells whether it worked.
+fn partition_flash_switch(
+    engine: &flash_engine::Engine,
+    serial: &str,
+    emit: &(dyn Fn(flash_engine::FlashEvent) + Send + Sync),
+) -> Result<Vec<fastboot_info::DeviceSummary>, String> {
+    flash_engine::reboot(engine, serial, flash_engine::RebootMode::Fastbootd, emit)?;
+
+    let mut devices = Vec::new();
+
+    for _ in 0..SWITCH_ATTEMPTS {
+        std::thread::sleep(SWITCH_POLL_INTERVAL);
+        devices = fastboot_info::list_all_devices().unwrap_or_default();
+
+        if devices.iter().any(|device| device.serial == serial) {
+            break;
+        }
+    }
+
+    Ok(devices)
+}
+
+/// Starts that switch, streaming its output into the same log a flash writes.
+fn start_partition_flash_switch(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.partition;
+    let Some(serial) = flash.selected.clone() else {
+        return Task::none();
+    };
+
+    if flash.task.is_some() {
+        return Task::none();
+    }
+
+    flash.task = Some(PartitionFlashTask::SwitchToFastbootd);
+    flash.switch_result = None;
+    flash.result = None;
+    flash.reboot_result = None;
+
+    let engine = flash.engine.clone();
+    let job_id = flash.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                partition_flash_switch(&engine, &serial, &emit)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        move |result| Message::PartitionFlashSwitched(job_id, result),
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::PartitionFlashEvent(job_id, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
+/// Reboots the phone out of fastboot, through the engine the dialog is set to:
+/// the boot-mode flag is cleared first, so it does not come back up in fastboot.
+fn start_partition_flash_reboot(state: &mut State) -> Task<Message> {
+    let flash = &mut state.flash.partition;
+    let Some(serial) = flash.selected.clone() else {
+        return Task::none();
+    };
+
+    if flash.task.is_some() {
+        return Task::none();
+    }
+
+    flash.task = Some(PartitionFlashTask::Reboot);
+    flash.reboot_result = None;
+    flash.result = None;
+    flash.switch_result = None;
+
+    let engine = flash.engine.clone();
+    let job_id = flash.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                flash_engine::reboot(&engine, &serial, flash_engine::RebootMode::System, &emit)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("background task failed: {error}")))
+        },
+        move |result| Message::PartitionFlashRebooted(job_id, result),
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::PartitionFlashEvent(job_id, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
 /// Reconnects to `serial`, then lists the devices `adb devices` reports,
 /// which is what turns a device whose "Allow USB debugging?" prompt was
 /// dismissed into one the dialog can work on.
@@ -8932,18 +9763,32 @@ fn cleanup_firmware_flash_package() -> Task<Message> {
 /// has one) and to the log on screen, which is bounded in length because a
 /// factory firmware produces thousands of lines.
 fn push_flash_log(flash: &mut FirmwareFlashState, line: String) {
+    push_log_line(&mut flash.log, &mut flash.log_file, line);
+}
+
+/// [`push_flash_log`] for the Single Partition Flash dialog, whose log lives
+/// in its own state: the file keeps every line, only what is shown is trimmed.
+fn push_partition_flash_log(flash: &mut PartitionFlashState, line: String) {
+    push_log_line(&mut flash.log, &mut flash.log_file, line);
+}
+
+/// One line into the on-screen log and the file behind it.
+fn push_log_line(
+    log: &mut Vec<String>,
+    file: &mut Option<flash_log::FlashLog>,
+    line: String,
+) {
     const MAX_LINES: usize = 500;
 
-    // The file keeps every line; only what is shown is trimmed.
-    if let Some(file) = flash.log_file.as_mut() {
+    if let Some(file) = file.as_mut() {
         file.line(&line);
     }
 
-    if flash.log.len() >= MAX_LINES {
-        flash.log.remove(0);
+    if log.len() >= MAX_LINES {
+        log.remove(0);
     }
 
-    flash.log.push(line);
+    log.push(line);
 }
 
 /// Pins the flashing log to its last line. A build without the log on screen
@@ -8977,6 +9822,11 @@ const MISMATCH_COUNTDOWN_SECONDS: u8 = 10;
 /// Shared, so the Multi Flashing presets take exactly what the single-device
 /// Firmware Flash dialog does.
 const FIRMWARE_PACKAGE_EXTENSIONS: [&str; 2] = ["zip", "xml"];
+
+/// The image formats the Single Partition Flash picker offers: a partition
+/// image is written to a partition as it is, so only the usual extension is
+/// worth filtering on.
+const PARTITION_IMAGE_EXTENSIONS: [&str; 1] = ["img"];
 
 /// The message a package failure shows: the one the user has to act on has a
 /// translation, the rest (the ZIP reader, the XML parser, the file system) is
@@ -10213,6 +11063,13 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // Single Partition Flash dialog (device, tool, partition and image
+    // selection, the running flash with its log) drawn over the whole window
+    // while it is open.
+    if let Some(overlay) = partition_flash::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // Remove System Bloatware dialog (device selection, app checklist,
     // removal) drawn over the whole window while it is open.
     if let Some(overlay) = bloatware::overlay(state) {
@@ -10886,5 +11743,252 @@ mod tests {
             .pose();
         assert!(answered.slide.x > 0.0, "{}", answered.slide.x);
         assert!(answered.veil > 0.0);
+    }
+
+    /// An image of this test's own that carries a vbmeta struct, and one that
+    /// does not.
+    fn partition_image(name: &str, avb: bool) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "lmnflash-partition-flash-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&directory);
+        let path = directory.join(name);
+
+        let mut data = vec![0u8; 512];
+        if avb {
+            data[..4].copy_from_slice(b"AVB0");
+        }
+
+        std::fs::write(&path, data).expect("the image");
+        path
+    }
+
+    /// The tile opens the dialog the flash is set up in.
+    #[test]
+    fn the_tile_opens_the_partition_flash_dialog() {
+        let mut state = State::default();
+
+        let _ = update(
+            &mut state,
+            Message::SmartphoneFeaturePressed(SmartphoneFeature::PartitionFlash),
+        );
+
+        assert!(partition_flash::is_open(&state));
+        // The phones on the bus are looked up before the first frame, and the
+        // board shows what it found.
+        assert!(state.flash.partition.listing);
+        assert!(state.flash.partition.devices.is_empty());
+    }
+
+    /// A file dropped onto the window is an image for the Single Partition
+    /// Flash dialog, and for nothing else.
+    #[test]
+    fn a_dropped_image_belongs_to_the_partition_flash_dialog() {
+        let mut state = State::default();
+        let image = partition_image("dragged-vbmeta.img", true);
+
+        // No dialog is open, so there is nothing the file could belong to.
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashImageDropped(image.clone()),
+        );
+        assert!(state.flash.partition.image.is_none());
+
+        state.flash.partition.open = true;
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashImageDropped(image.clone()),
+        );
+        assert_eq!(
+            state.flash.partition.image.as_deref(),
+            Some(image.as_path())
+        );
+        // The image carries a vbmeta struct, so the two flags apply to it.
+        assert!(state.flash.partition.image_avb);
+
+        // A job in flight takes no dropped file: it would change what the
+        // running flash is writing.
+        let other = partition_image("dragged-boot.img", false);
+        state.flash.partition.task = Some(PartitionFlashTask::Flash);
+        let _ = update(&mut state, Message::PartitionFlashImageDropped(other));
+        assert_eq!(
+            state.flash.partition.image.as_deref(),
+            Some(image.as_path())
+        );
+    }
+
+    /// The dropdown beside the partition field fills it, which is what makes
+    /// the three usual names one click away.
+    #[test]
+    fn picking_a_partition_name_fills_the_field() {
+        let mut state = State::default();
+        state.flash.partition.open = true;
+
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashPartitionPreset("init_boot"),
+        );
+        assert_eq!(state.flash.partition.partition, "init_boot");
+
+        // Typing over it keeps working.
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashPartitionChanged("vbmeta".to_owned()),
+        );
+        assert_eq!(state.flash.partition.partition, "vbmeta");
+    }
+
+    /// The two AVB flags are only written into an image that carries a vbmeta
+    /// struct: the boxes are drawn disabled for the others, and a click that
+    /// arrives anyway must not set the flag behind them.
+    #[test]
+    fn the_avb_flags_need_an_image_that_can_take_them() {
+        let mut state = State::default();
+        state.flash.partition.open = true;
+
+        let _ = update(&mut state, Message::PartitionFlashVerityToggled(true));
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashVerificationToggled(true),
+        );
+        assert!(!state.flash.partition.disable_verity);
+        assert!(!state.flash.partition.disable_verification);
+
+        state.flash.partition.image_avb = true;
+        let _ = update(&mut state, Message::PartitionFlashVerityToggled(true));
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashVerificationToggled(true),
+        );
+        assert!(state.flash.partition.disable_verity);
+        assert!(state.flash.partition.disable_verification);
+
+        // A new image starts without them, so the boxes never claim a flag
+        // that the image in them cannot take.
+        set_partition_flash_image(&mut state, partition_image("boot.img", false), false);
+        assert!(!state.flash.partition.disable_verity);
+        assert!(!state.flash.partition.disable_verification);
+        assert!(!state.flash.partition.image_avb);
+    }
+
+    /// A phone that was switched to userspace fastboot comes back under the
+    /// serial it had before, and is picked up as the selected one — while one
+    /// that did not come back leaves nothing selected.
+    #[test]
+    fn a_switch_to_fastbootd_picks_the_phone_up_again() {
+        let mut state = State::default();
+        state.flash.partition.open = true;
+        state.flash.partition.selected = Some("ZY12345678".to_owned());
+        state.flash.partition.task = Some(PartitionFlashTask::SwitchToFastbootd);
+        let job = state.flash.partition.job;
+
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashSwitched(
+                job,
+                Ok(vec![fastboot_info::DeviceSummary {
+                    serial: "ZY12345678".to_owned(),
+                    product: "arcfox".to_owned(),
+                }]),
+            ),
+        );
+
+        let flash = &state.flash.partition;
+        assert_eq!(flash.switch_result, Some(Ok(())));
+        assert_eq!(flash.selected.as_deref(), Some("ZY12345678"));
+        // Its variables are read again: the phone is in another mode now, and
+        // the card has to say which.
+        assert!(flash.reading_device);
+        assert!(!partition_flash::busy(&state));
+
+        // A phone that is not on the bus yet is not selected, and the button
+        // that started the switch is free again.
+        let mut state = State::default();
+        state.flash.partition.selected = Some("ZY12345678".to_owned());
+        state.flash.partition.task = Some(PartitionFlashTask::SwitchToFastbootd);
+
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashSwitched(job, Ok(Vec::new())),
+        );
+
+        assert!(state.flash.partition.selected.is_none());
+        assert!(!partition_flash::busy(&state));
+
+        // A report of a job this dialog no longer runs is dropped.
+        let mut state = State::default();
+        state.flash.partition.selected = Some("ZY12345678".to_owned());
+        state.flash.partition.task = Some(PartitionFlashTask::SwitchToFastbootd);
+
+        let _ = update(
+            &mut state,
+            Message::PartitionFlashSwitched(job + 1, Err("unplugged".to_owned())),
+        );
+
+        assert_eq!(
+            state.flash.partition.selected.as_deref(),
+            Some("ZY12345678")
+        );
+        assert!(state.flash.partition.task.is_some());
+    }
+
+    /// A dialog is never closed while a job runs: the phone would be left
+    /// half-written with nothing to say what happened.
+    #[test]
+    fn a_running_job_keeps_the_partition_flash_dialog_open() {
+        let mut state = State::default();
+        state.flash.partition.open = true;
+        state.flash.partition.partition = "boot".to_owned();
+        state.flash.partition.task = Some(PartitionFlashTask::Flash);
+
+        // The close is played out before it is run, so it is deferred first —
+        // and then refused, which eases the dialog back in.
+        let _ = update(&mut state, Message::PartitionFlashCancel);
+        assert!(state.pending_close.is_some());
+
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert!(partition_flash::is_open(&state));
+        assert!(state.flash.partition.task.is_some());
+        assert_eq!(state.flash.partition.partition, "boot");
+
+        // Without a job the close goes through, and the dialog starts over.
+        state.flash.partition.task = None;
+        let _ = update(&mut state, Message::PartitionFlashCancel);
+
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert!(!partition_flash::is_open(&state));
+        assert!(state.flash.partition.partition.is_empty());
+    }
+
+    /// A flash needs a phone, a partition and an image: without any of them
+    /// the button is drawn disabled and the handler refuses it.
+    #[test]
+    fn a_partition_flash_needs_a_phone_a_partition_and_an_image() {
+        let mut state = State::default();
+        state.flash.partition.open = true;
+
+        assert!(!partition_flash::ready(&state));
+
+        state.flash.partition.selected = Some("ZY12345678".to_owned());
+        state.flash.partition.partition = "boot".to_owned();
+        assert!(!partition_flash::ready(&state));
+
+        state.flash.partition.image = Some(partition_image("boot.img", true));
+        assert!(partition_flash::ready(&state));
+
+        // A blank partition name is nothing to write to.
+        state.flash.partition.partition = "   ".to_owned();
+        assert!(!partition_flash::ready(&state));
+
+        // Starting without them changes nothing: no job is set up.
+        let _ = update(&mut state, Message::PartitionFlashStart);
+        assert!(state.flash.partition.task.is_none());
     }
 }

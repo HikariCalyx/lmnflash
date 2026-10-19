@@ -21,6 +21,7 @@ pub(crate) enum SmartphoneFeature {
     BootloaderUnlock,
     FactoryReset,
     FirmwareFlash,
+    PartitionFlash,
     MultiFlashing,
     InstallDriver,
     RemoveBloatware,
@@ -29,10 +30,11 @@ pub(crate) enum SmartphoneFeature {
 }
 
 impl SmartphoneFeature {
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::BootloaderUnlock,
         Self::FactoryReset,
         Self::FirmwareFlash,
+        Self::PartitionFlash,
         Self::MultiFlashing,
         Self::InstallDriver,
         Self::RemoveBloatware,
@@ -45,6 +47,7 @@ impl SmartphoneFeature {
             Self::BootloaderUnlock => "flash-bootloader-title",
             Self::FactoryReset => "flash-factory-reset-title",
             Self::FirmwareFlash => "flash-firmware-title",
+            Self::PartitionFlash => "flash-partition-title",
             Self::MultiFlashing => "flash-multi-flashing-title",
             Self::InstallDriver => "flash-driver-title",
             Self::RemoveBloatware => "flash-bloatware-title",
@@ -92,6 +95,11 @@ impl SmartphoneFeature {
                 ("flash-firmware-smartphone-button", pressed()),
                 ("flash-firmware-tablet-button", None),
             ],
+            // One image written to one partition, without a firmware package
+            // behind it: the counterpart of flashing a whole package, and the
+            // way back to a working phone when a single partition was written
+            // wrong.
+            Self::PartitionFlash => vec![("flash-partition-button", pressed())],
             // Flashing a whole batch of phones at once has a workspace of its
             // own, which takes over the window. It sits next to the one-device
             // procedure rather than inside it, because a run is set up (and

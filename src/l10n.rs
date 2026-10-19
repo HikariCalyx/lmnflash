@@ -788,6 +788,48 @@ mod tests {
         }
     }
 
+    /// The "Single Partition Flash" dialog: the tile, the form the user fills
+    /// in, the two AVB boxes and the status lines of the job.
+    #[test]
+    fn the_partition_flash_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "flash-partition-title",
+            "flash-partition-button",
+            "partition-flash-desc",
+            "partition-flash-partition",
+            "partition-flash-partition-required",
+            "partition-flash-image",
+            "partition-flash-select",
+            "partition-flash-no-image",
+            "partition-flash-drop",
+            "partition-flash-switch",
+            "partition-flash-switching",
+            "partition-flash-switched",
+            "partition-flash-slot",
+            "partition-flash-mode",
+            "partition-flash-mode-bootloader",
+            "partition-flash-mode-fastbootd",
+            "partition-flash-mode-unknown",
+            "partition-flash-disable-verity",
+            "partition-flash-disable-verification",
+            "partition-flash-no-avb",
+            "partition-flash-flash",
+            "partition-flash-flashing",
+            "partition-flash-done",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+        }
+    }
+
     /// The Tablet Firmware Decrypt dialog and the tile that opens it: the
     /// heading, the directory/password controls and the two counter lines,
     /// which carry the succeeded/failed numbers.

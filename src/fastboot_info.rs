@@ -112,6 +112,54 @@ fn is_motorola(variables: &HashMap<String, String>) -> bool {
         .is_some_and(|value| !value.trim().is_empty())
 }
 
+/// A fastboot device of any vendor, with the `product` it reports — what the
+/// "Single Partition Flash" dialog offers for selection.
+///
+/// Unlike [`DeviceEntry`] this asks for nothing but the product name, and it
+/// keeps devices the Motorola filter would drop: a phone that was switched to
+/// userspace fastboot (`fastbootd`) stops answering `cid`, and it is exactly
+/// that device the dialog is then working on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceSummary {
+    /// USB serial, used to connect to the device.
+    pub serial: String,
+    /// Product codename (`product`), when the device reports one.
+    pub product: String,
+}
+
+impl DeviceSummary {
+    /// `serial (product)`, or just the serial when there is no product name.
+    pub fn label(&self) -> String {
+        let product = self.product.trim();
+
+        if product.is_empty() {
+            self.serial.clone()
+        } else {
+            format!("{} ({})", self.serial, product)
+        }
+    }
+}
+
+/// Lists every connected fastboot device, whatever vendor it is.
+pub fn list_all_devices() -> Result<Vec<DeviceSummary>, String> {
+    let serials = fastboot::FastbootDevice::list_devices()?;
+    let mut devices = Vec::with_capacity(serials.len());
+
+    for serial in serials {
+        // The product name is a convenience of the label, so a device that
+        // does not answer is still listed (by its serial).
+        let product = fastboot::FastbootDevice::connect(&serial)
+            .ok()
+            .and_then(|device| getvar_value(&device, "product").ok())
+            .map(|product| product.trim().to_owned())
+            .unwrap_or_default();
+
+        devices.push(DeviceSummary { serial, product });
+    }
+
+    Ok(devices)
+}
+
 /// What a Multi Flashing session has to know about a device it just found.
 ///
 /// It is read in one connection and one `getvar all`, which reports all of it:

@@ -4,7 +4,8 @@
 //! multi-device workspace in a directory per run (`multiflash_<moment>`, one
 //! file per phone), a single-device flash in one file named after the phone it
 //! flashed and the moment it started
-//! (`single_flash_<serial>_<moment>.log`).
+//! (`single_flash_<serial>_<moment>.log`), and a single-partition flash the
+//! same way (`partition_flash_<serial>_<moment>.log`).
 //!
 //! The documents directory is where a user looks for what they ran by hand; a
 //! machine that has none (a Linux account with no XDG directories) falls back
@@ -35,8 +36,22 @@ pub(crate) fn timestamp() -> String {
 /// The file a single-device flash writes:
 /// `single_flash_<serial>_<timestamp>.log`.
 pub(crate) fn single_flash_path(serial: &str) -> PathBuf {
+    named_path("single_flash", serial)
+}
+
+/// The file a single-partition flash writes:
+/// `partition_flash_<serial>_<timestamp>.log`.
+///
+/// It sits with the other logs, so both ways of writing one image to one phone
+/// are found in the same place.
+pub(crate) fn partition_flash_path(serial: &str) -> PathBuf {
+    named_path("partition_flash", serial)
+}
+
+/// `<kind>_<serial>_<timestamp>.log` in [`logs_root`].
+fn named_path(kind: &str, serial: &str) -> PathBuf {
     logs_root().join(format!(
-        "single_flash_{}_{}.log",
+        "{kind}_{}_{}.log",
         file_name_part(serial),
         timestamp()
     ))
