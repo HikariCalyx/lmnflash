@@ -24,6 +24,66 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── What is being published ───────────────────────────────────────────────
+  #
+  # One job decides the version, the tag and whether the run publishes a
+  # pre-release, so the packaging jobs and the release job cannot disagree
+  # about it.
+  meta:
+    name: Version and tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+
+    steps:
+      - uses: actions/checkout@v4
+        # Only `Cargo.toml` is read here.
+
+      - name: Work out the release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          # The first `version =` line of the file is the package's own (the
+          # dependencies are indented or use the `name = "1"` shorthand).
+          version=$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            if [ "${{ github.event_name }}" = "push" ]; then
+              tag="$GITHUB_REF_NAME"
+            else
+              tag="v${version}"
+            fi
+          fi
+
+          # A pushed tag says what kind of build it is by itself: the suffix a
+          # pre-release carries (`v0.2.1-prerelease1`, `v0.2.1-rc1`) is the
+          # first dash in it. A dispatch is published as a pre-release unless
+          # the switch said otherwise.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            prerelease="${{ inputs.prerelease }}"
+          else
+            case "$tag" in
+              *-*) prerelease=true ;;
+              *)   prerelease=false ;;
+            esac
+          fi
+
+          echo "version:    $version"
+          echo "tag:        $tag"
+          echo "prerelease: $prerelease"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
   # ── Windows & Linux ────────────────────────────────────────────────────────
   build:
     name: ${{ matrix.target }}
@@ -138,10 +198,15 @@ jobs:
   # needs: the GTK3/WebKitGTK stack behind the WebView dialog and the file
   # pickers, and the X11/Wayland libraries iced starts with. USB is static and
   # therefore absent from the list (see below).
+  #
+  # A pre-release publishes the plain archives only: a `.deb`/`.rpm` carrying a
+  # pre-release version is not something a distribution repository should ever
+  # be offered, and it has to be built again for the final release anyway.
   build-deb:
     name: Debian package (amd64)
     runs-on: ubuntu-24.04
-    needs: build
+    needs: [meta, build]
+    if: needs.meta.outputs.prerelease != 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -304,7 +369,9 @@ jobs:
   build-rpm:
     name: RPM package (x86_64)
     runs-on: ubuntu-24.04
-    needs: build
+    needs: [meta, build]
+    # Skipped for a pre-release, exactly like the Debian package above.
+    if: needs.meta.outputs.prerelease != 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -483,7 +550,17 @@ jobs:
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [build, build-deb, build-rpm, build-macos]
+    needs: [meta, build, build-deb, build-rpm, build-macos]
+    # The two packaging jobs are skipped for a pre-release, and a skipped job
+    # would skip this one with a plain `needs`. What it cannot do without is
+    # the builds it packages, and a packaging job that settled for anything
+    # but success means a package is missing from the release.
+    if: |
+      always()
+      && needs.build.result == 'success'
+      && needs.build-macos.result == 'success'
+      && (needs.build-deb.result == 'success' || needs.build-deb.result == 'skipped')
+      && (needs.build-rpm.result == 'success' || needs.build-rpm.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -516,11 +593,14 @@ jobs:
           # Debian package, built by the `build-deb` job out of the same x86_64
           # executable; it already carries the name a Debian repository uses
           # (`lmnflash_<version>_amd64.deb`), so it is published as it is.
-          cp artifacts/lmnflash-deb/lmnflash_*_amd64.deb release/
+          # Neither package exists for a pre-release: their jobs are skipped.
+          if [ "${{ needs.meta.outputs.prerelease }}" != "true" ]; then
+            cp artifacts/lmnflash-deb/lmnflash_*_amd64.deb release/
 
-          # RPM package, from the same executable (`lmnflash-<version>-1.x86_64.rpm`
-          # is the name an RPM repository uses).
-          cp artifacts/lmnflash-rpm/lmnflash-*.rpm release/
+            # RPM package, from the same executable (`lmnflash-<version>-1.x86_64.rpm`
+            # is the name an RPM repository uses).
+            cp artifacts/lmnflash-rpm/lmnflash-*.rpm release/
+          fi
 
           # macOS
           cp artifacts/lmnflash-macos-dmg/lmnflash-macos_unsigned.dmg release/lmnflash-macos_unsigned.dmg
@@ -572,58 +652,15 @@ jobs:
             tar -C "bundle-linux-$arch" -czf "release/lmnflash-linux-$arch.tar.gz" .
           done
 
-      - name: Work out the release tag
-        id: tag
-        run: |
-          set -euo pipefail
-          # The first `version =` line of the file is the package's own (the
-          # dependencies are indented or use the `name = "1"` shorthand).
-          version=$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)
-          if [ -z "$version" ]; then
-            echo "::error::Could not read the version from Cargo.toml" >&2
-            exit 1
-          fi
-
-          tag="${{ inputs.tag }}"
-          if [ -z "$tag" ]; then
-            if [ "${{ github.event_name }}" = "push" ]; then
-              tag="$GITHUB_REF_NAME"
-            else
-              tag="v${version}"
-            fi
-          fi
-
-          # A pushed tag says what kind of build it is by itself: the suffix a
-          # pre-release carries (`v0.2.1-prerelease1`, `v0.2.1-rc1`) is the
-          # first dash in it. A dispatch is published as a pre-release unless
-          # the switch said otherwise.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            prerelease="${{ inputs.prerelease }}"
-          else
-            case "$tag" in
-              *-*) prerelease=true ;;
-              *)   prerelease=false ;;
-            esac
-          fi
-
-          echo "version:    $version"
-          echo "tag:        $tag"
-          echo "prerelease: $prerelease"
-          {
-            echo "version=$version"
-            echo "tag=$tag"
-            echo "prerelease=$prerelease"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           # A tag that was pushed already points at its commit; a release made
           # from a dispatch creates it at the commit the run was started on.
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: LMN Flash ${{ steps.tag.outputs.version }}
-          prerelease: ${{ steps.tag.outputs.prerelease }}
+          name: LMN Flash ${{ needs.meta.outputs.version }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
           # The notes list what changed since the previous tag, which is what a
           # pre-release build is a snapshot of.
           generate_release_notes: true
