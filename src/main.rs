@@ -985,6 +985,10 @@ struct QualcommState {
     lun_dialog: Option<LunDialog>,
     /// The LUNs the picker settled on, kept while the save dialog runs.
     pending_luns: Vec<firehose::Lun>,
+    /// The window a close request asked to close, while the prompt that asks
+    /// first is up: a loaded programmer is a live Firehose session, and closing
+    /// the window leaves the phone in it.
+    close_prompt: Option<iced::window::Id>,
 }
 
 /// The LUN picker "Dump Entire Storage" opens on a UFS phone.
@@ -2901,6 +2905,14 @@ enum Message {
     QualcommLunBackdropPressed,
     /// Qualcomm Partition Manager: the picker was dismissed.
     QualcommLunDialogClosed,
+    /// Qualcomm Partition Manager: the window's close button was pressed while
+    /// a Firehose session was live. The prompt that asks first is showing.
+    QualcommClosePromptCancelled,
+    /// Qualcomm Partition Manager: a click beside the close prompt. It is
+    /// swallowed, so it neither dismisses the prompt nor reaches the page.
+    QualcommClosePromptBackdropPressed,
+    /// Qualcomm Partition Manager: "Close Anyway" in the prompt.
+    QualcommCloseConfirmed,
     /// Qualcomm Partition Manager: the folder a multi-LUN dump should be
     /// written to.
     QualcommStorageFolderPicked(Option<std::path::PathBuf>),
@@ -3554,6 +3566,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::MultiFlashClosePromptDismissed
             | Message::AboutClosed
             | Message::QualcommLunDialogClosed
+            | Message::QualcommClosePromptCancelled
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -3586,6 +3599,9 @@ const OVERLAY_NONE: u8 = 0x00;
 /// The Qualcomm Partition Manager's LUN picker; its low nibble is the card it
 /// shows (asking the phone, the list, or a question that failed).
 const OVERLAY_QUALCOMM_LUNS: u8 = 0x11;
+/// The Partition Manager's "close LMN Flash?" prompt, which a window close
+/// request opens while a Firehose session is live.
+const OVERLAY_QUALCOMM_CLOSE_PROMPT: u8 = 0x14;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -3650,6 +3666,12 @@ const OVERLAY_MULTI_FLASH_PRESET_OPTIONS: u8 = 0xF2;
 /// while a dialog stays on screen (flashing log lines, progress, a spinner)
 /// has to leave its key alone.
 fn overlay_key(state: &State) -> u8 {
+    // The Partition Manager's own prompts are the last thing on screen; its
+    // workspace is only reachable with every other dialog closed.
+    if qualcomm::close_prompt_open(state) {
+        return OVERLAY_QUALCOMM_CLOSE_PROMPT;
+    }
+
     // The LUN picker belongs to the Partition Manager workspace, which is only
     // reachable with every other dialog closed.
     if let Some(step) = qualcomm::lun_card_step(state) {
@@ -4646,6 +4668,13 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::QualcommManagerSelected => start_qualcomm_page(state),
         Message::QualcommExit => {
+            // A loaded programmer is a live Firehose session running inside the
+            // phone: leaving the page would leave it there with nothing to talk
+            // to, so the phone has to be reset — or the window closed — first.
+            if state.flash.qualcomm.busy || state.flash.qualcomm.programmer_uploaded {
+                return Task::none();
+            }
+
             state.flash.qualcomm.open = false;
             // Leaving plays the same slide the other way round, so the
             // feature grid comes back the way the page went in.
@@ -6035,6 +6064,17 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::MultiFlashSessionDone => Task::none(),
         Message::WindowCloseRequested(id) => {
+            // The Partition Manager holds a live Firehose session of its own:
+            // the programmer is running inside the phone, and closing the
+            // window would leave it in Firehose mode with no way back but a
+            // power cycle. The prompt offers both ways out.
+            if state.flash.qualcomm.open
+                && (state.flash.qualcomm.busy || state.flash.qualcomm.programmer_uploaded)
+            {
+                state.flash.qualcomm.close_prompt = Some(id);
+                return Task::none();
+            }
+
             // Closing the window would cut the run short, so it is refused
             // and the user is told to stop the operation first. A device that
             // is still being flashed keeps the window open even after "Stop":
@@ -6045,6 +6085,19 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
 
             iced::window::close::<Message>(id)
+        }
+        Message::QualcommClosePromptBackdropPressed => Task::none(),
+        Message::QualcommClosePromptCancelled => {
+            state.flash.qualcomm.close_prompt = None;
+            Task::none()
+        }
+        Message::QualcommCloseConfirmed => {
+            // The window the close request named is the one that closes: the
+            // prompt only ever stands in for that request.
+            match state.flash.qualcomm.close_prompt.take() {
+                Some(id) => iced::window::close::<Message>(id),
+                None => Task::none(),
+            }
         }
         Message::MultiFlashClosePromptDismissed => {
             state.flash.multi_flash.close_prompt = false;
@@ -12555,6 +12608,11 @@ fn view(state: &State) -> Element<'_, Message> {
         _ => base,
     };
 
+    // The Partition Manager's own prompts are the last thing on screen.
+    if let Some(overlay) = qualcomm::close_prompt_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The LUN picker of the Partition Manager's "Dump Entire Storage", drawn
     // over the page (which replaced the tab bar) while it is open.
     if let Some(overlay) = qualcomm::lun_overlay(state) {
@@ -13346,6 +13404,58 @@ mod tests {
         // The search box keeps what was typed, so opening the page again finds
         // the same filter.
         assert_eq!(state.flash.qualcomm.filter, "boot");
+    }
+
+    /// A loaded programmer runs inside the phone, so the page is not left while
+    /// it does: the phone has to be reset first.
+    #[test]
+    fn the_page_is_not_left_while_the_programmer_runs() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.programmer_uploaded = true;
+
+        let _ = update(&mut state, Message::QualcommExit);
+        assert!(qualcomm::is_open(&state));
+
+        // A job of its own keeps the page shut as well.
+        state.flash.qualcomm.programmer_uploaded = false;
+        state.flash.qualcomm.busy = true;
+        let _ = update(&mut state, Message::QualcommExit);
+        assert!(qualcomm::is_open(&state));
+
+        // Resetting the phone ends the session, and the page can be left.
+        state.flash.qualcomm.busy = false;
+        let _ = update(&mut state, Message::QualcommExit);
+        assert!(!qualcomm::is_open(&state));
+    }
+
+    /// Closing the window while the programmer runs asks first: the phone would
+    /// otherwise be left in Firehose mode with nothing to talk to it.
+    #[test]
+    fn closing_the_window_asks_first_while_the_programmer_runs() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.programmer_uploaded = true;
+
+        let window = iced::window::Id::unique();
+        let _ = update(&mut state, Message::WindowCloseRequested(window));
+
+        assert_eq!(state.flash.qualcomm.close_prompt, Some(window));
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_CLOSE_PROMPT);
+
+        // Cancel answers the request with nothing, and the prompt plays out.
+        let _ = update(&mut state, Message::QualcommClosePromptCancelled);
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert_eq!(state.flash.qualcomm.close_prompt, None);
+        assert!(qualcomm::is_open(&state));
+
+        // Without a session there is nothing to warn about.
+        state.flash.qualcomm.programmer_uploaded = false;
+        let _ = update(&mut state, Message::WindowCloseRequested(window));
+        assert_eq!(state.flash.qualcomm.close_prompt, None);
     }
 
     /// A port that disappears from the scan cannot stay selected: the page

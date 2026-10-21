@@ -84,7 +84,16 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     // [Inject Firehose] [Reboot ▾] ... [Exit]: the two actions stay together
     // at the left, the way out sits at the far right. Injection needs a port
     // to talk to, so its button is greyed out until one is picked, and while
-    // a job runs. The reboot modes act on the session that read the table, so
+    // a job runs. Exit is greyed out once the programmer is running: the
+    // phone is in Firehose mode then, and only a reset (or closing the window,
+    // which asks first) gets it out again.
+    let exit = if qualcomm.busy || qualcomm.programmer_uploaded {
+        button(text(l10n.tr("multi-flash-exit")))
+    } else {
+        button(text(l10n.tr("multi-flash-exit"))).on_press(Message::QualcommExit)
+    };
+
+    // The reboot modes act on the session that read the table, so
     // the menu waits for one — iced cannot grey a `pick_list` out, so a plain
     // button takes its place until then.
     let reboot_options: Vec<Labeled<RebootMode>> = RebootMode::ALL
@@ -136,9 +145,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
 
     let top = split_row(
         vec![inject.into(), reboot],
-        vec![button(text(l10n.tr("multi-flash-exit")))
-            .on_press(Message::QualcommExit)
-            .into()],
+        vec![exit.into()],
     );
 
     // [Dump] [Write] [Erase] [↻] ... [Flash XML]: the actions of the table
@@ -624,6 +631,67 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         .into();
 
     page
+}
+
+/// Whether the "close LMN Flash?" prompt is up.
+///
+/// It stands in for a window close request that arrived while a Firehose
+/// session was live — a running programmer inside the phone is not something a
+/// stray click on the title bar should end without a word.
+pub(crate) fn close_prompt_open(state: &State) -> bool {
+    state.flash.qualcomm.close_prompt.is_some()
+}
+
+/// The prompt a window close request opens while a Firehose session is live, or
+/// `None` while there is no request to answer.
+pub(crate) fn close_prompt_overlay(state: &State) -> Option<Element<'_, Message>> {
+    if !close_prompt_open(state) {
+        return None;
+    }
+
+    let l10n = &state.l10n;
+
+    let content = column![
+        text(l10n.tr("qc-close-title")).size(18.0),
+        text(l10n.tr("qc-close-body"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+        horizontal_rule(1),
+        row![
+            button(text(l10n.tr("qc-close-confirm")))
+                .width(Fill)
+                .on_press(Message::QualcommCloseConfirmed),
+            button(text(l10n.tr("login-cancel")))
+                .width(Fill)
+                .on_press(Message::QualcommClosePromptCancelled),
+        ]
+        .spacing(8)
+        .width(Fill),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    let card: Element<'_, Message> = container(container(content).padding(16).width(Fill))
+        .width(460)
+        .style(darker_card)
+        .into();
+
+    let children: Vec<Element<'_, Message>> = vec![
+        // The click is swallowed rather than taken for an answer: the prompt
+        // is left through its own two buttons.
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommClosePromptBackdropPressed)
+            .into(),
+        container(card)
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
 }
 
 /// Which card the LUN picker shows, as the low nibble of its overlay key, or
