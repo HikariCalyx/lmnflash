@@ -858,6 +858,206 @@ fn total_bytes(regions: &[Region]) -> u64 {
     regions.iter().map(Region::bytes).fold(0_u64, u64::saturating_add)
 }
 
+/// What the phone says about its storage, read out of its answer.
+///
+/// `<getstorageinfo>` is the command a “Flash Info” panel is made of, and every
+/// programmer shapes its answer differently: some send one `<response>` full of
+/// attributes, others a burst of `<log>` lines — an eMMC phone names its blocks,
+/// a UFS phone adds a line per LUN property. Both are read into the same list
+/// of facts, and the answer itself is kept beside them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StorageInfo {
+    pub luns: Vec<LunInfo>,
+}
+
+impl StorageInfo {
+    /// The whole answer, as the phone sent it.
+    pub fn raw(&self) -> String {
+        self.luns
+            .iter()
+            .map(|lun| format!("LUN {}\n{}", lun.number, lun.raw))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// The facts, one per line, the way the card lists them.
+    pub fn text(&self) -> String {
+        self.luns
+            .iter()
+            .map(|lun| {
+                let mut text = format!("LUN {}", lun.number);
+
+                for (label, value) in &lun.facts {
+                    text.push('\n');
+                    text.push_str(label);
+                    text.push_str(": ");
+                    text.push_str(value);
+                }
+
+                text
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+}
+
+/// One physical partition, as the phone described it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LunInfo {
+    pub number: u8,
+    /// What the phone named, in the order it named it: a label and its value.
+    pub facts: Vec<(String, String)>,
+    /// The XML it answered this partition with.
+    pub raw: String,
+}
+
+/// What the phone says about its storage, read out of the XML it answers with.
+pub fn flash_info(port: &str, log: &mut FlashLog) -> Result<StorageInfo, String> {
+    log.line(format!(
+        "LMN Flash {} - Partition Manager",
+        env!("CARGO_PKG_VERSION")
+    ));
+    log.line(format!("port: {port}"));
+    log.line("action: read the storage information");
+
+    let result = flash_info_session(port, log);
+
+    match &result {
+        Ok(info) => log.line(format!(
+            "done: {} physical partition(s), {} fact(s)",
+            info.luns.len(),
+            info.luns.iter().map(|lun| lun.facts.len()).sum::<usize>()
+        )),
+        Err(error) => log.line(format!("failed: {error}")),
+    }
+
+    result
+}
+
+fn flash_info_session(port: &str, log: &mut FlashLog) -> Result<StorageInfo, String> {
+    let mut session = Session {
+        transport: Transport::open(port)?,
+        log,
+    };
+    session.set_read_timeout(FIREHOSE_TIMEOUT)?;
+
+    let mut info = StorageInfo::default();
+    for lun in 0..MAX_LUNS {
+        let xml = format!("<data><getstorageinfo physical_partition_number=\"{lun}\" /></data>");
+        send_xml(&mut session, &xml)?;
+
+        // The answer is read whole, not just the `<response>` in it: a
+        // programmer may report its storage as a burst of `<log>` lines, which
+        // is exactly what a "Flash Info" panel shows.
+        let (conversation, response) = read_conversation(&mut session)?;
+
+        if !response.is_ack() {
+            // The first partition the phone does not have ends the scan; the
+            // first one has to answer.
+            if lun == 0 {
+                return Err(refusal(&response, "read the storage information"));
+            }
+
+            session.line(format!("lun {lun}: not available; the scan ends here"));
+            break;
+        }
+
+        let facts = storage_facts(&conversation, &response);
+        for (label, value) in &facts {
+            session.line(format!("  {label}: {value}"));
+        }
+
+        info.luns.push(LunInfo {
+            number: lun,
+            facts,
+            raw: split_batches(&conversation),
+        });
+    }
+
+    if info.luns.is_empty() {
+        return Err("the phone reported no storage".to_owned());
+    }
+
+    Ok(info)
+}
+
+/// One `<data>` element per line.
+///
+/// The phone sends its answer as a stream, so one element follows the next
+/// without even a newline between them; breaking it there keeps every line of
+/// the XML readable without changing any of it.
+fn split_batches(text: &str) -> String {
+    text.replace("</data><?xml", "</data>\n<?xml")
+}
+
+/// The facts one answer carries, in the order the phone named them.
+///
+/// A `<log>` line of the form `label: value` is one, and so is every attribute
+/// of the `<response>` element — the two ways programmers report. A line that
+/// is a JSON object (the `storage_info` blob a UFS phone sends) is expanded into
+/// its keys rather than shown as one long value.
+fn storage_facts(conversation: &str, response: &Response) -> Vec<(String, String)> {
+    let mut facts = Vec::new();
+
+    for line in attributes(conversation, "log", "value") {
+        let line = line.trim();
+        let line = line.strip_prefix("INFO: ").unwrap_or(line);
+
+        if let Some(expanded) = expand_json(line) {
+            facts.extend(expanded);
+            continue;
+        }
+
+        // Prose without a `label: value` shape (the ZLP notice, say) carries no
+        // fact, and would only get in the way of the ones that do.
+        if let Some((label, value)) = line.split_once(':') {
+            let label = label.trim();
+
+            if !label.is_empty() {
+                facts.push((label.to_owned(), value.trim().to_owned()));
+            }
+        }
+    }
+
+    for (name, value) in &response.attributes {
+        if !name.eq_ignore_ascii_case("value") {
+            facts.push((name.clone(), value.clone()));
+        }
+    }
+
+    facts
+}
+
+/// The keys of a JSON object, one fact each, when `text` is one.
+fn expand_json(text: &str) -> Option<Vec<(String, String)>> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let object = value.as_object()?;
+
+    let mut facts = Vec::new();
+    for (key, value) in object {
+        match value {
+            // `{"storage_info": {...}}` is one level of wrapping around the
+            // report itself, so its keys are what the phone is naming.
+            serde_json::Value::Object(inner) => {
+                for (name, value) in inner {
+                    facts.push((name.clone(), json_text(value)));
+                }
+            }
+            other => facts.push((key.clone(), json_text(other))),
+        }
+    }
+
+    (!facts.is_empty()).then_some(facts)
+}
+
+/// One JSON value as text, without the quotes around a string.
+fn json_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// The physical partitions (LUNs) the storage has, as the phone reports them.
 ///
 /// The page asks for this before it offers the LUN picker, so every partition
@@ -2083,6 +2283,16 @@ fn refusal(response: &Response, what: &str) -> String {
 
 /// Reads until a whole `<response>` element has arrived.
 fn read_response(session: &mut Session<'_>) -> Result<Response, String> {
+    read_conversation(session).map(|(_, response)| response)
+}
+
+/// Reads one command's whole answer, as the phone sent it.
+///
+/// A programmer may report in a burst: one `<data>` element per `<log>` line,
+/// and only the last of them carrying the `<response>`. The answer is over
+/// when that element arrives, but everything before it is part of what the
+/// phone said — a "Flash Info" panel is made of exactly those lines.
+fn read_conversation(session: &mut Session<'_>) -> Result<(String, Response), String> {
     let mut buffer = Vec::new();
     let mut byte = [0_u8; 1];
 
@@ -2112,7 +2322,8 @@ fn read_response(session: &mut Session<'_>) -> Result<Response, String> {
                     session.line(format!("<< <log value=\"{line}\">"));
                 }
 
-                return Ok(response);
+                let conversation = String::from_utf8_lossy(&buffer).into_owned();
+                return Ok((conversation, response));
             }
         }
     }
@@ -3083,6 +3294,103 @@ mod tests {
         let response =
             complete_response(br#"<data><response value="ACK" /></data>"#).expect("a reply");
         assert_eq!(reported_sectors(&response, 4096), None);
+
+        // The reply is still one reply when the sector data of a read follows
+        // it, and that data is not part of what was parsed.
+        let response =
+            complete_response(b"<data><response value=\"ACK\" /></data>\x01\x02")
+                .expect("a reply");
+        assert!(response.is_ack());
+        assert!(response.logs.is_empty());
+    }
+
+    /// The storage information is read out of the answer: `label: value` log
+    /// lines, the JSON `storage_info` blob expanded, and the attributes of a
+    /// `<response>` — every way a programmer reports it.
+    #[test]
+    fn the_storage_information_is_read_out_of_the_answer() {
+        let conversation = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n",
+            "<log value=\"Binary build date: Nov 16 2017 @ 03:00:06\"/>\n</data>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n",
+            "<log value=\"Calling usb_al_bulk_set_zlp_mode(TRUE) since ZlpAwareHost='1'\"/>\n</data>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n",
+            "<log value=\"INFO: Device Block Size in Bytes: 0x1000\"/>\n</data>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n",
+            "<log value=\"INFO: UFS Total Active LU: 0x6\"/>\n</data>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n",
+            "<log value=\"INFO: {&quot;storage_info&quot;: {&quot;block_size&quot;:4096, \
+&quot;num_physical&quot;:6, &quot;prod_name&quot;:&quot;KLUEG8U1FB-B0C1&quot;}}\"/>\n</data>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n<response value=\"ACK\" />\n</data>",
+        );
+
+        let response = complete_response(conversation.as_bytes()).expect("the answer");
+        assert!(response.is_ack());
+
+        let facts = storage_facts(conversation, &response);
+
+        // A log line is one fact, its `INFO: ` prefix gone; the prose line
+        // without a label is not a fact at all.
+        assert!(facts.contains(&("Binary build date".to_owned(), "Nov 16 2017 @ 03:00:06".to_owned())));
+        assert!(facts.contains(&("Device Block Size in Bytes".to_owned(), "0x1000".to_owned())));
+        assert!(facts.contains(&("UFS Total Active LU".to_owned(), "0x6".to_owned())));
+        assert!(
+            !facts.iter().any(|(label, _)| label.contains("Calling usb_al_bulk")),
+            "{facts:?}"
+        );
+
+        // The JSON blob is expanded into the keys it names.
+        assert!(facts.contains(&("block_size".to_owned(), "4096".to_owned())));
+        assert!(facts.contains(&("num_physical".to_owned(), "6".to_owned())));
+        assert!(facts.contains(&("prod_name".to_owned(), "KLUEG8U1FB-B0C1".to_owned())));
+
+        // A programmer that answers with attributes instead reports the same
+        // way — and its `value` is not a fact.
+        let reply = complete_response(
+            br#"<data><response value="ACK" TOTAL_SECTORS="1024" MemoryName="UFS" /></data>"#,
+        )
+        .expect("the answer");
+        let facts = storage_facts(
+            r#"<data><response value="ACK" TOTAL_SECTORS="1024" MemoryName="UFS" /></data>"#,
+            &reply,
+        );
+
+        assert_eq!(
+            facts,
+            [
+                ("TOTAL_SECTORS".to_owned(), "1024".to_owned()),
+                ("MemoryName".to_owned(), "UFS".to_owned()),
+            ]
+        );
+    }
+
+    /// A burst of `<data>` elements is one answer, with the `<response>` last.
+    #[test]
+    fn a_burst_of_data_elements_is_one_answer() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n";
+        let burst = format!(
+            "{declaration}<data>\n<log value=\"INFO: a\"/>\n</data>\
+             {declaration}<data>\n<log value=\"INFO: b\"/>\n</data>"
+        );
+
+        // Without the `<response>` the answer is not over yet.
+        assert!(complete_response(burst.as_bytes()).is_none());
+
+        let all = format!(
+            "{burst}{declaration}<data>\n<response value=\"ACK\" />\n</data>"
+        );
+        let response = complete_response(all.as_bytes()).expect("the answer");
+        assert!(response.is_ack());
+
+        // The panel shows one element per line, and nothing else changes.
+        assert_eq!(
+            split_batches(&all),
+            format!(
+                "{declaration}<data>\n<log value=\"INFO: a\"/>\n</data>\n\
+                 {declaration}<data>\n<log value=\"INFO: b\"/>\n</data>\n\
+                 {declaration}<data>\n<response value=\"ACK\" />\n</data>"
+            )
+        );
     }
 
     /// A LUN is dumped from its first sector to its last, so the image holds

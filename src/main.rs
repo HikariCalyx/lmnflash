@@ -991,6 +991,28 @@ struct QualcommState {
     close_prompt: Option<iced::window::Id>,
     /// The "Flash Entire Storage" card, while it is open.
     storage_flash: Option<StorageFlashDialog>,
+    /// The "Flash Info" card, while it is open.
+    flash_info: Option<FlashInfoDialog>,
+}
+
+/// The "Flash Info" card: what the phone says about its storage.
+///
+/// The facts are shown read out of the answer, and the XML it arrived as is a
+/// panel of its own that stays folded until it is asked for — it is long, and
+/// nobody reads it twice.
+enum FlashInfoDialog {
+    /// The phone is being asked.
+    Reading,
+    /// The answer, read out and as it arrived.
+    Ready {
+        info: firehose::StorageInfo,
+        /// Whether the raw XML panel is open.
+        raw_open: bool,
+        /// Whether the raw XML was copied yet.
+        copied: bool,
+    },
+    /// The question failed; the card says why.
+    Failed(String),
 }
 
 /// The "Flash Entire Storage" card.
@@ -3038,6 +3060,25 @@ enum Message {
     /// Qualcomm Partition Manager: the pause after a whole-storage write is
     /// over, so the table it left behind can be read.
     QualcommStorageFlashSettled,
+    /// Qualcomm Partition Manager: "Flash Info" was pressed — ask the phone
+    /// what its storage looks like.
+    QualcommFlashInfo,
+    /// Qualcomm Partition Manager: the storage information the phone answered
+    /// with (or the reason it could not).
+    QualcommFlashInfoRead(Result<firehose::StorageInfo, String>),
+    /// Qualcomm Partition Manager: the card's "Raw XML Response" panel was
+    /// folded or unfolded.
+    QualcommFlashInfoToggleRaw,
+    /// Qualcomm Partition Manager: the card's "Copy Response" button — what
+    /// the phone said, read out.
+    QualcommFlashInfoCopyParsed,
+    /// Qualcomm Partition Manager: the card's "Copy Raw XML Response" button.
+    QualcommFlashInfoCopy,
+    /// Qualcomm Partition Manager: the card was dismissed.
+    QualcommFlashInfoClosed,
+    /// Qualcomm Partition Manager: a click beside the card. It is swallowed,
+    /// so it neither dismisses the card nor reaches the page.
+    QualcommFlashInfoBackdropPressed,
     /// Qualcomm Partition Manager: "Write" was pressed — ask for the image.
     QualcommWrite,
     /// Qualcomm Partition Manager: the image the picker returned.
@@ -3684,6 +3725,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::QualcommLunDialogClosed
             | Message::QualcommClosePromptCancelled
             | Message::QualcommStorageFlashDialogClosed
+            | Message::QualcommFlashInfoClosed
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -3722,6 +3764,9 @@ const OVERLAY_QUALCOMM_CLOSE_PROMPT: u8 = 0x14;
 /// The Partition Manager's "Flash Entire Storage" card; its low nibble is the
 /// card it shows (asking the phone, the rows, or a question that failed).
 const OVERLAY_QUALCOMM_FLASH_STORAGE: u8 = 0x15;
+/// The Partition Manager's "Flash Info" card; its low nibble is the card it
+/// shows (asking the phone, the reply, or a question that failed).
+const OVERLAY_QUALCOMM_FLASH_INFO: u8 = 0x18;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -3794,6 +3839,10 @@ fn overlay_key(state: &State) -> u8 {
 
     if let Some(step) = qualcomm::storage_flash_card_step(state) {
         return OVERLAY_QUALCOMM_FLASH_STORAGE + step;
+    }
+
+    if let Some(step) = qualcomm::flash_info_card_step(state) {
+        return OVERLAY_QUALCOMM_FLASH_INFO + step;
     }
 
     // The LUN picker belongs to the Partition Manager workspace, which is only
@@ -5512,6 +5561,83 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
 
             start_qualcomm_refresh(state)
+        }
+        Message::QualcommFlashInfo => {
+            if state.flash.qualcomm.busy || !state.flash.qualcomm.programmer_uploaded {
+                return Task::none();
+            }
+            let Some(port) = state.flash.qualcomm.port.clone() else {
+                return Task::none();
+            };
+
+            let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+            state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+            state.flash.qualcomm.busy = true;
+            state.flash.qualcomm.flash_info = Some(FlashInfoDialog::Reading);
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let mut log = log;
+                        firehose::flash_info(&port, &mut log)
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(format!("the Firehose worker stopped: {error}"))
+                    })
+                },
+                Message::QualcommFlashInfoRead,
+            )
+        }
+        Message::QualcommFlashInfoRead(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.flash_info = Some(match result {
+                Ok(info) => FlashInfoDialog::Ready {
+                    info,
+                    raw_open: false,
+                    copied: false,
+                },
+                Err(error) => FlashInfoDialog::Failed(error),
+            });
+
+            Task::none()
+        }
+        Message::QualcommFlashInfoToggleRaw => {
+            if let Some(FlashInfoDialog::Ready { raw_open, .. }) =
+                &mut state.flash.qualcomm.flash_info
+            {
+                *raw_open = !*raw_open;
+            }
+
+            Task::none()
+        }
+        Message::QualcommFlashInfoCopyParsed => {
+            let Some(FlashInfoDialog::Ready { info, copied, .. }) =
+                &mut state.flash.qualcomm.flash_info
+            else {
+                return Task::none();
+            };
+
+            *copied = true;
+
+            iced::clipboard::write(info.text())
+        }
+        Message::QualcommFlashInfoCopy => {
+            let Some(FlashInfoDialog::Ready { info, copied, .. }) =
+                &mut state.flash.qualcomm.flash_info
+            else {
+                return Task::none();
+            };
+
+            *copied = true;
+
+            iced::clipboard::write(info.raw())
+        }
+        Message::QualcommFlashInfoBackdropPressed => Task::none(),
+        Message::QualcommFlashInfoClosed => {
+            state.flash.qualcomm.flash_info = None;
+            Task::none()
         }
         Message::QualcommWrite => {
             if state.flash.qualcomm.busy {
@@ -13073,6 +13199,11 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // The Partition Manager's "Flash Info" card, drawn the same way.
+    if let Some(overlay) = qualcomm::flash_info_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
     // prompt that a close request was refused while a run goes on.
     if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
@@ -14520,6 +14651,97 @@ mod tests {
 
         assert!(state.flash.qualcomm.busy);
         assert_eq!(state.flash.qualcomm.status, QualcommStatus::Rebooting);
+    }
+
+    /// "Flash Info" asks the phone for its storage information, shows what it
+    /// said, folds the raw XML away, and can copy it.
+    #[test]
+    fn the_flash_info_card_shows_what_the_phone_answered() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+
+        // Without a programmer there is nobody to ask.
+        let _ = update(&mut state, Message::QualcommFlashInfo);
+        assert!(state.flash.qualcomm.flash_info.is_none());
+        assert!(!state.flash.qualcomm.busy);
+
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(&mut state, Message::QualcommFlashInfo);
+        assert!(state.flash.qualcomm.busy);
+        assert!(matches!(
+            state.flash.qualcomm.flash_info,
+            Some(FlashInfoDialog::Reading)
+        ));
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_FLASH_INFO);
+
+        let info = firehose::StorageInfo {
+            luns: vec![firehose::LunInfo {
+                number: 0,
+                facts: vec![("Device Block Size in Bytes".to_owned(), "0x1000".to_owned())],
+                raw: "<data><response value=\"ACK\" /></data>".to_owned(),
+            }],
+        };
+        let _ = update(
+            &mut state,
+            Message::QualcommFlashInfoRead(Ok(info)),
+        );
+
+        assert!(!state.flash.qualcomm.busy);
+        match &state.flash.qualcomm.flash_info {
+            Some(FlashInfoDialog::Ready {
+                info,
+                raw_open,
+                copied,
+            }) => {
+                assert_eq!(info.luns.len(), 1);
+                assert_eq!(info.raw(), "LUN 0\n<data><response value=\"ACK\" /></data>");
+                // The raw XML is folded until it is asked for.
+                assert!(!raw_open);
+                assert!(!copied);
+            }
+            _ => panic!("the card shows the reply"),
+        }
+
+        // The panel opens and closes again.
+        let _ = update(&mut state, Message::QualcommFlashInfoToggleRaw);
+        match &state.flash.qualcomm.flash_info {
+            Some(FlashInfoDialog::Ready { raw_open, .. }) => assert!(raw_open),
+            _ => panic!("the card is still up"),
+        }
+        let _ = update(&mut state, Message::QualcommFlashInfoToggleRaw);
+        match &state.flash.qualcomm.flash_info {
+            Some(FlashInfoDialog::Ready { raw_open, .. }) => assert!(!raw_open),
+            _ => panic!("the card is still up"),
+        }
+
+        // Both copy buttons mark the card as copied; each hands the clipboard
+        // a different view of the same answer.
+        let _ = update(&mut state, Message::QualcommFlashInfoCopyParsed);
+        match &state.flash.qualcomm.flash_info {
+            Some(FlashInfoDialog::Ready { info, copied, .. }) => {
+                assert!(copied);
+                assert_eq!(
+                    info.text(),
+                    "LUN 0\nDevice Block Size in Bytes: 0x1000"
+                );
+            }
+            _ => panic!("the card is still up"),
+        }
+
+        let _ = update(&mut state, Message::QualcommFlashInfoCopy);
+        match &state.flash.qualcomm.flash_info {
+            Some(FlashInfoDialog::Ready { copied, .. }) => assert!(copied),
+            _ => panic!("the card is still up"),
+        }
+
+        // Closing plays out first, like every other dialog.
+        let _ = update(&mut state, Message::QualcommFlashInfoClosed);
+        assert!(state.pending_close.is_some());
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.flash.qualcomm.flash_info.is_none());
     }
 
     /// The danger zone's unimplemented entries are placeholders: picking one

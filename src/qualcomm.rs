@@ -25,8 +25,8 @@ use crate::firmware::{grouped_bytes, human_size, human_size_exact};
 use crate::firmware_flash::menu_style;
 use crate::text;
 use crate::{
-    DangerEntry, ImageFit, Labeled, LunDialog, Message, QualcommStatus, RebootMode, State,
-    StorageFlashDialog, StorageType,
+    DangerEntry, FlashInfoDialog, ImageFit, Labeled, LunDialog, Message, QualcommStatus, RebootMode,
+    State, StorageFlashDialog, StorageType,
 };
 
 /// Id of the partition table's scrollable, so its position survives the page
@@ -38,6 +38,17 @@ const LUN_SCROLL_ID: &str = "qualcomm-luns";
 
 /// Id of the storage-flash card's list.
 const STORAGE_FLASH_SCROLL_ID: &str = "qualcomm-storage-flash";
+
+/// The width of a fact's label in the "Flash Info" card: wide enough for the
+/// longest one the phone sends without squeezing its value.
+const STORAGE_INFO_LABEL_WIDTH: f32 = 230.0;
+
+/// How tall the "Flash Info" card's list of facts is: the card keeps its
+/// buttons in view below it, and the list scrolls on its own.
+const STORAGE_INFO_HEIGHT: f32 = 280.0;
+
+/// Id of the "Flash Info" card's list.
+const FLASH_INFO_SCROLL_ID: &str = "qualcomm-flash-info";
 
 /// The width of one image dropdown in the storage-flash card: wide enough for
 /// a dumped file name (`lun4 (2).img`).
@@ -405,7 +416,16 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         button(text(l10n.tr("qc-view-log")))
     };
 
-    let tool_row = split_row(vec![view_log.into()], tools);
+    // [Flash Info] asks the phone what its storage looks like. It needs the
+    // programmer that runs in the phone, so it waits for one and for no job to
+    // be under way.
+    let flash_info = if qualcomm.programmer_uploaded && !qualcomm.busy {
+        button(text(l10n.tr("qc-flash-info"))).on_press(Message::QualcommFlashInfo)
+    } else {
+        button(text(l10n.tr("qc-flash-info")))
+    };
+
+    let tool_row = split_row(vec![view_log.into(), flash_info.into()], tools);
 
     // What the page is doing (or how the last action went) sits right under
     // the table, so an error is next to the table it is about.
@@ -982,6 +1002,195 @@ fn storage_flash_card<'a>(
     )
     .width(560)
     .height(440)
+    .style(darker_card)
+    .into()
+}
+
+/// Which card the "Flash Info" dialog shows, as the low nibble of its overlay
+/// key, or `None` while it is closed.
+pub(crate) fn flash_info_card_step(state: &State) -> Option<u8> {
+    Some(match state.flash.qualcomm.flash_info.as_ref()? {
+        FlashInfoDialog::Reading => 0,
+        FlashInfoDialog::Ready { .. } => 1,
+        FlashInfoDialog::Failed(_) => 2,
+    })
+}
+
+/// The "Flash Info" card, or `None` while it is closed.
+pub(crate) fn flash_info_overlay(state: &State) -> Option<Element<'_, Message>> {
+    let dialog = state.flash.qualcomm.flash_info.as_ref()?;
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommFlashInfoBackdropPressed)
+            .into(),
+        container(flash_info_card(state, dialog))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The card itself: what the phone reports, read out, with its own XML a
+/// folded panel below it.
+///
+/// The facts are the lines the phone named — one row per label — and the raw
+/// XML is written in the monospace face the page's offsets use, so it lines up
+/// the way the phone sent it. It stays folded: it is long, and the card's button
+/// copies it whole when it is wanted somewhere else.
+fn flash_info_card<'a>(state: &'a State, dialog: &'a FlashInfoDialog) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+
+    let mut content = column![
+        text(l10n.tr("qc-flash-info")).size(18.0),
+        horizontal_rule(1),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    match dialog {
+        FlashInfoDialog::Reading => {
+            content = content.push(
+                row![
+                    crate::guided::spinner(state.anim_tick),
+                    text(l10n.tr("qc-lun-reading")).size(13.0),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+        }
+        FlashInfoDialog::Failed(error) => {
+            content = content.push(
+                text(l10n.tr_with_args("qc-lun-failed", &[("error", error.clone())]))
+                    .size(13.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
+                    .style(iced::widget::text::danger),
+            );
+            content = content.push(horizontal_rule(1));
+            content = content.push(
+                button(text(l10n.tr("qc-flash-info-done")))
+                    .width(Fill)
+                    .on_press(Message::QualcommFlashInfoClosed),
+            );
+        }
+        FlashInfoDialog::Ready {
+            info,
+            raw_open,
+            copied,
+        } => {
+            // The facts of every LUN in one list of their own, so the buttons
+            // and the raw panel's lid stay in view however much the phone
+            // reports.
+            let mut rows: Vec<Element<'a, Message>> = Vec::new();
+
+            for lun in &info.luns {
+                rows.push(text(format!("LUN {}", lun.number)).size(14.0).into());
+
+                for (label, value) in &lun.facts {
+                    rows.push(
+                        row![
+                            text(label.clone())
+                                .size(12.0)
+                                .width(STORAGE_INFO_LABEL_WIDTH),
+                            text(value.clone())
+                                .size(12.0)
+                                .width(Fill)
+                                .wrapping(Wrapping::WordOrGlyph),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Start)
+                        .width(Fill)
+                        .into(),
+                    );
+                }
+            }
+
+            if *raw_open {
+                rows.push(
+                    container(
+                        text(info.raw())
+                            .size(12.0)
+                            .font(crate::output_font())
+                            .width(Fill)
+                            .wrapping(Wrapping::WordOrGlyph),
+                    )
+                    .padding(8)
+                    .width(Fill)
+                    .style(container::rounded_box)
+                    .into(),
+                );
+            }
+
+            content = content.push(
+                container(
+                    scrollable(
+                        iced::widget::Column::with_children(rows)
+                            .spacing(3)
+                            .align_x(Alignment::Start),
+                    )
+                    .id(iced::widget::Id::new(FLASH_INFO_SCROLL_ID))
+                    .width(Fill)
+                    .height(STORAGE_INFO_HEIGHT),
+                )
+                .padding(6)
+                .width(Fill)
+                .style(container::rounded_box),
+            );
+
+            // The raw answer is a panel of its own, folded until it is asked
+            // for: the arrow says which way it is.
+            let arrow = if *raw_open { "▾" } else { "▸" };
+            content = content.push(
+                button(text(format!("{arrow} {}", l10n.tr("qc-flash-info-raw"))).size(12.0))
+                    .padding([4.0, 8.0])
+                    .on_press(Message::QualcommFlashInfoToggleRaw),
+            );
+
+            if *copied {
+                content = content.push(
+                    text(l10n.tr("qc-flash-info-copied"))
+                        .size(12.0)
+                        .style(bright_success),
+                );
+            }
+
+            content = content.push(horizontal_rule(1));
+
+            // Two ways to take the answer away: read out, or exactly as the
+            // phone sent it. Done closes the card on a line of its own, so no
+            // label has to be squeezed.
+            content = content.push(
+                row![
+                    button(text(l10n.tr("qc-flash-info-copy-parsed")))
+                        .width(Fill)
+                        .on_press(Message::QualcommFlashInfoCopyParsed),
+                    button(text(l10n.tr("qc-flash-info-copy")))
+                        .width(Fill)
+                        .on_press(Message::QualcommFlashInfoCopy),
+                ]
+                .spacing(8)
+                .width(Fill),
+            );
+            content = content.push(
+                button(text(l10n.tr("qc-flash-info-done")))
+                    .width(Fill)
+                    .on_press(Message::QualcommFlashInfoClosed),
+            );
+        }
+    }
+
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(640)
+    .height(480)
     .style(darker_card)
     .into()
 }
