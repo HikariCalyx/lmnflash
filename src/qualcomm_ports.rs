@@ -1,9 +1,10 @@
 //! The serial ports a Qualcomm Firehose (EDL) device offers.
 //!
 //! A phone in EDL mode enumerates as USB `05C6:9008` and exposes a serial port
-//! — `COM7` on Windows, `ttyUSB0` on Linux. The Qualcomm Partition Manager
-//! lists exactly those ports, and looks them up about once a second so that
-//! plugging the phone in or out shows up without a manual refresh.
+//! — `COM7` on Windows, `/dev/ttyUSB0` on Linux, `/dev/cu.usbmodem…` on macOS.
+//! The Qualcomm Partition Manager lists exactly those ports, and looks them up
+//! about once a second so that plugging the phone in or out shows up without a
+//! manual refresh.
 
 /// The USB vendor id of Qualcomm.
 #[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
@@ -301,8 +302,14 @@ fn platform_ports() -> Vec<String> {
             for node in nodes.flatten() {
                 let name = node.file_name().to_string_lossy().into_owned();
 
-                if name.starts_with("tty") && !ports.contains(&name) {
-                    ports.push(name);
+                if !name.starts_with("tty") {
+                    continue;
+                }
+
+                let path = dev_path(&name);
+
+                if !ports.contains(&path) {
+                    ports.push(path);
                 }
             }
         }
@@ -320,10 +327,70 @@ fn read_hex(path: &std::path::Path) -> Option<u16> {
 
 /// The 05C6:9008 serial ports of this system.
 ///
-/// macOS names a USB modem's device node after the unit rather than exposing
-/// the USB ids next to it, so finding the right one would take IOKit — the
-/// list starts empty there, and the page is not blocked by it.
-#[cfg(not(any(windows, target_os = "linux")))]
+/// macOS does not publish the USB ids beside a device node, so the node's own
+/// name is what identifies the phone: an EDL phone is a CDC-ACM device, which
+/// Apple's driver gives a `usbmodem` node — a USB-serial adapter appears as
+/// `usbserial-…` and is offered as well, since the page fails loudly enough
+/// when the port it was given is not a phone.
+#[cfg(target_os = "macos")]
+fn platform_ports() -> Vec<String> {
+    use std::os::unix::fs::FileTypeExt;
+
+    let mut ports = Vec::new();
+
+    let Ok(devices) = std::fs::read_dir("/dev") else {
+        return ports;
+    };
+
+    for device in devices.flatten() {
+        let name = device.file_name().to_string_lossy().into_owned();
+        let Some(path) = macos_port(&name) else {
+            continue;
+        };
+
+        // A port is a character device; anything else under that name is not
+        // something that can be opened as one (and `tty.` nodes are symlinks
+        // to the same driver).
+        if !matches!(device.file_type(), Ok(kind) if kind.is_char_device()) {
+            continue;
+        }
+
+        if !ports.contains(&path) {
+            ports.push(path);
+        }
+    }
+
+    ports
+}
+
+/// The path of the device node macOS gives a USB serial port, or `None` for a
+/// node that is not one.
+///
+/// Only the `cu.` (callout) node is taken: opening a `tty.` node blocks until
+/// the modem raises its carrier, which a phone in EDL mode never does, so the
+/// open would never return.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_port(name: &str) -> Option<String> {
+    let serial = name.starts_with("cu.usbmodem") || name.starts_with("cu.usbserial");
+
+    serial.then(|| dev_path(name))
+}
+
+/// The path a device node under `/dev` is opened through.
+///
+/// The name has to be absolute: the Firehose transport opens exactly the string
+/// the page offers, and the working directory of a launched application is not
+/// `/dev`.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn dev_path(name: &str) -> String {
+    format!("/dev/{name}")
+}
+
+/// The 05C6:9008 serial ports of this system.
+///
+/// No other platform is supported: the page lists nothing there rather than
+/// guessing at device nodes it cannot check.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn platform_ports() -> Vec<String> {
     Vec::new()
 }
@@ -357,6 +424,32 @@ mod tests {
         assert_eq!(port_number("COM7"), 7);
         assert_eq!(port_number("ttyUSB12"), 12);
         assert_eq!(port_number("usbmodem"), u32::MAX);
+    }
+
+    /// Only the nodes macOS gives a USB serial port are offered, and only the
+    /// `cu.` one: a `tty.` node waits for a carrier a phone never raises.
+    #[test]
+    fn a_macos_port_is_the_callout_node_of_a_usb_serial_device() {
+        assert_eq!(
+            macos_port("cu.usbmodem14201").as_deref(),
+            Some("/dev/cu.usbmodem14201")
+        );
+        assert_eq!(
+            macos_port("cu.usbserial-1420").as_deref(),
+            Some("/dev/cu.usbserial-1420")
+        );
+
+        // The same device's blocking node, and the ports every Mac has.
+        assert_eq!(macos_port("tty.usbmodem14201"), None);
+        assert_eq!(macos_port("cu.Bluetooth-Incoming-Port"), None);
+        assert_eq!(macos_port("disk0"), None);
+    }
+
+    /// A device node is opened through its absolute path: an application's
+    /// working directory is not `/dev`.
+    #[test]
+    fn a_device_node_is_an_absolute_path() {
+        assert_eq!(dev_path("ttyUSB0"), "/dev/ttyUSB0");
     }
 
     /// Looking the ports up must never panic, whatever this machine holds.

@@ -58,8 +58,8 @@ const DANGER_ENTRIES: [&str; 4] = [
     "qc-danger-erase-storage",
 ];
 
-/// The width of the port dropdown: wide enough for the longest name a
-/// 05C6:9008 port can have (`usbtty9999`), so picking one never resizes it.
+/// The narrowest the port dropdown gets: wide enough for the longest name a
+/// COM port can have (`COM255`), so picking one never makes it smaller.
 const PORT_MENU_WIDTH: f32 = 130.0;
 
 /// The width of the storage dropdown: wide enough for its longest entry
@@ -303,7 +303,8 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     // [View Log] ... [Storage Type ▾] [Port ▾] [Device Manager]: the tools stay
     // at the left, while the two dropdowns and the Windows-only Device Manager
     // button sit at the far right. The port menu lists the COM ports (or
-    // `/dev/ttyUSB*` devices) that enumerate as 05C6:9008.
+    // `/dev/ttyUSB*` / `/dev/cu.usbmodem*` devices) that enumerate as
+    // 05C6:9008.
     let storage_options: Vec<Labeled<StorageType>> = StorageType::ALL
         .iter()
         .map(|&storage| Labeled {
@@ -341,7 +342,9 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         Message::QualcommPortSelected,
     )
     .placeholder(l10n.tr("qc-port"))
-    .width(PORT_MENU_WIDTH)
+    // A Windows port is a short name, but macOS and Linux offer a device node
+    // (`/dev/cu.usbmodem14201`), so the width follows the longest entry.
+    .width(menu_width(&state.flash.qualcomm.ports).max(PORT_MENU_WIDTH))
     .text_shaping(Shaping::Advanced);
 
     // The Device Manager only exists on Windows, so the button is only there.
