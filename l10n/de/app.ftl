@@ -761,4 +761,14 @@ qc-dump-file-title = Wählen Sie, wo die gesicherte Partition gespeichert wird
 qc-write-file-title = Image zum Schreiben wählen
 qc-image-filter = Datenträgerabbild
 
+qc-lun-hint = Dieser Speicher ist in physische Partitionen (LUNs) aufgeteilt. Wähle die zu sichernden aus.
+qc-lun-reading = Speicheraufteilung wird gelesen…
+qc-lun-entry = LUN { $lun } — { $bytes } Byte ({ $size })
+qc-lun-none = Wähle mindestens eine LUN aus.
+qc-lun-failed = Die Speicheraufteilung konnte nicht gelesen werden: { $error }
+qc-dump-storage-file-title = Speicherort für das Speicherabbild wählen
+qc-dump-storage-folder-title = Ordner zum Speichern der LUN-Abbilder wählen
+qc-storage-dump-done = { $count } LUN-Abbild(er) nach { $path } gesichert.
+qc-storage-dump-failed = Der Speicher konnte nicht gesichert werden: { $error }
+
 partition-flash-no-avb = Das ausgewählte Image enthält keine vbmeta-Struktur, daher gelten diese beiden Optionen nicht.

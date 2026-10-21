@@ -262,6 +262,37 @@ pub struct Table {
     pub partitions: Vec<Partition>,
 }
 
+/// One physical partition (LUN) of the storage, as the phone reports it.
+///
+/// A dump of a whole LUN reads it from its first sector, the partition table
+/// included: it is the image a phone's storage can be restored from, not one
+/// partition of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lun {
+    pub number: u8,
+    pub sector_size: u32,
+    /// How many sectors the whole partition has.
+    pub sectors: u64,
+}
+
+impl Lun {
+    /// The region a dump of the whole partition reads.
+    fn region(&self) -> Region {
+        Region {
+            name: format!("lun{}", self.number),
+            lun: self.number,
+            start_lba: 0,
+            end_lba: self.sectors.saturating_sub(1),
+            sector_size: self.sector_size,
+        }
+    }
+
+    /// How many bytes the whole partition holds.
+    pub fn bytes(&self) -> u64 {
+        self.sectors.saturating_mul(u64::from(self.sector_size))
+    }
+}
+
 /// Uploads `programmer` and reads the partition table of the storage the
 /// phone reports.
 ///
@@ -825,6 +856,157 @@ fn dump_session(
 /// The bytes every region holds together.
 fn total_bytes(regions: &[Region]) -> u64 {
     regions.iter().map(Region::bytes).fold(0_u64, u64::saturating_add)
+}
+
+/// The physical partitions (LUNs) the storage has, as the phone reports them.
+///
+/// The page asks for this before it offers the LUN picker, so every partition
+/// is named with the size it really has. `partitions` is the table the
+/// injection read: a programmer that does not answer `<getstorageinfo>` for a
+/// LUN still has the extent of the partitions read from it.
+pub fn storage_luns(
+    port: &str,
+    partitions: &[Partition],
+    log: &mut FlashLog,
+) -> Result<Vec<Lun>, String> {
+    log.line(format!(
+        "LMN Flash {} - Partition Manager",
+        env!("CARGO_PKG_VERSION")
+    ));
+    log.line(format!("port: {port}"));
+    log.line("action: read the storage layout");
+
+    let result = storage_luns_session(port, partitions, log);
+
+    match &result {
+        Ok(luns) => log.line(format!("done: {} physical partition(s)", luns.len())),
+        Err(error) => log.line(format!("failed: {error}")),
+    }
+
+    result
+}
+
+fn storage_luns_session(
+    port: &str,
+    partitions: &[Partition],
+    log: &mut FlashLog,
+) -> Result<Vec<Lun>, String> {
+    // Every partition carries the sector size of the storage it was read from,
+    // and one storage has one sector size.
+    let sector_size = partitions
+        .first()
+        .map_or(4096, |partition| partition.sector_size);
+
+    let mut session = Session {
+        transport: Transport::open(port)?,
+        log,
+    };
+    session.set_read_timeout(FIREHOSE_TIMEOUT)?;
+
+    let mut luns = Vec::new();
+    for number in 0..MAX_LUNS {
+        let reported = storage_info(&mut session, number, sector_size);
+
+        let sectors = match (&reported, table_extent(partitions, number)) {
+            (Ok(sectors), _) if *sectors > 0 => *sectors,
+            (_, Some(sectors)) => {
+                if let Err(error) = &reported {
+                    session.line(format!(
+                        "lun {number}: the phone did not report its size ({error}); \
+taking the end of its last partition"
+                    ));
+                }
+                sectors
+            }
+            (Err(error), None) if number == 0 => {
+                return Err(format!("could not read the size of the storage: {error}"));
+            }
+            (Err(error), None) => {
+                // The LUNs are numbered from zero: the first one that does not
+                // answer is the first one the phone does not have.
+                session.line(format!(
+                    "lun {number}: not available ({error}); the scan ends here"
+                ));
+                break;
+            }
+            (Ok(_), None) => break,
+        };
+
+        session.line(format!(
+            "lun {number}: {sectors} sectors ({})",
+            crate::firmware::human_size(sectors.saturating_mul(u64::from(sector_size)))
+        ));
+        luns.push(Lun {
+            number,
+            sector_size,
+            sectors,
+        });
+    }
+
+    Ok(luns)
+}
+
+/// Dumps whole physical partitions into `target`.
+///
+/// `luns` is what the user picked in the page's LUN picker; `None` dumps every
+/// partition the storage has, which is what a media with a single one (eMMC,
+/// NVMe, SPI NOR, NAND) offers and what "Dump Entire Storage" means there.
+///
+/// A dump of a LUN starts at its first sector, so the image holds the
+/// partition table as well as the partitions.
+pub fn dump_storage(
+    port: &str,
+    partitions: &[Partition],
+    luns: Option<&[Lun]>,
+    target: &DumpTarget,
+    log: &mut FlashLog,
+    on_progress: &dyn Fn(Progress),
+) -> Result<Vec<PathBuf>, String> {
+    log.line(format!(
+        "LMN Flash {} - Partition Manager",
+        env!("CARGO_PKG_VERSION")
+    ));
+    log.line(format!("port: {port}"));
+    log.line(format!(
+        "action: dump {} to {}",
+        match luns {
+            Some(luns) => format!("{} physical partition(s)", luns.len()),
+            None => "the whole storage".to_owned(),
+        },
+        target.path().display()
+    ));
+
+    let result = dump_storage_session(port, partitions, luns, target, log, on_progress);
+
+    match &result {
+        Ok(paths) => log.line(format!("done: {} file(s) written", paths.len())),
+        Err(error) => log.line(format!("failed: {error}")),
+    }
+
+    result
+}
+
+fn dump_storage_session(
+    port: &str,
+    partitions: &[Partition],
+    luns: Option<&[Lun]>,
+    target: &DumpTarget,
+    log: &mut FlashLog,
+    on_progress: &dyn Fn(Progress),
+) -> Result<Vec<PathBuf>, String> {
+    // The list the picker showed was read from this phone; a media with one
+    // LUN is asked about only now, when the dump starts.
+    let luns = match luns {
+        Some(luns) => luns.to_vec(),
+        None => storage_luns_session(port, partitions, log)?,
+    };
+    if luns.is_empty() {
+        return Err("there is no physical partition to dump".to_owned());
+    }
+
+    let regions: Vec<Region> = luns.iter().map(Lun::region).collect();
+
+    dump_session(port, &regions, target, log, on_progress)
 }
 
 fn write_region(
@@ -1572,6 +1754,51 @@ fn decode_utf16(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
+/// Asks one physical partition how many sectors it has.
+///
+/// `<getstorageinfo>` is the only command that names the size of a LUN the way
+/// the phone sees it, including the ones a partition table is not in: UFS
+/// keeps user data on a LUN of its own, with no GPT to read.
+fn storage_info(session: &mut Session<'_>, lun: u8, sector_size: u32) -> Result<u64, String> {
+    let xml = format!("<data><getstorageinfo physical_partition_number=\"{lun}\" /></data>");
+
+    let response = request(session, &xml)?;
+    if !response.is_ack() {
+        return Err(refusal(&response, "read the storage size"));
+    }
+
+    reported_sectors(&response, sector_size)
+        .ok_or_else(|| "the phone did not say how large the partition is".to_owned())
+}
+
+/// How many sectors a `<getstorageinfo>` reply says one LUN has.
+///
+/// Programmers spell the attribute differently (`TOTAL_SECTORS` and
+/// `total_sectors` are both in use), and a few answer in kilobytes instead of
+/// sectors, so both are read.
+fn reported_sectors(response: &Response, sector_size: u32) -> Option<u64> {
+    if let Some(sectors) = response
+        .attribute("TOTAL_SECTORS")
+        .and_then(|text| text.trim().parse::<u64>().ok())
+    {
+        return Some(sectors);
+    }
+
+    response
+        .attribute("SIZE_IN_KBYTES")
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .map(|kilobytes| kilobytes.saturating_mul(1024) / u64::from(sector_size))
+}
+
+/// The sectors the table says one LUN has: the end of its last partition.
+fn table_extent(partitions: &[Partition], lun: u8) -> Option<u64> {
+    partitions
+        .iter()
+        .filter(|partition| partition.lun == lun)
+        .map(|partition| partition.end_lba.saturating_add(1))
+        .max()
+}
+
 /// Reads `count` sectors of one LUN and returns their bytes.
 fn read_sectors(
     session: &mut Session<'_>,
@@ -1668,6 +1895,10 @@ fn outgoing(xml: &str) -> Vec<u8> {
 struct Response {
     value: String,
     logs: Vec<String>,
+    /// Every `name="value"` the element carries. A few commands answer with
+    /// what they were asked for — `<getstorageinfo>` reports the size of a
+    /// LUN this way — and the names differ from programmer to programmer.
+    attributes: Vec<(String, String)>,
 }
 
 impl Response {
@@ -1679,6 +1910,27 @@ impl Response {
     fn log_text(&self) -> String {
         self.logs.join(" ")
     }
+
+    /// The value of one attribute, whatever case and underscores the
+    /// programmer spelled it with: `TOTAL_SECTORS`, `total_sectors` and
+    /// `TotalSectors` are the same name.
+    fn attribute(&self, name: &str) -> Option<&str> {
+        let wanted = normalized_name(name);
+
+        self.attributes
+            .iter()
+            .find(|(key, _)| normalized_name(key) == wanted)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// A name with its case and underscores dropped, so attribute names can be
+/// compared without depending on how a programmer spells them.
+fn normalized_name(name: &str) -> String {
+    name.chars()
+        .filter(|character| *character != '_')
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// The error a NAK (or any other non-ACK answer) stands for.
@@ -1755,12 +2007,47 @@ fn complete_response(bytes: &[u8]) -> Option<Response> {
         return None;
     }
 
+    let tag_end = element.find('>').map_or(element.len(), |end| end + 1);
+
     Some(Response {
         value: attributes(batch, "response", "value")
             .pop()
             .unwrap_or_default(),
         logs: attributes(batch, "log", "value"),
+        attributes: element_attributes(&element[..tag_end]),
     })
+}
+
+/// Every `name="value"` attribute of one element.
+fn element_attributes(element: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut rest = element;
+
+    while let Some(equals) = rest.find("=\"") {
+        // The name is what directly precedes the `=`: the tag's own name or a
+        // space separates it from the rest of the element.
+        let name_start = rest[..equals]
+            .rfind(|character: char| {
+                character.is_whitespace() || character == '<' || character == '/'
+            })
+            .map_or(0, |index| index + 1);
+        let name = &rest[name_start..equals];
+        let value_start = equals + 2;
+        let Some(end) = rest[value_start..].find('"') else {
+            break;
+        };
+
+        if !name.is_empty() {
+            pairs.push((
+                name.to_owned(),
+                unescape(&rest[value_start..value_start + end]),
+            ));
+        }
+
+        rest = &rest[value_start + end + 1..];
+    }
+
+    pairs
 }
 
 /// Every `attr="…"` value of every `<tag …>` element in `text`.
@@ -2637,5 +2924,88 @@ mod tests {
         // The lock partition plus one sector for the 85-byte command.
         assert_eq!(total, 4096 + 4096);
         assert_eq!(padded(85, 4096), 4096);
+    }
+
+    /// `<getstorageinfo>` answers with the size inside its `<response>`
+    /// element, and programmers spell the attribute differently.
+    #[test]
+    fn a_storage_info_reply_names_the_size() {
+        for reply in [
+            r#"<data><response value="ACK" TOTAL_SECTORS="30535680" /></data>"#,
+            r#"<data><response value="ACK" total_sectors="30535680" /></data>"#,
+            r#"<data><response value="ACK" TotalSectors="30535680" /></data>"#,
+            r#"<data><log value="INFO: x" /><response value="ACK" total_sectors="30535680" /></data>"#,
+        ] {
+            let response = complete_response(reply.as_bytes()).expect(reply);
+            assert_eq!(reported_sectors(&response, 4096), Some(30_535_680), "{reply}");
+        }
+
+        // A few programmers answer in kilobytes rather than sectors.
+        let response =
+            complete_response(br#"<data><response value="ACK" SizeInKbytes="4000" /></data>"#)
+                .expect("a reply");
+        assert_eq!(reported_sectors(&response, 4096), Some(1000));
+
+        // An answer that names no size at all is not a size of zero: the table
+        // still knows how far the LUN reaches.
+        let response =
+            complete_response(br#"<data><response value="ACK" /></data>"#).expect("a reply");
+        assert_eq!(reported_sectors(&response, 4096), None);
+    }
+
+    /// A LUN is dumped from its first sector to its last, so the image holds
+    /// the partition table as well, and lands in `lun<n>.img`.
+    #[test]
+    fn a_lun_is_dumped_from_its_first_sector() {
+        let lun = Lun {
+            number: 4,
+            sector_size: 4096,
+            sectors: 2048,
+        };
+
+        let region = lun.region();
+        assert_eq!(region.name, "lun4");
+        assert_eq!(region.lun, 4);
+        assert_eq!(region.start_lba, 0);
+        assert_eq!(region.end_lba, 2047);
+        assert_eq!(region.sectors(), 2048);
+        assert_eq!(lun.bytes(), 2048 * 4096);
+    }
+
+    /// A programmer that does not answer `<getstorageinfo>` still has the
+    /// extent of the partitions the table read from the LUN.
+    #[test]
+    fn the_size_of_a_lun_comes_from_its_last_partition() {
+        let partitions = [
+            partition("boot", 0, 2048, 128),
+            partition("system", 0, 8192, 4096),
+            partition("userdata", 4, 0, 131072),
+        ];
+
+        assert_eq!(table_extent(&partitions, 0), Some(8192 + 4096));
+        assert_eq!(table_extent(&partitions, 4), Some(131072));
+        assert_eq!(table_extent(&partitions, 2), None);
+    }
+
+    /// A LUN is one file, so several of them cannot be given one name.
+    #[test]
+    fn one_file_holds_one_lun() {
+        let luns = [
+            Lun {
+                number: 0,
+                sector_size: 4096,
+                sectors: 1024,
+            },
+            Lun {
+                number: 4,
+                sector_size: 4096,
+                sectors: 2048,
+            },
+        ];
+        let regions: Vec<Region> = luns.iter().map(Lun::region).collect();
+
+        let named = DumpTarget::File(PathBuf::from("lun.img"));
+        assert!(dump_paths(&regions[..1], &named).is_ok());
+        assert!(dump_paths(&regions, &named).is_err());
     }
 }

@@ -761,4 +761,14 @@ qc-dump-file-title = Välj var den dumpade partitionen ska sparas
 qc-write-file-title = Välj avbilden som ska skrivas
 qc-image-filter = Diskavbild
 
+qc-lun-hint = Lagringen är indelad i fysiska partitioner (LUN:er). Välj de som ska dumpas.
+qc-lun-reading = Läser lagringens uppdelning…
+qc-lun-entry = LUN { $lun } — { $bytes } byte ({ $size })
+qc-lun-none = Välj minst en LUN.
+qc-lun-failed = Lagringens uppdelning kunde inte läsas: { $error }
+qc-dump-storage-file-title = Välj var lagringsavbilden ska sparas
+qc-dump-storage-folder-title = Välj mapp för LUN-avbilderna
+qc-storage-dump-done = Dumpade { $count } LUN-avbild(er) till { $path }.
+qc-storage-dump-failed = Lagringen kunde inte dumpas: { $error }
+
 partition-flash-no-avb = Den valda imagen innehåller ingen vbmeta-struktur, så de här två alternativen gäller inte.

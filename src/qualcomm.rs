@@ -11,7 +11,7 @@
 //! every row on screen — and the Dump / Write / Erase buttons act on that
 //! selection.
 
-use iced::widget::text::Shaping;
+use iced::widget::text::{Shaping, Wrapping};
 use iced::widget::{
     button, canvas, column, container, mouse_area, pick_list, progress_bar, row, scrollable,
     text_input, tooltip,
@@ -21,14 +21,17 @@ use iced::{Alignment, Fill};
 use crate::bootloader::{bright_success, darker_card};
 use crate::compat_iced as iced;
 use crate::compat_iced::*;
-use crate::firmware::human_size;
+use crate::firmware::{grouped_bytes, human_size, human_size_exact};
 use crate::firmware_flash::menu_style;
 use crate::text;
-use crate::{Labeled, Message, QualcommStatus, RebootMode, State, StorageType};
+use crate::{Labeled, LunDialog, Message, QualcommStatus, RebootMode, State, StorageType};
 
 /// Id of the partition table's scrollable, so its position survives the page
 /// being rebuilt for every message.
 const TABLE_SCROLL_ID: &str = "qualcomm-partitions";
+
+/// Id of the LUN picker's list, for the same reason.
+const LUN_SCROLL_ID: &str = "qualcomm-luns";
 
 /// The width of the table's "Partition Name" column, in logical pixels.
 const COLUMN_PARTITION: f32 = 220.0;
@@ -267,11 +270,18 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         .align_y(Alignment::Center)
         .width(Fill);
 
-    // [Dump Entire Storage] [Danger Zone ▾]: the menu lists what the section
-    // will offer once it exists. None of it is implemented, so a pick is
-    // ignored and the control keeps its placeholder — the entries behave like
-    // the page's greyed-out buttons. Like Reboot, it only opens once a table
-    // was read.
+    // [Dump Entire Storage] [Danger Zone ▾]: the first reads whole physical
+    // partitions, the second lists what the section will offer once it
+    // exists. None of the danger zone is implemented, so a pick is ignored
+    // and the control keeps its placeholder — its entries behave like the
+    // page's greyed-out buttons. Like Reboot, both only work once a table was
+    // read.
+    let dump_storage = if table_loaded(qualcomm) {
+        button(text(l10n.tr("qc-dump-entire-storage"))).on_press(Message::QualcommDumpStorage)
+    } else {
+        button(text(l10n.tr("qc-dump-entire-storage")))
+    };
+
     let danger_labels: Vec<String> = DANGER_ENTRIES.iter().map(|id| l10n.tr(id)).collect();
     let danger_width = menu_width(&danger_labels);
 
@@ -296,7 +306,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
             .into()
     };
 
-    let storage_row = row![pending(l10n.tr("qc-dump-entire-storage")), danger]
+    let storage_row = row![dump_storage, danger]
         .spacing(8)
         .align_y(Alignment::Center);
 
@@ -537,6 +547,27 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
                 .style(iced::widget::text::danger)
                 .into(),
         ),
+        QualcommStatus::StorageDumpDone { count, path } => Some(
+            text(l10n.tr_with_args(
+                "qc-storage-dump-done",
+                &[
+                    ("count", count.to_string()),
+                    ("path", path.display().to_string()),
+                ],
+            ))
+            .size(12.0)
+            .style(bright_success)
+            .into(),
+        ),
+        QualcommStatus::StorageDumpFailed(error) => Some(
+            text(l10n.tr_with_args(
+                "qc-storage-dump-failed",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .style(iced::widget::text::danger)
+            .into(),
+        ),
         QualcommStatus::WriteDone(name) => Some(
             text(l10n.tr_with_args("qc-write-done", &[("name", name.clone())]))
                 .size(12.0)
@@ -593,6 +624,189 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         .into();
 
     page
+}
+
+/// Which card the LUN picker shows, as the low nibble of its overlay key, or
+/// `None` while no picker is open.
+///
+/// The three cards — asking the phone, its answer, and a failed question — are
+/// steps of one dialog, so the page's transitions slide from one to the next.
+pub(crate) fn lun_card_step(state: &State) -> Option<u8> {
+    Some(match state.flash.qualcomm.lun_dialog.as_ref()? {
+        LunDialog::Reading => 0,
+        LunDialog::Luns { .. } => 1,
+        LunDialog::Failed(_) => 2,
+    })
+}
+
+/// The LUN picker "Dump Entire Storage" opens, or `None` while it is closed.
+///
+/// It is the layer the app's dialogs are drawn with: a backdrop that swallows
+/// clicks on the empty space, with the card centred over it. The dimming scrim
+/// behind it and the way it eases in and out belong to the window's dialog
+/// animation ([`crate::animated_overlay`] in the view).
+///
+/// The card is left through its own buttons only: a click beside it is
+/// swallowed rather than taken for a dismissal, so the LUNs that were checked
+/// are not lost by a stray click.
+pub(crate) fn lun_overlay(state: &State) -> Option<Element<'_, Message>> {
+    let dialog = state.flash.qualcomm.lun_dialog.as_ref()?;
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommLunBackdropPressed)
+            .into(),
+        container(lun_card(state, dialog))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The picker's card: what the storage is split into, one checkbox per LUN.
+fn lun_card<'a>(state: &'a State, dialog: &'a LunDialog) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+
+    let mut content = column![
+        text(l10n.tr("qc-dump-entire-storage")).size(18.0),
+        text(l10n.tr("qc-lun-hint"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+        horizontal_rule(1),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    match dialog {
+        LunDialog::Reading => {
+            content = content.push(
+                row![
+                    crate::guided::spinner(state.anim_tick),
+                    text(l10n.tr("qc-lun-reading")).size(13.0),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+        }
+        LunDialog::Failed(error) => {
+            content = content.push(
+                text(l10n.tr_with_args("qc-lun-failed", &[("error", error.clone())]))
+                    .size(13.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
+                    .style(iced::widget::text::danger),
+            );
+            content = content.push(horizontal_rule(1));
+            content = content.push(
+                button(text(l10n.tr("login-cancel")))
+                    .width(Fill)
+                    .on_press(Message::QualcommLunDialogClosed),
+            );
+        }
+        LunDialog::Luns { luns, checked } => {
+            let controls = Row::with_children(vec![
+                button(text(l10n.tr("firmware-flash-select-all")).size(12.0))
+                    .padding([4.0, 8.0])
+                    .on_press(Message::QualcommLunsAll(true))
+                    .into(),
+                button(text(l10n.tr("firmware-flash-select-none")).size(12.0))
+                    .padding([4.0, 8.0])
+                    .on_press(Message::QualcommLunsAll(false))
+                    .into(),
+            ])
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .wrap();
+            content = content.push(controls);
+
+            let rows: Vec<Element<'a, Message>> = luns
+                .iter()
+                .enumerate()
+                .map(|(index, lun)| -> Element<'a, Message> {
+                    // The exact size first: two LUNs can round to the same
+                    // readable one, and the byte count says which is which.
+                    checkbox(
+                        l10n.tr_with_args(
+                            "qc-lun-entry",
+                            &[
+                                ("lun", lun.number.to_string()),
+                                ("bytes", grouped_bytes(lun.bytes())),
+                                ("size", human_size_exact(lun.bytes())),
+                            ],
+                        ),
+                        checked.get(index).copied().unwrap_or(false),
+                    )
+                    .text_shaping(Shaping::Advanced)
+                    .on_toggle(move |checked| Message::QualcommLunToggled(index, checked))
+                    .into()
+                })
+                .collect();
+
+            // Its own scrollable, so a phone with many LUNs does not push the
+            // buttons out of the card; the id keeps its position across
+            // redraws.
+            content = content.push(
+                container(
+                    scrollable(
+                        iced::widget::Column::with_children(rows)
+                            .spacing(4)
+                            .align_x(Alignment::Start),
+                    )
+                    .id(iced::widget::Id::new(LUN_SCROLL_ID))
+                    .width(Fill)
+                    .height(180),
+                )
+                .padding(6)
+                .width(Fill)
+                .style(container::rounded_box),
+            );
+
+            let chosen = checked.iter().filter(|checked| **checked).count();
+            if chosen == 0 {
+                // A dump of nothing would do nothing, so the button stays shut
+                // while the list is empty of choices.
+                content = content.push(text(l10n.tr("qc-lun-none")).size(12.0));
+            }
+
+            content = content.push(horizontal_rule(1));
+
+            let dump = button(text(l10n.tr("qc-dump"))).width(Fill);
+            let dump: Element<'a, Message> = if chosen == 0 {
+                dump.into()
+            } else {
+                dump.on_press(Message::QualcommLunsConfirmed).into()
+            };
+
+            content = content.push(
+                row![
+                    dump,
+                    button(text(l10n.tr("login-cancel")))
+                        .width(Fill)
+                        .on_press(Message::QualcommLunDialogClosed),
+                ]
+                .spacing(8)
+                .width(Fill),
+            );
+        }
+    }
+
+    // The padding sits inside the scrollable, so the card's border is the
+    // viewport: the scrollbar rides on the right border instead of floating in
+    // the middle of the padding.
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(520)
+    .height(420)
+    .style(darker_card)
+    .into()
 }
 
 /// The whole percent of a progress, for the status line.

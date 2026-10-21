@@ -980,6 +980,28 @@ struct QualcommState {
     /// The detailed log the last Firehose session wrote, so the page can show
     /// it in the file manager.
     log_path: Option<std::path::PathBuf>,
+    /// The LUN picker "Dump Entire Storage" opens on a storage that is split
+    /// into physical partitions.
+    lun_dialog: Option<LunDialog>,
+    /// The LUNs the picker settled on, kept while the save dialog runs.
+    pending_luns: Vec<firehose::Lun>,
+}
+
+/// The LUN picker "Dump Entire Storage" opens on a UFS phone.
+///
+/// It has to ask the phone which physical partitions it has before it can list
+/// them: a LUN a partition table is not in — where UFS keeps user data — has no
+/// other way of being found.
+enum LunDialog {
+    /// The phone is being asked about its physical partitions.
+    Reading,
+    /// The phone answered; `checked` is parallel to `luns`.
+    Luns {
+        luns: Vec<firehose::Lun>,
+        checked: Vec<bool>,
+    },
+    /// The question failed; the card says why.
+    Failed(String),
 }
 
 /// What the Qualcomm page's status line says.
@@ -1031,6 +1053,13 @@ enum QualcommStatus {
     Refreshing,
     /// Reading the table again failed; the text says why.
     RefreshFailed(String),
+    /// Whole physical partitions were dumped; `count` images sit at `path`.
+    StorageDumpDone {
+        count: usize,
+        path: std::path::PathBuf,
+    },
+    /// The storage dump failed; the text says why.
+    StorageDumpFailed(String),
 }
 
 /// The modes the page's Reboot menu offers.
@@ -2854,6 +2883,33 @@ enum Message {
     /// Qualcomm Partition Manager: the dump ended with the number of files it
     /// wrote and where they are (or the reason it could not).
     QualcommDumpFinished(Result<(usize, std::path::PathBuf), String>),
+    /// Qualcomm Partition Manager: "Dump Entire Storage" was pressed.
+    QualcommDumpStorage,
+    /// Qualcomm Partition Manager: the phone answered with the physical
+    /// partitions the storage is split into.
+    QualcommLunsRead(Result<Vec<firehose::Lun>, String>),
+    /// Qualcomm Partition Manager: one LUN of the picker was checked or
+    /// unchecked.
+    QualcommLunToggled(usize, bool),
+    /// Qualcomm Partition Manager: every LUN of the picker was checked or
+    /// unchecked.
+    QualcommLunsAll(bool),
+    /// Qualcomm Partition Manager: the picker's Dump button.
+    QualcommLunsConfirmed,
+    /// Qualcomm Partition Manager: a click beside the LUN picker's card. It is
+    /// swallowed, so it neither dismisses the card nor reaches the page.
+    QualcommLunBackdropPressed,
+    /// Qualcomm Partition Manager: the picker was dismissed.
+    QualcommLunDialogClosed,
+    /// Qualcomm Partition Manager: the folder a multi-LUN dump should be
+    /// written to.
+    QualcommStorageFolderPicked(Option<std::path::PathBuf>),
+    /// Qualcomm Partition Manager: the file a single-LUN dump should be
+    /// written to.
+    QualcommStorageFilePicked(Option<std::path::PathBuf>),
+    /// Qualcomm Partition Manager: the storage dump ended with the number of
+    /// images it wrote and where they are (or the reason it could not).
+    QualcommStorageDumpFinished(Result<(usize, std::path::PathBuf), String>),
     /// Qualcomm Partition Manager: "Write" was pressed — ask for the image.
     QualcommWrite,
     /// Qualcomm Partition Manager: the image the picker returned.
@@ -3497,6 +3553,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::MultiFlashPresetClose
             | Message::MultiFlashClosePromptDismissed
             | Message::AboutClosed
+            | Message::QualcommLunDialogClosed
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -3526,6 +3583,9 @@ fn is_stacked(key: u8) -> bool {
 
 /// No dialog is open.
 const OVERLAY_NONE: u8 = 0x00;
+/// The Qualcomm Partition Manager's LUN picker; its low nibble is the card it
+/// shows (asking the phone, the list, or a question that failed).
+const OVERLAY_QUALCOMM_LUNS: u8 = 0x11;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -3590,6 +3650,12 @@ const OVERLAY_MULTI_FLASH_PRESET_OPTIONS: u8 = 0xF2;
 /// while a dialog stays on screen (flashing log lines, progress, a spinner)
 /// has to leave its key alone.
 fn overlay_key(state: &State) -> u8 {
+    // The LUN picker belongs to the Partition Manager workspace, which is only
+    // reachable with every other dialog closed.
+    if let Some(step) = qualcomm::lun_card_step(state) {
+        return OVERLAY_QUALCOMM_LUNS + step;
+    }
+
     // The Multi Flashing page's own modals are drawn above everything else:
     // the page can only be reached with every other dialog closed.
     if multi_flash::close_prompt_open(state) {
@@ -4932,6 +4998,193 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             qualcomm.status = match result {
                 Ok((count, directory)) => QualcommStatus::DumpDone { count, directory },
                 Err(error) => QualcommStatus::DumpFailed(error),
+            };
+
+            Task::none()
+        }
+        Message::QualcommDumpStorage => {
+            if state.flash.qualcomm.busy || state.flash.qualcomm.partitions.is_empty() {
+                return Task::none();
+            }
+            let Some(port) = state.flash.qualcomm.port.clone() else {
+                state.flash.qualcomm.status =
+                    QualcommStatus::StorageDumpFailed(state.l10n.tr("qc-select-port"));
+                return Task::none();
+            };
+
+            let storage = state
+                .flash
+                .qualcomm
+                .detected
+                .unwrap_or(state.flash.qualcomm.storage);
+
+            // A storage that is one physical partition needs no picker: the
+            // save dialog is the only question to ask.
+            if storage != StorageType::Ufs {
+                let title = state.l10n.tr("qc-dump-storage-file-title");
+                let filter = state.l10n.tr("qc-image-filter");
+                let name = format!("{}.img", storage_stem(storage));
+
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            rfd::FileDialog::new()
+                                .set_title(&title)
+                                .set_file_name(&name)
+                                .add_filter(&filter, &["img"])
+                                .save_file()
+                        })
+                        .await
+                        .unwrap_or(None)
+                    },
+                    Message::QualcommStorageFilePicked,
+                );
+            }
+
+            // UFS splits the storage into LUNs, and only the phone can say
+            // which ones there are — one of them has no partition table at all.
+            let partitions = state.flash.qualcomm.partitions.clone();
+            let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+            state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+            state.flash.qualcomm.busy = true;
+            state.flash.qualcomm.lun_dialog = Some(LunDialog::Reading);
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let mut log = log;
+                        firehose::storage_luns(&port, &partitions, &mut log)
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(format!("the Firehose worker stopped: {error}"))
+                    })
+                },
+                Message::QualcommLunsRead,
+            )
+        }
+        Message::QualcommLunsRead(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.lun_dialog = Some(match result {
+                // Every LUN starts checked: the button says "entire storage",
+                // and unchecking the ones that are not wanted is one click
+                // away.
+                Ok(luns) => LunDialog::Luns {
+                    checked: vec![true; luns.len()],
+                    luns,
+                },
+                Err(error) => LunDialog::Failed(error),
+            });
+
+            Task::none()
+        }
+        Message::QualcommLunToggled(index, checked) => {
+            if let Some(LunDialog::Luns { checked: choices, .. }) =
+                &mut state.flash.qualcomm.lun_dialog
+            {
+                if let Some(choice) = choices.get_mut(index) {
+                    *choice = checked;
+                }
+            }
+
+            Task::none()
+        }
+        Message::QualcommLunsAll(every) => {
+            if let Some(LunDialog::Luns { checked, .. }) =
+                &mut state.flash.qualcomm.lun_dialog
+            {
+                checked.fill(every);
+            }
+
+            Task::none()
+        }
+        Message::QualcommLunBackdropPressed => Task::none(),
+        Message::QualcommLunDialogClosed => {
+            state.flash.qualcomm.lun_dialog = None;
+            state.flash.qualcomm.pending_luns.clear();
+
+            Task::none()
+        }
+        Message::QualcommLunsConfirmed => {
+            let picked: Vec<firehose::Lun> = match &state.flash.qualcomm.lun_dialog {
+                Some(LunDialog::Luns { luns, checked }) => luns
+                    .iter()
+                    .zip(checked)
+                    .filter(|(_, checked)| **checked)
+                    .map(|(lun, _)| lun.clone())
+                    .collect(),
+                _ => return Task::none(),
+            };
+            if picked.is_empty() {
+                return Task::none();
+            }
+
+            // One LUN is one file, so it can be named and placed where the
+            // user wants it; several need a folder that holds one file each.
+            let single = picked[0].number;
+            let one = picked.len() == 1;
+            state.flash.qualcomm.pending_luns = picked;
+
+            if one {
+                let title = state.l10n.tr("qc-dump-storage-file-title");
+                let filter = state.l10n.tr("qc-image-filter");
+                let name = format!("lun{single}.img");
+
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            rfd::FileDialog::new()
+                                .set_title(&title)
+                                .set_file_name(&name)
+                                .add_filter(&filter, &["img"])
+                                .save_file()
+                        })
+                        .await
+                        .unwrap_or(None)
+                    },
+                    Message::QualcommStorageFilePicked,
+                );
+            }
+
+            let title = state.l10n.tr("qc-dump-storage-folder-title");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_folder()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::QualcommStorageFolderPicked,
+            )
+        }
+        Message::QualcommStorageFilePicked(file) => match file {
+            Some(file) => start_qualcomm_storage_dump(state, firehose::DumpTarget::File(file)),
+            // The picker was cancelled; the LUN list stays up so it can be
+            // tried again.
+            None => {
+                state.flash.qualcomm.pending_luns.clear();
+                Task::none()
+            }
+        },
+        Message::QualcommStorageFolderPicked(directory) => match directory {
+            Some(directory) => {
+                start_qualcomm_storage_dump(state, firehose::DumpTarget::Folder(directory))
+            }
+            None => {
+                state.flash.qualcomm.pending_luns.clear();
+                Task::none()
+            }
+        },
+        Message::QualcommStorageDumpFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            qualcomm.status = match result {
+                Ok((count, path)) => QualcommStatus::StorageDumpDone { count, path },
+                Err(error) => QualcommStatus::StorageDumpFailed(error),
             };
 
             Task::none()
@@ -9231,6 +9484,86 @@ fn start_qualcomm_dump(state: &mut State, target: firehose::DumpTarget) -> Task<
     ])
 }
 
+/// Dumps whole physical partitions into `target` on a worker thread.
+///
+/// The LUN list is the one the picker settled on; a storage with a single
+/// physical partition never had a picker, so the worker reads the list itself
+/// as the dump starts.
+fn start_qualcomm_storage_dump(
+    state: &mut State,
+    target: firehose::DumpTarget,
+) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.pending_luns.clear();
+        state.flash.qualcomm.lun_dialog = None;
+        state.flash.qualcomm.status =
+            QualcommStatus::StorageDumpFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    let partitions = state.flash.qualcomm.partitions.clone();
+    let picked = std::mem::take(&mut state.flash.qualcomm.pending_luns);
+    let luns = (!picked.is_empty()).then_some(picked);
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.lun_dialog = None;
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+    // The partition the first report names is not known yet: the LUN list may
+    // still have to be read, and the bar is empty until then either way.
+    state.flash.qualcomm.status = QualcommStatus::Dumping {
+        name: String::new(),
+        done: 0,
+        total: 0,
+    };
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+    let place = target.path().to_path_buf();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    let report = move |step: firehose::Progress| {
+                        let _ = progress.unbounded_send(Message::QualcommDumpProgress(step));
+                    };
+
+                    firehose::dump_storage(
+                        &port,
+                        &partitions,
+                        luns.as_deref(),
+                        &target,
+                        &mut log,
+                        &report,
+                    )
+                    .map(|paths| (paths.len(), place))
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            Message::QualcommStorageDumpFinished,
+        ),
+        Task::run(events, |message| message),
+    ])
+}
+
+/// The image name a media that is a single physical partition is saved as.
+fn storage_stem(storage: StorageType) -> &'static str {
+    match storage {
+        StorageType::Autodetect => "storage",
+        StorageType::Emmc => "emmc",
+        StorageType::Ufs => "ufs",
+        StorageType::SpiNor => "spinor",
+        StorageType::Nand => "nand",
+        StorageType::Nvme => "nvme",
+    }
+}
+
 /// Erases the sectors of the selected partitions on a worker thread.
 ///
 /// Like a dump, this reuses the programmer that is still running: the storage
@@ -12222,6 +12555,12 @@ fn view(state: &State) -> Element<'_, Message> {
         _ => base,
     };
 
+    // The LUN picker of the Partition Manager's "Dump Entire Storage", drawn
+    // over the page (which replaced the tab bar) while it is open.
+    if let Some(overlay) = qualcomm::lun_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
     // prompt that a close request was refused while a run goes on.
     if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
@@ -13403,6 +13742,164 @@ mod tests {
             state.flash.qualcomm.status,
             QualcommStatus::EraseFailed(state.l10n.tr("qc-select-partition"))
         );
+        assert!(!state.flash.qualcomm.busy);
+    }
+
+    /// The LUN picker lists what the phone reported, starts with every LUN
+    /// checked, and hands exactly the checked ones to the dump.
+    #[test]
+    fn the_lun_picker_follows_what_the_phone_reports() {
+        let luns = vec![
+            firehose::Lun {
+                number: 0,
+                sector_size: 4096,
+                sectors: 1024,
+            },
+            firehose::Lun {
+                number: 4,
+                sector_size: 4096,
+                sectors: 2048,
+            },
+        ];
+
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+        state.flash.qualcomm.busy = true;
+        state.flash.qualcomm.lun_dialog = Some(LunDialog::Reading);
+
+        let _ = update(&mut state, Message::QualcommLunsRead(Ok(luns.clone())));
+
+        assert!(!state.flash.qualcomm.busy);
+        match &state.flash.qualcomm.lun_dialog {
+            Some(LunDialog::Luns { luns, checked }) => {
+                assert_eq!(luns.len(), 2);
+                assert_eq!(checked, &[true, true]);
+            }
+            _ => panic!("the picker lists what the phone reported"),
+        }
+
+        // Unchecking the first LUN leaves it out of the dump.
+        let _ = update(&mut state, Message::QualcommLunToggled(0, false));
+        let _ = update(&mut state, Message::QualcommLunsConfirmed);
+
+        assert_eq!(state.flash.qualcomm.pending_luns, vec![luns[1].clone()]);
+        // The card stays up until the save dialog answered, so a cancelled
+        // picker can be tried again.
+        assert!(state.flash.qualcomm.lun_dialog.is_some());
+
+        // Closing it is played out before it is run, like every other dialog.
+        let _ = update(&mut state, Message::QualcommLunDialogClosed);
+        assert!(state.pending_close.is_some());
+
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert!(state.flash.qualcomm.lun_dialog.is_none());
+        assert!(state.flash.qualcomm.pending_luns.is_empty());
+    }
+
+    /// The LUN picker is a dialog like the app's others: it darkens the page
+    /// while it is up and eases in and out.
+    #[test]
+    fn the_lun_picker_animates_like_the_other_dialogs() {
+        let mut state = State::default();
+
+        let _ = update(
+            &mut state,
+            Message::QualcommLunsRead(Ok(vec![firehose::Lun {
+                number: 0,
+                sector_size: 4096,
+                sectors: 1024,
+            }])),
+        );
+
+        // It appeared, so a card has to slide in behind the scrim.
+        assert!(state.overlay_transition.is_some());
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_LUNS + 1);
+
+        // The card it shows is a step of its own: another failed question
+        // slides in from the side rather than replacing it in place.
+        let _ = update(&mut state, Message::QualcommLunsRead(Err("NAK".to_owned())));
+        assert!(state.overlay_transition.is_some());
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_LUNS + 2);
+    }
+
+    /// The picker is left through its own buttons: a click beside the card is
+    /// swallowed, so the checked LUNs are not lost to a stray click.
+    #[test]
+    fn the_lun_picker_backdrop_does_nothing() {
+        let mut state = State::default();
+        state.flash.qualcomm.lun_dialog = Some(LunDialog::Luns {
+            luns: vec![firehose::Lun {
+                number: 0,
+                sector_size: 4096,
+                sectors: 1024,
+            }],
+            checked: vec![true],
+        });
+
+        let _ = update(&mut state, Message::QualcommLunBackdropPressed);
+
+        assert!(state.flash.qualcomm.lun_dialog.is_some());
+        // Not even a close to play out: nothing was asked for.
+        assert!(state.pending_close.is_none());
+        assert!(state.overlay_transition.is_none());
+    }
+
+    /// Selecting and deselecting everything, and a dump of nothing.
+    #[test]
+    fn the_lun_picker_will_not_dump_nothing() {
+        let mut state = State::default();
+        state.flash.qualcomm.lun_dialog = Some(LunDialog::Luns {
+            luns: vec![firehose::Lun {
+                number: 0,
+                sector_size: 4096,
+                sectors: 1024,
+            }],
+            checked: vec![true],
+        });
+
+        let _ = update(&mut state, Message::QualcommLunsAll(false));
+        let _ = update(&mut state, Message::QualcommLunsConfirmed);
+        assert!(state.flash.qualcomm.pending_luns.is_empty());
+
+        let _ = update(&mut state, Message::QualcommLunsAll(true));
+        let _ = update(&mut state, Message::QualcommLunsConfirmed);
+        assert_eq!(state.flash.qualcomm.pending_luns.len(), 1);
+    }
+
+    /// A layout the phone would not report is shown as the reason, and the
+    /// page keeps the table it already has.
+    #[test]
+    fn a_failed_lun_read_says_why() {
+        let mut state = State::default();
+        state.flash.qualcomm.busy = true;
+        state.flash.qualcomm.lun_dialog = Some(LunDialog::Reading);
+
+        let _ = update(
+            &mut state,
+            Message::QualcommLunsRead(Err("the phone answered NAK".to_owned())),
+        );
+
+        assert!(!state.flash.qualcomm.busy);
+        match &state.flash.qualcomm.lun_dialog {
+            Some(LunDialog::Failed(error)) => assert!(error.contains("NAK")),
+            _ => panic!("the card says why the layout could not be read"),
+        }
+    }
+
+    /// "Dump Entire Storage" works on a table: without one there is nothing to
+    /// dump, and the page does not even start asking.
+    #[test]
+    fn a_storage_dump_needs_a_table() {
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM7".to_owned());
+
+        let _ = update(&mut state, Message::QualcommDumpStorage);
+
+        assert!(state.flash.qualcomm.lun_dialog.is_none());
+        assert!(state.flash.qualcomm.pending_luns.is_empty());
         assert!(!state.flash.qualcomm.busy);
     }
 

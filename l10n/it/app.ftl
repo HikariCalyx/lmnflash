@@ -761,4 +761,14 @@ qc-dump-file-title = Seleziona dove salvare la partizione estratta
 qc-write-file-title = Seleziona l'immagine da scrivere
 qc-image-filter = Immagine disco
 
+qc-lun-hint = Questo archivio è diviso in partizioni fisiche (LUN). Scegli quelle da estrarre.
+qc-lun-reading = Lettura della struttura dell'archivio…
+qc-lun-entry = LUN { $lun } — { $bytes } byte ({ $size })
+qc-lun-none = Seleziona almeno una LUN.
+qc-lun-failed = Impossibile leggere la struttura dell'archivio: { $error }
+qc-dump-storage-file-title = Seleziona dove salvare l'immagine dell'archivio
+qc-dump-storage-folder-title = Seleziona la cartella delle immagini delle LUN
+qc-storage-dump-done = Estratte { $count } immagini di LUN in { $path }.
+qc-storage-dump-failed = Impossibile estrarre l'archivio: { $error }
+
 partition-flash-no-avb = L'immagine selezionata non contiene una struttura vbmeta, quindi queste due opzioni non si applicano.

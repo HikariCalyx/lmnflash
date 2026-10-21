@@ -761,4 +761,14 @@ qc-dump-file-title = Selecciona dónde guardar la partición volcada
 qc-write-file-title = Selecciona la imagen que se va a escribir
 qc-image-filter = Imagen de disco
 
+qc-lun-hint = Este almacenamiento está dividido en particiones físicas (LUN). Elige las que quieras volcar.
+qc-lun-reading = Leyendo la distribución del almacenamiento…
+qc-lun-entry = LUN { $lun } — { $bytes } bytes ({ $size })
+qc-lun-none = Selecciona al menos una LUN.
+qc-lun-failed = No se pudo leer la distribución del almacenamiento: { $error }
+qc-dump-storage-file-title = Selecciona dónde guardar la imagen del almacenamiento
+qc-dump-storage-folder-title = Selecciona la carpeta de las imágenes de las LUN
+qc-storage-dump-done = Se volcaron { $count } imagen(es) de LUN en { $path }.
+qc-storage-dump-failed = No se pudo volcar el almacenamiento: { $error }
+
 partition-flash-no-avb = La imagen seleccionada no contiene una estructura vbmeta, así que estas dos opciones no se aplican.

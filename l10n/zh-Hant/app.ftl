@@ -760,4 +760,14 @@ qc-dump-file-title = 選擇匯出分割區的儲存檔案
 qc-write-file-title = 選擇要寫入的映像
 qc-image-filter = 磁碟映像
 
+qc-lun-hint = 此儲存空間被劃分為多個實體分割區（LUN）。請選擇要匯出的分割區。
+qc-lun-reading = 正在讀取儲存配置…
+qc-lun-entry = LUN { $lun } — { $bytes } 位元組 ({ $size })
+qc-lun-none = 請至少選擇一個 LUN。
+qc-lun-failed = 無法讀取儲存配置：{ $error }
+qc-dump-storage-file-title = 選擇儲存映像的儲存位置
+qc-dump-storage-folder-title = 選擇 LUN 映像的資料夾
+qc-storage-dump-done = 已將 { $count } 個 LUN 映像匯出至 { $path }。
+qc-storage-dump-failed = 無法匯出儲存空間：{ $error }
+
 partition-flash-no-avb = 所選鏡像不含 vbmeta 結構，因此這兩項不適用。

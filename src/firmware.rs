@@ -1092,17 +1092,25 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-/// Formats a byte count for display (e.g. `1.5 GB`).
-pub(crate) fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+/// The units a byte count is shown in, smallest first.
+const SIZE_UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
 
+/// A byte count as the value and the index of the unit it is shown in.
+fn size_parts(bytes: u64) -> (f64, usize) {
     let mut value = bytes as f64;
     let mut unit = 0;
 
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
+    while value >= 1024.0 && unit < SIZE_UNITS.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
+
+    (value, unit)
+}
+
+/// Formats a byte count for display (e.g. `1.5 GB`).
+pub(crate) fn human_size(bytes: u64) -> String {
+    let (value, unit) = size_parts(bytes);
 
     if unit == 0 {
         return format!("{bytes} B");
@@ -1113,7 +1121,38 @@ pub(crate) fn human_size(bytes: u64) -> String {
         text = text.trim_end_matches('0').trim_end_matches('.').to_string();
     }
 
-    format!("{text} {}", UNITS[unit])
+    format!("{text} {}", SIZE_UNITS[unit])
+}
+
+/// Formats a byte count with two decimals (e.g. `4.00 GB`), for a size that is
+/// spelled out exactly beside it.
+pub(crate) fn human_size_exact(bytes: u64) -> String {
+    let (value, unit) = size_parts(bytes);
+
+    if unit == 0 {
+        return format!("{bytes} B");
+    }
+
+    format!("{value:.2} {}", SIZE_UNITS[unit])
+}
+
+/// A byte count with a comma every three digits (e.g. `4,294,967,296`).
+///
+/// The separators are the ones of the numbers in the rest of the UI, which are
+/// grouped the same way whatever the language.
+pub(crate) fn grouped_bytes(bytes: u64) -> String {
+    let digits = bytes.to_string();
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            text.push(',');
+        }
+
+        text.push(digit);
+    }
+
+    text
 }
 
 fn parse_firmware_item(item: &serde_json::Value, raw_json: String) -> FirmwareInfo {
@@ -1612,6 +1651,22 @@ mod tests {
         assert_eq!(human_size(1536), "1.5 KB");
         assert_eq!(human_size(3_221_225_472), "3 GB");
         assert_eq!(human_size(1_099_511_627_776), "1 TB");
+    }
+
+    /// The size a LUN is spelled out with: the exact byte count in groups of
+    /// three, and the readable one with two decimals every time.
+    #[test]
+    fn exact_sizes_are_spelled_out() {
+        assert_eq!(grouped_bytes(0), "0");
+        assert_eq!(grouped_bytes(999), "999");
+        assert_eq!(grouped_bytes(1_000), "1,000");
+        assert_eq!(grouped_bytes(4_294_967_296), "4,294,967,296");
+        assert_eq!(grouped_bytes(123_456_789_012), "123,456,789,012");
+
+        assert_eq!(human_size_exact(1023), "1023 B");
+        assert_eq!(human_size_exact(1_048_576), "1.00 MB");
+        assert_eq!(human_size_exact(4_294_967_296), "4.00 GB");
+        assert_eq!(human_size_exact(1_099_511_627_776), "1.00 TB");
     }
 
     #[test]

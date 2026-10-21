@@ -761,4 +761,14 @@ qc-dump-file-title = 덤프한 파티션을 저장할 위치 선택
 qc-write-file-title = 쓸 이미지 선택
 qc-image-filter = 디스크 이미지
 
+qc-lun-hint = 이 저장소는 물리 파티션(LUN)으로 나뉘어 있습니다. 덤프할 항목을 선택하세요.
+qc-lun-reading = 저장소 구성을 읽는 중…
+qc-lun-entry = LUN { $lun } — { $bytes }바이트 ({ $size })
+qc-lun-none = LUN을 하나 이상 선택하세요.
+qc-lun-failed = 저장소 구성을 읽을 수 없습니다: { $error }
+qc-dump-storage-file-title = 저장소 이미지를 저장할 위치 선택
+qc-dump-storage-folder-title = LUN 이미지를 저장할 폴더 선택
+qc-storage-dump-done = LUN 이미지 { $count }개를 { $path }에 덤프했습니다.
+qc-storage-dump-failed = 저장소를 덤프할 수 없습니다: { $error }
+
 partition-flash-no-avb = 선택한 이미지에 vbmeta 구조체가 없어 이 두 옵션은 적용되지 않습니다.

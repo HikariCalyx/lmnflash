@@ -761,4 +761,14 @@ qc-dump-file-title = ダンプしたパーティションの保存先を選択
 qc-write-file-title = 書き込むイメージを選択
 qc-image-filter = ディスクイメージ
 
+qc-lun-hint = このストレージは物理パーティション（LUN）に分かれています。ダンプするものを選んでください。
+qc-lun-reading = ストレージの構成を読み取り中…
+qc-lun-entry = LUN { $lun } — { $bytes } バイト ({ $size })
+qc-lun-none = 少なくとも 1 つの LUN を選択してください。
+qc-lun-failed = ストレージの構成を読み取れませんでした: { $error }
+qc-dump-storage-file-title = ストレージイメージの保存先を選択
+qc-dump-storage-folder-title = LUN イメージのフォルダーを選択
+qc-storage-dump-done = { $count } 個の LUN イメージを { $path } にダンプしました。
+qc-storage-dump-failed = ストレージをダンプできませんでした: { $error }
+
 partition-flash-no-avb = 選択したイメージに vbmeta 構造体がないため、この 2 項目は使用できません。

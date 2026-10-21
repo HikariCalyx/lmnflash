@@ -761,4 +761,14 @@ qc-dump-file-title = Selecione onde salvar a partição despejada
 qc-write-file-title = Selecione a imagem a gravar
 qc-image-filter = Imagem de disco
 
+qc-lun-hint = Este armazenamento é dividido em partições físicas (LUNs). Escolha as que deseja despejar.
+qc-lun-reading = Lendo a estrutura do armazenamento…
+qc-lun-entry = LUN { $lun } — { $bytes } bytes ({ $size })
+qc-lun-none = Selecione pelo menos uma LUN.
+qc-lun-failed = Não foi possível ler a estrutura do armazenamento: { $error }
+qc-dump-storage-file-title = Selecione onde salvar a imagem do armazenamento
+qc-dump-storage-folder-title = Selecione a pasta das imagens das LUNs
+qc-storage-dump-done = { $count } imagem(ns) de LUN despejada(s) em { $path }.
+qc-storage-dump-failed = Não foi possível despejar o armazenamento: { $error }
+
 partition-flash-no-avb = A imagem selecionada não contém uma estrutura vbmeta, então estas duas opções não se aplicam.

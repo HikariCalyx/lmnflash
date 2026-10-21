@@ -760,4 +760,14 @@ qc-dump-file-title = 选择导出分区的保存文件
 qc-write-file-title = 选择要写入的镜像
 qc-image-filter = 磁盘镜像
 
+qc-lun-hint = 此存储被划分为多个物理分区（LUN）。请选择要导出的分区。
+qc-lun-reading = 正在读取存储布局…
+qc-lun-entry = LUN { $lun } — { $bytes } 字节 ({ $size })
+qc-lun-none = 请至少选择一个 LUN。
+qc-lun-failed = 无法读取存储布局：{ $error }
+qc-dump-storage-file-title = 选择存储镜像的保存位置
+qc-dump-storage-folder-title = 选择 LUN 镜像的保存文件夹
+qc-storage-dump-done = 已将 { $count } 个 LUN 镜像导出到 { $path }。
+qc-storage-dump-failed = 无法导出存储：{ $error }
+
 partition-flash-no-avb = 所选镜像不含 vbmeta 结构，因此这两项不适用。

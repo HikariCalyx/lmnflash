@@ -771,4 +771,14 @@ qc-dump-file-title = Select where to save the dumped partition
 qc-write-file-title = Select the image to write
 qc-image-filter = Disk image
 
+qc-lun-hint = This storage is split into physical partitions (LUNs). Choose the ones to dump.
+qc-lun-reading = Reading the storage layout…
+qc-lun-entry = LUN { $lun } — { $bytes } bytes ({ $size })
+qc-lun-none = Select at least one LUN.
+qc-lun-failed = Could not read the storage layout: { $error }
+qc-dump-storage-file-title = Select where to save the storage image
+qc-dump-storage-folder-title = Select the folder for the LUN images
+qc-storage-dump-done = Dumped { $count } LUN image(s) to { $path }.
+qc-storage-dump-failed = Could not dump the storage: { $error }
+
 partition-flash-no-avb = The selected image carries no vbmeta struct, so these two options do not apply.

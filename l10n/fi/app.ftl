@@ -761,4 +761,14 @@ qc-dump-file-title = Valitse, mihin varmuuskopioitu osio tallennetaan
 qc-write-file-title = Valitse kirjoitettava levykuva
 qc-image-filter = Levykuva
 
+qc-lun-hint = Tallennustila on jaettu fyysisiin osioihin (LUN). Valitse varmuuskopioitavat.
+qc-lun-reading = Luetaan tallennustilan rakennetta…
+qc-lun-entry = LUN { $lun } — { $bytes } tavua ({ $size })
+qc-lun-none = Valitse vähintään yksi LUN.
+qc-lun-failed = Tallennustilan rakennetta ei voitu lukea: { $error }
+qc-dump-storage-file-title = Valitse, mihin tallennustilan levykuva tallennetaan
+qc-dump-storage-folder-title = Valitse kansio LUN-levykuville
+qc-storage-dump-done = Varmuuskopioitiin { $count } LUN-levykuvaa kohteeseen { $path }.
+qc-storage-dump-failed = Tallennustilaa ei voitu varmuuskopioida: { $error }
+
 partition-flash-no-avb = Valitussa imagessa ei ole vbmeta-rakennetta, joten nämä kaksi valintaa eivät ole käytettävissä.

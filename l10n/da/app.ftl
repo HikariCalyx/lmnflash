@@ -761,4 +761,14 @@ qc-dump-file-title = Vælg hvor den sikkerhedskopierede partition skal gemmes
 qc-write-file-title = Vælg det image, der skal skrives
 qc-image-filter = Diskaffilbillede
 
+qc-lun-hint = Lageret er delt i fysiske partitioner (LUN'er). Vælg dem, der skal sikkerhedskopieres.
+qc-lun-reading = Læser lagerets opdeling…
+qc-lun-entry = LUN { $lun } — { $bytes } byte ({ $size })
+qc-lun-none = Vælg mindst én LUN.
+qc-lun-failed = Lagerets opdeling kunne ikke læses: { $error }
+qc-dump-storage-file-title = Vælg hvor lagerbilledet skal gemmes
+qc-dump-storage-folder-title = Vælg mappe til LUN-billederne
+qc-storage-dump-done = Sikkerhedskopierede { $count } LUN-billede(r) til { $path }.
+qc-storage-dump-failed = Lageret kunne ikke sikkerhedskopieres: { $error }
+
 partition-flash-no-avb = Det valgte image indeholder ikke en vbmeta-struktur, så disse to valgmuligheder gælder ikke.

@@ -761,4 +761,14 @@ qc-dump-file-title = Selecteer waar de gedumpte partitie moet worden opgeslagen
 qc-write-file-title = Selecteer de afbeelding om te schrijven
 qc-image-filter = Schijfkopie
 
+qc-lun-hint = Deze opslag is verdeeld in fysieke partities (LUN's). Kies welke je wilt dumpen.
+qc-lun-reading = Opslagindeling wordt gelezen…
+qc-lun-entry = LUN { $lun } — { $bytes } bytes ({ $size })
+qc-lun-none = Selecteer ten minste één LUN.
+qc-lun-failed = De opslagindeling kon niet worden gelezen: { $error }
+qc-dump-storage-file-title = Selecteer waar de opslagkopie wordt opgeslagen
+qc-dump-storage-folder-title = Selecteer de map voor de LUN-kopieën
+qc-storage-dump-done = { $count } LUN-kopie(ën) gedumpt naar { $path }.
+qc-storage-dump-failed = De opslag kon niet worden gedumpt: { $error }
+
 partition-flash-no-avb = De geselecteerde image bevat geen vbmeta-structuur, dus deze twee opties zijn niet van toepassing.

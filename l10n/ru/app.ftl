@@ -761,4 +761,14 @@ qc-dump-file-title = Выберите, куда сохранить раздел
 qc-write-file-title = Выберите образ для записи
 qc-image-filter = Образ диска
 
+qc-lun-hint = Это хранилище разделено на физические разделы (LUN). Выберите те, которые нужно сохранить.
+qc-lun-reading = Чтение структуры хранилища…
+qc-lun-entry = LUN { $lun } — { $bytes } байт ({ $size })
+qc-lun-none = Выберите хотя бы один LUN.
+qc-lun-failed = Не удалось прочитать структуру хранилища: { $error }
+qc-dump-storage-file-title = Выберите место для сохранения образа хранилища
+qc-dump-storage-folder-title = Выберите папку для образов LUN
+qc-storage-dump-done = Сохранено образов LUN: { $count } в { $path }.
+qc-storage-dump-failed = Не удалось сохранить хранилище: { $error }
+
 partition-flash-no-avb = В выбранном образе нет структуры vbmeta, поэтому эти два параметра не применяются.
