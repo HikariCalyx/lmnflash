@@ -989,6 +989,62 @@ struct QualcommState {
     /// first is up: a loaded programmer is a live Firehose session, and closing
     /// the window leaves the phone in it.
     close_prompt: Option<iced::window::Id>,
+    /// The "Flash Entire Storage" card, while it is open.
+    storage_flash: Option<StorageFlashDialog>,
+}
+
+/// The "Flash Entire Storage" card.
+///
+/// It has to ask the phone how many physical partitions it has before it can
+/// offer one row per LUN, so the card opens with that question and fills in
+/// once it is answered.
+enum StorageFlashDialog {
+    /// The phone is being asked about its physical partitions.
+    Reading,
+    /// The LUNs are known, and `assigned` says which picked image each one gets
+    /// — `None` leaves that LUN untouched, which is what LUN 0 stays when the
+    /// user only brings images for the others.
+    Ready {
+        luns: Vec<firehose::Lun>,
+        /// The picked images, in the order they were picked.
+        files: Vec<PickedImage>,
+        /// One entry per LUN, parallel to `luns`: an index into `files`.
+        assigned: Vec<Option<usize>>,
+    },
+    /// The question failed; the card says why.
+    Failed(String),
+}
+
+/// One image the storage-flash card holds, with the size it was picked at.
+struct PickedImage {
+    path: std::path::PathBuf,
+    length: u64,
+}
+
+/// What a picked image's size means for the LUN it is aimed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImageFit {
+    /// Exactly the size of the LUN.
+    Exact,
+    /// Shorter than the LUN: a partial image, restored as far as it goes.
+    Smaller(u64),
+    /// Longer than the LUN: it cannot be written without spilling over.
+    Larger(u64),
+}
+
+impl ImageFit {
+    /// What the size of `length` means for `lun`.
+    pub(crate) fn of(length: u64, lun: &firehose::Lun) -> Self {
+        let size = lun.bytes();
+
+        if length > size {
+            Self::Larger(length - size)
+        } else if length < size {
+            Self::Smaller(size - length)
+        } else {
+            Self::Exact
+        }
+    }
 }
 
 /// The LUN picker "Dump Entire Storage" opens on a UFS phone.
@@ -1064,6 +1120,10 @@ enum QualcommStatus {
     },
     /// The storage dump failed; the text says why.
     StorageDumpFailed(String),
+    /// Whole-storage images were written back; `count` of them.
+    StorageFlashDone { count: usize },
+    /// The storage flash failed; the text says why.
+    StorageFlashFailed(String),
 }
 
 /// The modes the page's Reboot menu offers.
@@ -1109,6 +1169,38 @@ impl RebootMode {
             Self::OemUnlock => firehose::RebootAction::OemUnlock,
             Self::Recovery => firehose::RebootAction::Recovery,
             Self::Fastbootd => firehose::RebootAction::Fastbootd,
+        }
+    }
+}
+
+/// The entries the page's Danger Zone menu offers.
+///
+/// The ones that write to the storage are destructive by nature, so each of
+/// them asks before it starts; the others are still placeholders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DangerEntry {
+    Repartition,
+    FlashStorage,
+    FlashBackup,
+    EraseStorage,
+}
+
+impl DangerEntry {
+    /// The entries the menu shows, in order.
+    const ALL: [Self; 4] = [
+        Self::Repartition,
+        Self::FlashStorage,
+        Self::FlashBackup,
+        Self::EraseStorage,
+    ];
+
+    /// The FTL id of its label.
+    fn message_id(self) -> &'static str {
+        match self {
+            Self::Repartition => "qc-danger-repartition",
+            Self::FlashStorage => "qc-danger-flash-storage",
+            Self::FlashBackup => "qc-danger-flash-backup",
+            Self::EraseStorage => "qc-danger-erase-storage",
         }
     }
 }
@@ -2852,8 +2944,8 @@ enum Message {
     /// file manager.
     QualcommLocateLog,
     /// Qualcomm Partition Manager: an entry of the danger-zone menu was
-    /// picked. The entries are placeholders, so the pick is ignored.
-    QualcommDangerZoneSelected,
+    /// picked. Only "Flash Entire Storage" does something so far.
+    QualcommDangerZoneSelected(DangerEntry),
     /// Qualcomm Partition Manager: "Inject Firehose" was pressed — ask for
     /// the programmer file.
     QualcommInjectFirehose,
@@ -2922,6 +3014,30 @@ enum Message {
     /// Qualcomm Partition Manager: the storage dump ended with the number of
     /// images it wrote and where they are (or the reason it could not).
     QualcommStorageDumpFinished(Result<(usize, std::path::PathBuf), String>),
+    /// Qualcomm Partition Manager: the phone answered with the physical
+    /// partitions the storage-flash card writes to.
+    QualcommStorageFlashLunsRead(Result<Vec<firehose::Lun>, String>),
+    /// Qualcomm Partition Manager: the images the file picker returned.
+    QualcommStorageFlashImagesPicked(Option<Vec<std::path::PathBuf>>),
+    /// Qualcomm Partition Manager: the card's "Select Image(s)…" button — ask
+    /// for the files to write back.
+    QualcommStorageFlashPickRequested,
+    /// Qualcomm Partition Manager: the image a LUN of the card was given (or
+    /// `None` to leave that LUN alone).
+    QualcommStorageFlashAssigned(usize, Option<usize>),
+    /// Qualcomm Partition Manager: the card's Flash button.
+    QualcommStorageFlashConfirmed,
+    /// Qualcomm Partition Manager: the card was dismissed.
+    QualcommStorageFlashDialogClosed,
+    /// Qualcomm Partition Manager: a click beside the card. It is swallowed,
+    /// so it neither dismisses the card nor reaches the page.
+    QualcommStorageFlashBackdropPressed,
+    /// Qualcomm Partition Manager: the whole-storage write ended with the
+    /// number of images it wrote (or the reason it could not).
+    QualcommStorageFlashFinished(Result<usize, String>),
+    /// Qualcomm Partition Manager: the pause after a whole-storage write is
+    /// over, so the table it left behind can be read.
+    QualcommStorageFlashSettled,
     /// Qualcomm Partition Manager: "Write" was pressed — ask for the image.
     QualcommWrite,
     /// Qualcomm Partition Manager: the image the picker returned.
@@ -3567,6 +3683,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::AboutClosed
             | Message::QualcommLunDialogClosed
             | Message::QualcommClosePromptCancelled
+            | Message::QualcommStorageFlashDialogClosed
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -3602,6 +3719,9 @@ const OVERLAY_QUALCOMM_LUNS: u8 = 0x11;
 /// The Partition Manager's "close LMN Flash?" prompt, which a window close
 /// request opens while a Firehose session is live.
 const OVERLAY_QUALCOMM_CLOSE_PROMPT: u8 = 0x14;
+/// The Partition Manager's "Flash Entire Storage" card; its low nibble is the
+/// card it shows (asking the phone, the rows, or a question that failed).
+const OVERLAY_QUALCOMM_FLASH_STORAGE: u8 = 0x15;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -3670,6 +3790,10 @@ fn overlay_key(state: &State) -> u8 {
     // workspace is only reachable with every other dialog closed.
     if qualcomm::close_prompt_open(state) {
         return OVERLAY_QUALCOMM_CLOSE_PROMPT;
+    }
+
+    if let Some(step) = qualcomm::storage_flash_card_step(state) {
+        return OVERLAY_QUALCOMM_FLASH_STORAGE + step;
     }
 
     // The LUN picker belongs to the Partition Manager workspace, which is only
@@ -4795,10 +4919,6 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             Task::none()
         }
-        // Nothing of the danger zone is implemented yet: the pick is ignored
-        // and the control keeps showing its placeholder, the way the page's
-        // greyed-out buttons do.
-        Message::QualcommDangerZoneSelected => Task::none(),
         Message::QualcommInjectFirehose => start_qualcomm_injection(state),
         Message::QualcommProgrammerPicked(path) => {
             let Some(path) = path else {
@@ -5217,6 +5337,181 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             };
 
             Task::none()
+        }
+        Message::QualcommDangerZoneSelected(entry) => match entry {
+            DangerEntry::FlashStorage => start_qualcomm_storage_flash(state),
+            // The rest of the section is still to come.
+            _ => Task::none(),
+        },
+        Message::QualcommStorageFlashLunsRead(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.storage_flash = Some(match result {
+                Ok(luns) => StorageFlashDialog::Ready {
+                    assigned: vec![None; luns.len()],
+                    files: Vec::new(),
+                    luns,
+                },
+                Err(error) => StorageFlashDialog::Failed(error),
+            });
+
+            Task::none()
+        }
+        Message::QualcommStorageFlashPickRequested => {
+            let Some(StorageFlashDialog::Ready { luns, .. }) =
+                &state.flash.qualcomm.storage_flash
+            else {
+                return Task::none();
+            };
+            let multiple = luns.len() > 1;
+
+            let title = state.l10n.tr("qc-flash-storage-title");
+            let filter = state.l10n.tr("qc-image-filter");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let dialog = rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter(&filter, &["img"]);
+
+                        // One image per LUN for a storage with one LUN; a UFS
+                        // phone is written from as many images as it takes.
+                        if multiple {
+                            dialog.pick_files()
+                        } else {
+                            dialog.pick_file().map(|file| vec![file])
+                        }
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::QualcommStorageFlashImagesPicked,
+            )
+        }
+        Message::QualcommStorageFlashImagesPicked(files) => {
+            let Some(StorageFlashDialog::Ready {
+                luns,
+                files: picked,
+                assigned,
+            }) = &mut state.flash.qualcomm.storage_flash
+            else {
+                return Task::none();
+            };
+            let Some(paths) = files else {
+                // The picker was cancelled; what was assigned stays.
+                return Task::none();
+            };
+
+            let images: Vec<PickedImage> = paths
+                .into_iter()
+                .map(|path| {
+                    let length = std::fs::metadata(&path).map(|file| file.len()).unwrap_or(0);
+                    PickedImage { path, length }
+                })
+                .collect();
+
+            // What each image is called decides where it goes: `lun4.img` is
+            // LUN 4. A media with a single LUN has no names to read, so its
+            // one image goes there.
+            assigned.fill(None);
+            for (index, image) in images.iter().enumerate() {
+                let target = lun_from_file_name(&image.path, luns)
+                    .or_else(|| (luns.len() == 1).then(|| luns[0].number));
+
+                if let Some(row) = target.and_then(|number| {
+                    luns.iter().position(|lun| lun.number == number)
+                }) {
+                    // Two images named after one LUN: the first one keeps it,
+                    // the other stays unassigned rather than overwriting it.
+                    if assigned[row].is_none() {
+                        assigned[row] = Some(index);
+                    }
+                }
+            }
+
+            *picked = images;
+
+            Task::none()
+        }
+        Message::QualcommStorageFlashAssigned(row, file) => {
+            if let Some(StorageFlashDialog::Ready { assigned, .. }) =
+                &mut state.flash.qualcomm.storage_flash
+            {
+                if let Some(slot) = assigned.get_mut(row) {
+                    *slot = file;
+                }
+            }
+
+            Task::none()
+        }
+        Message::QualcommStorageFlashDialogClosed => {
+            state.flash.qualcomm.storage_flash = None;
+            Task::none()
+        }
+        Message::QualcommStorageFlashBackdropPressed => Task::none(),
+        Message::QualcommStorageFlashConfirmed => {
+            let Some((luns, images)) = state
+                .flash
+                .qualcomm
+                .storage_flash
+                .as_ref()
+                .and_then(storage_flash_images)
+            else {
+                return Task::none();
+            };
+
+            start_qualcomm_storage_flash_run(state, &luns, &images)
+        }
+        Message::QualcommStorageFlashFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            // The images may have overwritten the partition tables the rows
+            // were read from, so the rows go and the refresh control reads the
+            // new ones. The media stays: it is the same storage, and reading it
+            // again needs it — a refresh without it would do nothing at all.
+            qualcomm.partitions.clear();
+            qualcomm.selected.clear();
+            qualcomm.anchor = None;
+            qualcomm.status = match result {
+                Ok(count) => QualcommStatus::StorageFlashDone { count },
+                Err(error) => QualcommStatus::StorageFlashFailed(error),
+            };
+
+            // The table the write left behind is the one worth showing, so it
+            // is read again without being asked — once the phone has had a
+            // moment to settle, since it stops answering right after the last
+            // sector.
+            match qualcomm.status {
+                QualcommStatus::StorageFlashDone { .. } => Task::perform(
+                    async {
+                        let _ = tokio::task::spawn_blocking(|| {
+                            std::thread::sleep(STORAGE_SETTLE)
+                        })
+                        .await;
+                    },
+                    |()| Message::QualcommStorageFlashSettled,
+                ),
+                _ => Task::none(),
+            }
+        }
+        Message::QualcommStorageFlashSettled => {
+            // The pause is there for the phone; a session that ended, a port
+            // that changed, a job the user started — or a table that was read
+            // by hand already — leaves nothing to do.
+            if state.flash.qualcomm.busy
+                || !state.flash.qualcomm.programmer_uploaded
+                || state.flash.qualcomm.detected.is_none()
+                || !matches!(
+                    state.flash.qualcomm.status,
+                    QualcommStatus::StorageFlashDone { .. }
+                )
+            {
+                return Task::none();
+            }
+
+            start_qualcomm_refresh(state)
         }
         Message::QualcommWrite => {
             if state.flash.qualcomm.busy {
@@ -9617,6 +9912,160 @@ fn storage_stem(storage: StorageType) -> &'static str {
     }
 }
 
+/// The LUN an image is named after, when its file name says which one it is:
+/// `lun4.img` is LUN 4, whatever the extension and whatever the case — and only
+/// if this storage really has that LUN.
+fn lun_from_file_name(path: &std::path::Path, luns: &[firehose::Lun]) -> Option<u8> {
+    let stem = path.file_stem()?.to_str()?.to_ascii_lowercase();
+    let digits = stem.strip_prefix("lun")?;
+
+    if digits.is_empty() || !digits.chars().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+
+    let number = digits.parse::<u8>().ok()?;
+
+    luns.iter()
+        .any(|lun| lun.number == number)
+        .then_some(number)
+}
+
+/// The LUNs and the images the storage-flash card would write, in the order of
+/// its rows, or `None` when there is nothing to write — or one of the images is
+/// larger than its LUN.
+///
+/// The card's button is shut in both cases; this is where that is decided, and
+/// the write path repeats it.
+fn storage_flash_images(
+    dialog: &StorageFlashDialog,
+) -> Option<(Vec<firehose::Lun>, Vec<firehose::LunImage>)> {
+    let StorageFlashDialog::Ready {
+        luns,
+        files,
+        assigned,
+    } = dialog
+    else {
+        return None;
+    };
+
+    let mut images = Vec::new();
+
+    for (row, choice) in assigned.iter().enumerate() {
+        let Some(index) = choice else {
+            continue;
+        };
+        let (Some(image), Some(lun)) = (files.get(*index), luns.get(row)) else {
+            continue;
+        };
+
+        if image.length > lun.bytes() {
+            return None;
+        }
+
+        images.push(firehose::LunImage {
+            path: image.path.clone(),
+            lun: lun.number,
+        });
+    }
+
+    (!images.is_empty()).then(|| (luns.clone(), images))
+}
+
+/// "Flash Entire Storage": asks the phone for its physical partitions on a
+/// worker thread, so the card can offer one row per LUN.
+fn start_qualcomm_storage_flash(state: &mut State) -> Task<Message> {
+    if state.flash.qualcomm.busy || state.flash.qualcomm.partitions.is_empty() {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.status =
+            QualcommStatus::StorageFlashFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    let partitions = state.flash.qualcomm.partitions.clone();
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.storage_flash = Some(StorageFlashDialog::Reading);
+    state.flash.qualcomm.status = QualcommStatus::Idle;
+
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut log = log;
+                firehose::storage_luns(&port, &partitions, &mut log)
+            })
+            .await
+            .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+        },
+        Message::QualcommStorageFlashLunsRead,
+    )
+}
+
+/// Writes the picked images to their LUNs on a worker thread.
+///
+/// The programmer is still running in the phone, so this only reopens the port;
+/// the sizes were checked against the LUNs before the card's button closed, and
+/// checked again before the first sector is sent.
+fn start_qualcomm_storage_flash_run(
+    state: &mut State,
+    luns: &[firehose::Lun],
+    images: &[firehose::LunImage],
+) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.storage_flash = None;
+        state.flash.qualcomm.status =
+            QualcommStatus::StorageFlashFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    let luns = luns.to_vec();
+    let images = images.to_vec();
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.storage_flash = None;
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+    // The first report names the LUN it is writing; until then the bar is
+    // empty and the line says so.
+    state.flash.qualcomm.status = QualcommStatus::Writing {
+        name: String::new(),
+        done: 0,
+        total: 0,
+    };
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    let report = move |step: firehose::Progress| {
+                        let _ = progress.unbounded_send(Message::QualcommWriteProgress(step));
+                    };
+
+                    firehose::flash_storage(&port, &luns, &images, &mut log, &report)
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            Message::QualcommStorageFlashFinished,
+        ),
+        Task::run(events, |message| message),
+    ])
+}
+
+/// How long the phone is given after the last sector of a whole-storage write
+/// before its table is read again: the programmer is still flushing what it
+/// was sent, and answers nothing until it is done.
+const STORAGE_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
+
 /// Erases the sectors of the selected partitions on a worker thread.
 ///
 /// Like a dump, this reuses the programmer that is still running: the storage
@@ -12619,6 +13068,11 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // The Partition Manager's "Flash Entire Storage" card, drawn the same way.
+    if let Some(overlay) = qualcomm::storage_flash_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
     // prompt that a close request was refused while a run goes on.
     if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
@@ -13811,10 +14265,268 @@ mod tests {
         assert_eq!(state.flash.qualcomm.status, QualcommStatus::Rebooted);
     }
 
-    /// The danger zone's entries are placeholders: picking one changes nothing
-    /// at all, the way the page's greyed-out buttons cannot be pressed.
+    /// A storage image is named after the LUN it belongs to, whatever its
+    /// extension and case — and only if the storage really has that LUN.
     #[test]
-    fn the_danger_zone_entries_do_nothing() {
+    fn an_image_is_assigned_by_its_name() {
+        let luns: Vec<firehose::Lun> = (0..6_u8)
+            .map(|number| firehose::Lun {
+                number,
+                sector_size: 4096,
+                sectors: 1024,
+            })
+            .collect();
+
+        let of = |name: &str| lun_from_file_name(std::path::Path::new(name), &luns);
+
+        assert_eq!(of("lun0.img"), Some(0));
+        assert_eq!(of("lun4.img"), Some(4));
+        // The extension is not part of the name, and the case is not.
+        assert_eq!(of("LUN5.bin"), Some(5));
+        assert_eq!(of("Lun3"), Some(3));
+
+        // Nothing else names a LUN.
+        assert_eq!(of("boot.img"), None);
+        assert_eq!(of("lun.img"), None);
+        assert_eq!(of("lunx.img"), None);
+        // A number the storage does not have is no assignment either.
+        assert_eq!(of("lun7.img"), None);
+    }
+
+    /// The rows of the storage-flash card are its LUNs: the images name them,
+    /// and a LUN nothing is named after is left out of the write altogether.
+    #[test]
+    fn the_storage_flash_card_assigns_the_images_it_is_given() {
+        let directory = std::env::temp_dir().join(format!(
+            "lmnflash-storage-flash-card-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+
+        let luns: Vec<firehose::Lun> = (0..6_u8)
+            .map(|number| firehose::Lun {
+                number,
+                sector_size: 4096,
+                sectors: 1024,
+            })
+            .collect();
+
+        let mut state = State::default();
+        state.flash.qualcomm.busy = true;
+        state.flash.qualcomm.storage_flash = Some(StorageFlashDialog::Reading);
+        let _ = update(
+            &mut state,
+            Message::QualcommStorageFlashLunsRead(Ok(luns.clone())),
+        );
+
+        assert!(!state.flash.qualcomm.busy);
+        match &state.flash.qualcomm.storage_flash {
+            Some(StorageFlashDialog::Ready { files, assigned, .. }) => {
+                assert!(files.is_empty());
+                assert_eq!(assigned, &vec![None; 6]);
+            }
+            _ => panic!("the card lists the LUNs the phone reported"),
+        }
+
+        // Two images, named after LUN 1 and LUN 5.
+        let mut paths = Vec::new();
+        for name in ["lun1.img", "lun5.img"] {
+            let path = directory.join(name);
+            std::fs::write(&path, vec![0_u8; 4096]).expect("the image");
+            paths.push(path);
+        }
+
+        let _ = update(
+            &mut state,
+            Message::QualcommStorageFlashImagesPicked(Some(paths.clone())),
+        );
+
+        let (_, images) =
+            storage_flash_images(state.flash.qualcomm.storage_flash.as_ref().unwrap())
+                .expect("two images are assigned");
+
+        // LUN 0 is not among them: nothing is written to it.
+        assert_eq!(
+            images
+                .iter()
+                .map(|image| image.lun)
+                .collect::<Vec<_>>(),
+            [1, 5]
+        );
+        assert_eq!(images[0].path, paths[0]);
+        assert_eq!(images[1].path, paths[1]);
+
+        // Taking the image off a row leaves that LUN alone too.
+        let _ = update(&mut state, Message::QualcommStorageFlashAssigned(5, None));
+        let (_, images) =
+            storage_flash_images(state.flash.qualcomm.storage_flash.as_ref().unwrap())
+                .expect("one image is left");
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].lun, 1);
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// An image larger than its LUN shuts the card's button, and the handler
+    /// refuses it as well.
+    #[test]
+    fn an_image_larger_than_its_lun_is_not_written() {
+        let directory = std::env::temp_dir().join(format!(
+            "lmnflash-storage-flash-large-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let path = directory.join("lun0.img");
+        std::fs::write(&path, vec![0_u8; 4096 * 3]).expect("the image");
+
+        let dialog = StorageFlashDialog::Ready {
+            luns: vec![firehose::Lun {
+                number: 0,
+                sector_size: 4096,
+                // Two sectors: 8 KiB, which the image below overruns.
+                sectors: 2,
+            }],
+            files: vec![PickedImage {
+                path,
+                length: 4096 * 3,
+            }],
+            assigned: vec![Some(0)],
+        };
+
+        assert!(storage_flash_images(&dialog).is_none());
+
+        // A smaller image fits, and is a partial restore.
+        let lun = firehose::Lun {
+            number: 0,
+            sector_size: 4096,
+            sectors: 1024,
+        };
+        assert_eq!(
+            ImageFit::of(4096, &lun),
+            ImageFit::Smaller(lun.bytes() - 4096)
+        );
+        assert_eq!(ImageFit::of(lun.bytes(), &lun), ImageFit::Exact);
+        assert_eq!(
+            ImageFit::of(lun.bytes() + 4096, &lun),
+            ImageFit::Larger(4096)
+        );
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// A whole-storage write leaves the rows behind — but not the media, which
+    /// is what reading the table again needs: a refresh without it does
+    /// nothing at all, and the page would be stuck.
+    #[test]
+    fn a_storage_flash_keeps_what_reading_the_table_again_needs() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+        state.flash.qualcomm.programmer_uploaded = true;
+        state.flash.qualcomm.detected = Some(StorageType::Ufs);
+        state.flash.qualcomm.partitions = vec![firehose::Partition {
+            name: "boot_a".to_owned(),
+            lun: 0,
+            start_lba: 0,
+            end_lba: 4095,
+            sector_size: 4096,
+        }];
+
+        let _ = update(&mut state, Message::QualcommStorageFlashFinished(Ok(2)));
+
+        // The rows the images may have overwritten are gone...
+        assert!(state.flash.qualcomm.partitions.is_empty());
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::StorageFlashDone { count: 2 }
+        );
+        // ...but the session and the media it was read from are not.
+        assert!(state.flash.qualcomm.programmer_uploaded);
+        assert_eq!(state.flash.qualcomm.detected, Some(StorageType::Ufs));
+
+        // So the refresh control really reads the table again.
+        let _ = update(&mut state, Message::QualcommRefresh);
+        assert!(state.flash.qualcomm.busy);
+        assert_eq!(state.flash.qualcomm.status, QualcommStatus::Refreshing);
+    }
+
+    /// Once the pause after a whole-storage write is over, the table is read
+    /// again without being asked — and only then.
+    #[test]
+    fn a_storage_flash_reads_the_table_again_on_its_own() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+        state.flash.qualcomm.programmer_uploaded = true;
+        state.flash.qualcomm.detected = Some(StorageType::Ufs);
+
+        let _ = update(&mut state, Message::QualcommStorageFlashFinished(Ok(2)));
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::StorageFlashDone { count: 2 }
+        );
+
+        // The phone has settled: the table is read as if ↻ was pressed.
+        let _ = update(&mut state, Message::QualcommStorageFlashSettled);
+        assert!(state.flash.qualcomm.busy);
+        assert_eq!(state.flash.qualcomm.status, QualcommStatus::Refreshing);
+
+        // A session that ended in the pause has nothing to read.
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+        let _ = update(&mut state, Message::QualcommStorageFlashFinished(Ok(1)));
+        state.flash.qualcomm.programmer_uploaded = false;
+
+        let _ = update(&mut state, Message::QualcommStorageFlashSettled);
+        assert!(!state.flash.qualcomm.busy);
+
+        // Nor has a table that was already read again by hand.
+        let mut state = State::default();
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+        state.flash.qualcomm.programmer_uploaded = true;
+        state.flash.qualcomm.detected = Some(StorageType::Ufs);
+        let _ = update(&mut state, Message::QualcommStorageFlashFinished(Ok(1)));
+        state.flash.qualcomm.status = QualcommStatus::Table { count: 3 };
+
+        let _ = update(&mut state, Message::QualcommStorageFlashSettled);
+        assert!(!state.flash.qualcomm.busy);
+    }
+
+    /// The reboot menu needs the running programmer, not a table: a normal
+    /// reset is the way out of a page whose rows were cleared by a write.
+    #[test]
+    fn the_reboot_menu_survives_a_cleared_table() {
+        let mut state = State::default();
+
+        assert!(!qualcomm::reboot_ready(&state.flash.qualcomm));
+
+        // A running programmer with no table: a normal reboot is offered.
+        state.flash.qualcomm.programmer_uploaded = true;
+        assert!(qualcomm::reboot_ready(&state.flash.qualcomm));
+
+        // A job under way keeps the menu shut.
+        state.flash.qualcomm.busy = true;
+        assert!(!qualcomm::reboot_ready(&state.flash.qualcomm));
+        state.flash.qualcomm.busy = false;
+
+        // And the mode it offers is what the page starts: a normal reset needs
+        // no partition to name.
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+        let _ = update(
+            &mut state,
+            Message::QualcommRebootModeSelected(RebootMode::Normal),
+        );
+
+        assert!(state.flash.qualcomm.busy);
+        assert_eq!(state.flash.qualcomm.status, QualcommStatus::Rebooting);
+    }
+
+    /// The danger zone's unimplemented entries are placeholders: picking one
+    /// changes nothing at all, the way the page's greyed-out buttons cannot be
+    /// pressed.
+    #[test]
+    fn the_other_danger_zone_entries_do_nothing() {
         let mut state = State::default();
         let _ = update(
             &mut state,
@@ -13833,12 +14545,20 @@ mod tests {
         let _ = update(&mut state, Message::QualcommPartitionClicked(0));
 
         let before = state.flash.qualcomm.status.clone();
-        let _ = update(&mut state, Message::QualcommDangerZoneSelected);
 
-        assert_eq!(state.flash.qualcomm.status, before);
-        assert_eq!(state.flash.qualcomm.partitions.len(), 1);
-        assert_eq!(state.flash.qualcomm.selected, [true]);
-        assert!(!state.flash.qualcomm.busy);
+        for entry in [
+            DangerEntry::Repartition,
+            DangerEntry::FlashBackup,
+            DangerEntry::EraseStorage,
+        ] {
+            let _ = update(&mut state, Message::QualcommDangerZoneSelected(entry));
+
+            assert_eq!(state.flash.qualcomm.status, before);
+            assert_eq!(state.flash.qualcomm.partitions.len(), 1);
+            assert_eq!(state.flash.qualcomm.selected, [true]);
+            assert!(!state.flash.qualcomm.busy);
+            assert!(state.flash.qualcomm.storage_flash.is_none());
+        }
     }
 
     /// Erasing needs a selection, and the selection is what it reports about.

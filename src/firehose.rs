@@ -1009,6 +1009,138 @@ fn dump_storage_session(
     dump_session(port, &regions, target, log, on_progress)
 }
 
+/// One whole-storage image and the physical partition it is written back to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LunImage {
+    pub path: PathBuf,
+    /// The LUN the image starts at sector 0 of.
+    pub lun: u8,
+}
+
+/// How long one image is, checked against the LUN it is written to.
+///
+/// An image may be shorter than its LUN — a partial backup is restored as far
+/// as it goes — but one byte longer than the LUN is refused: the extra sectors
+/// would spill into whatever the phone keeps after it.
+fn checked_image(image: &LunImage, luns: &[Lun]) -> Result<(Lun, u64), String> {
+    let lun = luns
+        .iter()
+        .find(|lun| lun.number == image.lun)
+        .ok_or_else(|| format!("this storage has no LUN {}", image.lun))?;
+
+    let length = std::fs::metadata(&image.path)
+        .map_err(|error| format!("could not read {}: {error}", image.path.display()))?
+        .len();
+    if length == 0 {
+        return Err(format!("{} is empty", image.path.display()));
+    }
+    if length > lun.bytes() {
+        return Err(format!(
+            "{} holds {length} bytes, but LUN {} only has {} bytes",
+            image.path.display(),
+            lun.number,
+            lun.bytes()
+        ));
+    }
+
+    Ok((lun.clone(), length))
+}
+
+/// Writes whole-storage images back to the physical partitions they belong to.
+///
+/// Nothing is erased first: a `<program>` writes the sectors the image covers,
+/// so an image shorter than its LUN leaves the rest of it as it was. Every
+/// size is checked before the first sector is written — a phone that was half
+/// written is worse than one that was not touched at all.
+pub fn flash_storage(
+    port: &str,
+    luns: &[Lun],
+    images: &[LunImage],
+    log: &mut FlashLog,
+    on_progress: &dyn Fn(Progress),
+) -> Result<usize, String> {
+    log.line(format!(
+        "LMN Flash {} - Partition Manager",
+        env!("CARGO_PKG_VERSION")
+    ));
+    log.line(format!("port: {port}"));
+    log.line(format!(
+        "action: write {} image(s) to the whole storage",
+        images.len()
+    ));
+    for image in images {
+        log.line(format!("  lun {}: {}", image.lun, image.path.display()));
+    }
+
+    let result = flash_storage_session(port, luns, images, log, on_progress);
+
+    match &result {
+        Ok(count) => log.line(format!("done: {count} image(s) written")),
+        Err(error) => log.line(format!("failed: {error}")),
+    }
+
+    result
+}
+
+fn flash_storage_session(
+    port: &str,
+    luns: &[Lun],
+    images: &[LunImage],
+    log: &mut FlashLog,
+    on_progress: &dyn Fn(Progress),
+) -> Result<usize, String> {
+    if images.is_empty() {
+        return Err("there is no image to write".to_owned());
+    }
+
+    // Every image is checked against its LUN before the port is even opened.
+    let mut checked = Vec::with_capacity(images.len());
+    for image in images {
+        let (lun, length) = checked_image(image, luns)?;
+        checked.push((lun, length));
+    }
+
+    let mut session = Session {
+        transport: Transport::open(port)?,
+        log,
+    };
+    session.set_read_timeout(FIREHOSE_TIMEOUT)?;
+
+    let overall_total = checked
+        .iter()
+        .map(|(lun, length)| padded(*length, lun.sector_size))
+        .fold(0_u64, u64::saturating_add);
+    let mut before = 0_u64;
+
+    for (image, (lun, length)) in images.iter().zip(&checked) {
+        let mut file = File::open(&image.path)
+            .map_err(|error| format!("could not read {}: {error}", image.path.display()))?;
+
+        session.line(format!(
+            "writing {} ({length} bytes) to lun {} ({} bytes)",
+            image.path.display(),
+            lun.number,
+            lun.bytes()
+        ));
+        program_image(
+            &mut session,
+            &lun.region(),
+            &mut Image::File {
+                file: &mut file,
+                path: &image.path,
+                length: *length,
+            },
+            before,
+            overall_total,
+            on_progress,
+        )?;
+
+        before = before.saturating_add(padded(*length, lun.sector_size));
+    }
+
+    Ok(images.len())
+}
+
 fn write_region(
     session: &mut Session<'_>,
     region: &Region,
@@ -3007,5 +3139,61 @@ mod tests {
         let named = DumpTarget::File(PathBuf::from("lun.img"));
         assert!(dump_paths(&regions[..1], &named).is_ok());
         assert!(dump_paths(&regions, &named).is_err());
+    }
+
+    /// An image is written from the first sector of its LUN, and it may be
+    /// shorter than the LUN — but not one byte longer, because the extra
+    /// sectors would spill into whatever the phone keeps after it.
+    #[test]
+    fn an_image_that_does_not_fit_its_lun_is_refused() {
+        let directory = std::env::temp_dir().join(format!(
+            "lmnflash-storage-flash-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+
+        let luns = [
+            Lun {
+                number: 0,
+                sector_size: 4096,
+                sectors: 2,
+            },
+            Lun {
+                number: 4,
+                sector_size: 4096,
+                sectors: 2,
+            },
+        ];
+
+        let write = |name: &str, length: usize| {
+            let path = directory.join(name);
+            std::fs::write(&path, vec![0x5A_u8; length]).expect("the image");
+            LunImage {
+                path,
+                lun: 4,
+            }
+        };
+
+        // Exactly the size of the LUN, and shorter: both are written.
+        let full = write("lun4.img", 8192);
+        assert_eq!(checked_image(&full, &luns).expect("it fits").1, 8192);
+        let partial = write("lun4-partial.img", 4096);
+        assert_eq!(checked_image(&partial, &luns).expect("it fits").1, 4096);
+
+        // One sector more is refused.
+        let oversized = write("lun4-too-big.img", 12_288);
+        let error = checked_image(&oversized, &luns).expect_err("it does not fit");
+        assert!(error.contains("only has 8192 bytes"), "{error}");
+
+        // An empty file, and a LUN the storage does not have.
+        let empty = write("lun4-empty.img", 0);
+        assert!(checked_image(&empty, &luns).is_err());
+        let elsewhere = LunImage {
+            path: directory.join("lun4.img"),
+            lun: 7,
+        };
+        assert!(checked_image(&elsewhere, &luns).is_err());
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
     }
 }

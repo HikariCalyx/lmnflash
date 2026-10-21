@@ -24,7 +24,10 @@ use crate::compat_iced::*;
 use crate::firmware::{grouped_bytes, human_size, human_size_exact};
 use crate::firmware_flash::menu_style;
 use crate::text;
-use crate::{Labeled, LunDialog, Message, QualcommStatus, RebootMode, State, StorageType};
+use crate::{
+    DangerEntry, ImageFit, Labeled, LunDialog, Message, QualcommStatus, RebootMode, State,
+    StorageFlashDialog, StorageType,
+};
 
 /// Id of the partition table's scrollable, so its position survives the page
 /// being rebuilt for every message.
@@ -32,6 +35,13 @@ const TABLE_SCROLL_ID: &str = "qualcomm-partitions";
 
 /// Id of the LUN picker's list, for the same reason.
 const LUN_SCROLL_ID: &str = "qualcomm-luns";
+
+/// Id of the storage-flash card's list.
+const STORAGE_FLASH_SCROLL_ID: &str = "qualcomm-storage-flash";
+
+/// The width of one image dropdown in the storage-flash card: wide enough for
+/// a dumped file name (`lun4 (2).img`).
+const STORAGE_FLASH_MENU_WIDTH: f32 = 190.0;
 
 /// The width of the table's "Partition Name" column, in logical pixels.
 const COLUMN_PARTITION: f32 = 220.0;
@@ -52,14 +62,6 @@ const REFRESH_ICON: &str = "↻";
 
 /// The height of the job's progress bar under the table.
 const BAR_HEIGHT: f32 = 6.0;
-
-/// The danger zone's entries: what the section will offer once it exists.
-const DANGER_ENTRIES: [&str; 4] = [
-    "qc-danger-repartition",
-    "qc-danger-flash-storage",
-    "qc-danger-flash-backup",
-    "qc-danger-erase-storage",
-];
 
 /// The narrowest the port dropdown gets: wide enough for the longest name a
 /// COM port can have (`COM255`), so picking one never makes it smaller.
@@ -93,10 +95,17 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         button(text(l10n.tr("multi-flash-exit"))).on_press(Message::QualcommExit)
     };
 
-    // The reboot modes act on the session that read the table, so
-    // the menu waits for one — iced cannot grey a `pick_list` out, so a plain
-    // button takes its place until then.
-    let reboot_options: Vec<Labeled<RebootMode>> = RebootMode::ALL
+    // The reboot modes act on the session that read the table, so the menu
+    // waits for one — iced cannot grey a `pick_list` out, so a plain button
+    // takes its place until then. After a whole-storage write the rows are gone
+    // but the session is not, and a normal reset needs no table: only that one
+    // is offered until the table is read again.
+    let reboot_modes: Vec<RebootMode> = if qualcomm.partitions.is_empty() {
+        vec![RebootMode::Normal]
+    } else {
+        RebootMode::ALL.to_vec()
+    };
+    let reboot_options: Vec<Labeled<RebootMode>> = reboot_modes
         .iter()
         .map(|&mode| Labeled {
             value: mode,
@@ -109,7 +118,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         .collect();
     let reboot_width = menu_width(&reboot_labels);
 
-    let reboot: Element<'_, Message> = if table_loaded(qualcomm) {
+    let reboot: Element<'_, Message> = if reboot_ready(qualcomm) {
         let menu: iced::widget::PickList<
             '_,
             Labeled<RebootMode>,
@@ -279,32 +288,44 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
 
     // [Dump Entire Storage] [Danger Zone ▾]: the first reads whole physical
     // partitions, the second lists what the section will offer once it
-    // exists. None of the danger zone is implemented, so a pick is ignored
-    // and the control keeps its placeholder — its entries behave like the
-    // page's greyed-out buttons. Like Reboot, both only work once a table was
-    // read.
+    // exists. Only "Flash Entire Storage" is live so far; the other entries
+    // are ignored and the control keeps its placeholder, which is how the
+    // page's greyed-out buttons behave. Like Reboot, both only work once a
+    // table was read.
     let dump_storage = if table_loaded(qualcomm) {
         button(text(l10n.tr("qc-dump-entire-storage"))).on_press(Message::QualcommDumpStorage)
     } else {
         button(text(l10n.tr("qc-dump-entire-storage")))
     };
 
-    let danger_labels: Vec<String> = DANGER_ENTRIES.iter().map(|id| l10n.tr(id)).collect();
+    let danger_options: Vec<Labeled<DangerEntry>> = DangerEntry::ALL
+        .iter()
+        .map(|&entry| Labeled {
+            value: entry,
+            label: l10n.tr(entry.message_id()),
+        })
+        .collect();
+    let danger_labels: Vec<String> = danger_options
+        .iter()
+        .map(|option| option.label.clone())
+        .collect();
     let danger_width = menu_width(&danger_labels);
 
     let danger: Element<'_, Message> = if table_loaded(qualcomm) {
         let menu: iced::widget::PickList<
             '_,
-            String,
-            Vec<String>,
-            String,
+            Labeled<DangerEntry>,
+            Vec<Labeled<DangerEntry>>,
+            Labeled<DangerEntry>,
             Message,
             crate::fluent::Theme,
-        > = pick_list(danger_labels, None, |_| Message::QualcommDangerZoneSelected)
-            .placeholder(l10n.tr("qc-danger-zone"))
-            .width(danger_width)
-            .style(menu_style)
-            .text_shaping(Shaping::Advanced);
+        > = pick_list(danger_options, None, |option| {
+            Message::QualcommDangerZoneSelected(option.value)
+        })
+        .placeholder(l10n.tr("qc-danger-zone"))
+        .width(danger_width)
+        .style(menu_style)
+        .text_shaping(Shaping::Advanced);
 
         menu.into()
     } else {
@@ -575,6 +596,24 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
             .style(iced::widget::text::danger)
             .into(),
         ),
+        QualcommStatus::StorageFlashDone { count } => Some(
+            text(l10n.tr_with_args(
+                "qc-storage-flash-done",
+                &[("count", count.to_string())],
+            ))
+            .size(12.0)
+            .style(bright_success)
+            .into(),
+        ),
+        QualcommStatus::StorageFlashFailed(error) => Some(
+            text(l10n.tr_with_args(
+                "qc-storage-flash-failed",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .style(iced::widget::text::danger)
+            .into(),
+        ),
         QualcommStatus::WriteDone(name) => Some(
             text(l10n.tr_with_args("qc-write-done", &[("name", name.clone())]))
                 .size(12.0)
@@ -692,6 +731,266 @@ pub(crate) fn close_prompt_overlay(state: &State) -> Option<Element<'_, Message>
     ];
 
     Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// Which card the storage-flash dialog shows, as the low nibble of its overlay
+/// key, or `None` while it is closed.
+pub(crate) fn storage_flash_card_step(state: &State) -> Option<u8> {
+    Some(match state.flash.qualcomm.storage_flash.as_ref()? {
+        StorageFlashDialog::Reading => 0,
+        StorageFlashDialog::Ready { .. } => 1,
+        StorageFlashDialog::Failed(_) => 2,
+    })
+}
+
+/// The "Flash Entire Storage" card, or `None` while it is closed.
+pub(crate) fn storage_flash_overlay(state: &State) -> Option<Element<'_, Message>> {
+    let dialog = state.flash.qualcomm.storage_flash.as_ref()?;
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommStorageFlashBackdropPressed)
+            .into(),
+        container(storage_flash_card(state, dialog))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The card itself: one row per physical partition, each with the image that
+/// is written to it.
+fn storage_flash_card<'a>(
+    state: &'a State,
+    dialog: &'a StorageFlashDialog,
+) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+
+    let mut content = column![
+        text(l10n.tr("qc-danger-flash-storage")).size(18.0),
+        text(l10n.tr("qc-flash-storage-hint"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+        horizontal_rule(1),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    match dialog {
+        StorageFlashDialog::Reading => {
+            content = content.push(
+                row![
+                    crate::guided::spinner(state.anim_tick),
+                    text(l10n.tr("qc-lun-reading")).size(13.0),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+        }
+        StorageFlashDialog::Failed(error) => {
+            content = content.push(
+                text(l10n.tr_with_args("qc-lun-failed", &[("error", error.clone())]))
+                    .size(13.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
+                    .style(iced::widget::text::danger),
+            );
+            content = content.push(horizontal_rule(1));
+            content = content.push(
+                button(text(l10n.tr("login-cancel")))
+                    .width(Fill)
+                    .on_press(Message::QualcommStorageFlashDialogClosed),
+            );
+        }
+        StorageFlashDialog::Ready {
+            luns,
+            files,
+            assigned,
+        } => {
+            // One image per LUN for a storage with a single physical partition;
+            // a UFS phone takes one per LUN it brings images for.
+            let multiple = luns.len() > 1;
+            let pick = button(text(l10n.tr(if multiple {
+                "qc-flash-storage-pick-many"
+            } else {
+                "qc-flash-storage-pick-one"
+            })))
+            .on_press(Message::QualcommStorageFlashPickRequested);
+            content = content.push(pick);
+
+            let none_label = l10n.tr("qc-flash-storage-none");
+            let mut rows: Vec<Element<'a, Message>> = Vec::new();
+            let mut fits = 0_usize;
+            let mut broken = false;
+
+            for (row, lun) in luns.iter().enumerate() {
+                let chosen = assigned.get(row).copied().flatten();
+                let chosen = chosen.filter(|index| *index < files.len());
+
+                // An image that is already written to another LUN is left out
+                // of this row's choices: one file, one partition.
+                let mut options: Vec<Labeled<Option<usize>>> = vec![Labeled {
+                    value: None,
+                    label: none_label.clone(),
+                }];
+                for (index, file) in files.iter().enumerate() {
+                    let taken = assigned
+                        .iter()
+                        .enumerate()
+                        .any(|(other, choice)| other != row && *choice == Some(index));
+
+                    if taken {
+                        continue;
+                    }
+
+                    options.push(Labeled {
+                        value: Some(index),
+                        label: file_name(&file.path),
+                    });
+                }
+
+                let selected = Labeled {
+                    value: chosen,
+                    label: chosen.map_or_else(
+                        || none_label.clone(),
+                        |index| file_name(&files[index].path),
+                    ),
+                };
+
+                let menu: iced::widget::PickList<
+                    'a,
+                    Labeled<Option<usize>>,
+                    Vec<Labeled<Option<usize>>>,
+                    Labeled<Option<usize>>,
+                    Message,
+                    crate::fluent::Theme,
+                > = pick_list(options, Some(selected), move |option| {
+                    Message::QualcommStorageFlashAssigned(row, option.value)
+                })
+                .placeholder(none_label.clone())
+                .width(STORAGE_FLASH_MENU_WIDTH)
+                .text_shaping(Shaping::Advanced);
+
+                let mut line = column![
+                    row![
+                        text(l10n.tr_with_args(
+                            "qc-lun-entry",
+                            &[
+                                ("lun", lun.number.to_string()),
+                                ("bytes", grouped_bytes(lun.bytes())),
+                                ("size", human_size_exact(lun.bytes())),
+                            ],
+                        ))
+                        .size(12.0)
+                        .width(Fill),
+                        menu,
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .width(Fill),
+                ]
+                .spacing(2)
+                .width(Fill);
+
+                if let Some(file) = chosen.and_then(|index| files.get(index)) {
+                    match ImageFit::of(file.length, lun) {
+                        ImageFit::Exact => fits += 1,
+                        ImageFit::Smaller(difference) => {
+                            fits += 1;
+                            line = line.push(
+                                text(l10n.tr_with_args(
+                                    "qc-flash-storage-smaller",
+                                    &[("size", human_size(difference))],
+                                ))
+                                .size(11.0)
+                                .width(Fill)
+                                .wrapping(Wrapping::WordOrGlyph),
+                            );
+                        }
+                        ImageFit::Larger(difference) => {
+                            broken = true;
+                            line = line.push(
+                                text(l10n.tr_with_args(
+                                    "qc-flash-storage-larger",
+                                    &[("size", human_size(difference))],
+                                ))
+                                .size(11.0)
+                                .width(Fill)
+                                .wrapping(Wrapping::WordOrGlyph)
+                                .style(iced::widget::text::danger),
+                            );
+                        }
+                    }
+                }
+
+                rows.push(line.into());
+            }
+
+            content = content.push(
+                container(
+                    scrollable(
+                        iced::widget::Column::with_children(rows)
+                            .spacing(8)
+                            .align_x(Alignment::Start),
+                    )
+                    .id(iced::widget::Id::new(STORAGE_FLASH_SCROLL_ID))
+                    .width(Fill)
+                    .height(180),
+                )
+                .padding(6)
+                .width(Fill)
+                .style(container::rounded_box),
+            );
+
+            if fits == 0 {
+                content = content.push(text(l10n.tr("qc-flash-storage-nothing")).size(12.0));
+            }
+
+            content = content.push(horizontal_rule(1));
+
+            // A row whose image does not fit shuts the button: writing part of
+            // it would spill into whatever the phone keeps after the LUN.
+            let flash = button(text(l10n.tr("qc-flash-storage-go"))).width(Fill);
+            let flash: Element<'a, Message> = if fits == 0 || broken {
+                flash.into()
+            } else {
+                flash.on_press(Message::QualcommStorageFlashConfirmed).into()
+            };
+
+            content = content.push(
+                row![
+                    flash,
+                    button(text(l10n.tr("login-cancel")))
+                        .width(Fill)
+                        .on_press(Message::QualcommStorageFlashDialogClosed),
+                ]
+                .spacing(8)
+                .width(Fill),
+            );
+        }
+    }
+
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(560)
+    .height(440)
+    .style(darker_card)
+    .into()
+}
+
+/// The name of an image, without the folder it is in.
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Which card the LUN picker shows, as the low nibble of its overlay key, or
@@ -950,10 +1249,20 @@ fn refresh_button<'a>(live: bool) -> Element<'a, Message> {
     }
 }
 
-/// Whether a partition table was read: the actions that work on it — reboot and
-/// the danger zone — all wait for one.
+/// Whether a partition table was read: the actions that work on it — the
+/// danger zone, dump, write and erase — all wait for one.
 fn table_loaded(qualcomm: &crate::QualcommState) -> bool {
     !qualcomm.partitions.is_empty() && !qualcomm.busy
+}
+
+/// Whether the reboot menu can open.
+///
+/// A normal reset only needs the programmer that is running inside the phone,
+/// which is also the way out of a page whose table was cleared by a
+/// whole-storage write; the modes that name partitions in the table are only
+/// offered once it was read again.
+pub(crate) fn reboot_ready(qualcomm: &crate::QualcommState) -> bool {
+    !qualcomm.busy && (qualcomm.programmer_uploaded || !qualcomm.partitions.is_empty())
 }
 
 /// Opens Windows' Device Manager, where the phone shows up as a serial port.
