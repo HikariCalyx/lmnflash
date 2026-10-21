@@ -102,14 +102,40 @@ fn read_device_entry(serial: &str) -> Option<DeviceEntry> {
     })
 }
 
+/// The variables Motorola bootloaders report the carrier/region code in.
+///
+/// `cid` is the usual one; bootloaders that do not answer it use the name of
+/// the storage the phone has — `ufs_cid` on a UFS unit, `emmc_cid` on an eMMC
+/// one.
+const CID_VARIABLES: [&str; 3] = ["cid", "ufs_cid", "emmc_cid"];
+
+/// The carrier/region code a device reports (`0x0032`), normalized.
+///
+/// The usual variable name is tried first, then the storage-specific ones.
+fn read_cid(read: impl Fn(&str) -> Option<String>) -> Option<String> {
+    CID_VARIABLES
+        .iter()
+        .find_map(|name| read(name))
+        .map(|cid| crate::flashfile::normalize_cid(&cid))
+}
+
+/// [`read_cid`] over a `getvar all` map, where an empty value is a value the
+/// bootloader does not have.
+fn read_cid_value(variables: &HashMap<String, String>) -> Option<String> {
+    read_cid(|name| {
+        let value = variables.get(name)?.trim();
+
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
+
 /// True if the variables identify a Motorola (Lenovo) device.
 ///
-/// Motorola bootloaders always report a `cid` variable (e.g. `0x0032`),
-/// which other vendors' fastboot implementations do not provide.
+/// Motorola bootloaders always report the carrier code (`cid`, or `ufs_cid` /
+/// `emmc_cid` on devices that only expose the storage-specific name), which
+/// other vendors' fastboot implementations do not provide.
 fn is_motorola(variables: &HashMap<String, String>) -> bool {
-    variables
-        .get("cid")
-        .is_some_and(|value| !value.trim().is_empty())
+    read_cid_value(variables).is_some()
 }
 
 /// A fastboot device of any vendor, with the `product` it reports — what the
@@ -169,8 +195,9 @@ pub fn list_all_devices() -> Result<Vec<DeviceSummary>, String> {
 pub struct DeviceFacts {
     /// XT model code (`sku`), e.g. `XT2451-2`.
     pub xt_code: Option<String>,
-    /// Carrier/region code (`cid`), normalized (`0x0032`). A device that does
-    /// not report one is not a Motorola phone (see
+    /// Carrier/region code (`cid`, or `ufs_cid` / `emmc_cid` on devices that
+    /// only report the storage-specific name), normalized (`0x0032`). A device
+    /// that does not report one is not a Motorola phone (see
     /// [`DeviceFacts::is_motorola`]).
     pub cid: Option<String>,
     /// Bootloader unlock state, as the bootloader spells it (`flashing_unlocked`
@@ -214,7 +241,7 @@ pub fn read_device_facts(serial: &str) -> Result<DeviceFacts, String> {
         xt_code: read("sku"),
         // Normalized so it can be compared with the CID of a firmware package,
         // which is read from a `flashfile.xml` in the same form.
-        cid: read("cid").map(|cid| crate::flashfile::normalize_cid(&cid)),
+        cid: read_cid_value(&variables),
         securestate: read("securestate"),
         product: read("product"),
     })
@@ -803,7 +830,8 @@ impl SecureState {
 pub struct DeviceVars {
     /// Bootloader state (`securestate`) as the bootloader reports it.
     pub securestate: Option<String>,
-    /// Carrier/region code (`cid`), e.g. `0x0032`.
+    /// Carrier/region code (`cid`, or `ufs_cid` / `emmc_cid` where the
+    /// bootloader only reports the storage-specific name), e.g. `0x0032`.
     pub cid: Option<String>,
     /// Product codename (`product`), e.g. `arcfox`.
     pub product: Option<String>,
@@ -1078,7 +1106,9 @@ fn hide_value(line: &str) -> String {
 /// Reads `securestate`, `cid`, `product` and `ro.carrier` from one device.
 ///
 /// Every variable is read on its own and best effort: a bootloader that does
-/// not know one of them still reports the others.
+/// not know one of them still reports the others. The carrier code is read
+/// from `cid`, or from `ufs_cid` / `emmc_cid` when the bootloader only knows
+/// those.
 pub fn read_device_vars(serial: &str) -> Result<DeviceVars, String> {
     let device = fastboot::FastbootDevice::connect(serial)?;
 
@@ -1093,7 +1123,7 @@ pub fn read_device_vars(serial: &str) -> Result<DeviceVars, String> {
         securestate: read("securestate"),
         // Normalized so it can be compared with the CID of a firmware
         // package, which is shown in the same form.
-        cid: read("cid").map(|cid| crate::flashfile::normalize_cid(&cid)),
+        cid: read_cid(&read),
         product: read("product"),
         // Bootloaders answer the system property as `ro.carrier`; older ones
         // use the bare name (the same pair Fastboot Fill reads).
@@ -1667,6 +1697,34 @@ mod tests {
         ]);
 
         assert!(is_motorola(&moto));
+    }
+
+    #[test]
+    fn identifies_motorola_devices_by_storage_cid() {
+        // Bootloaders that do not answer `cid` report the carrier code under
+        // the name of the storage instead.
+        let ufs = parse_getvar_all(&["(bootloader) ufs_cid: 0x0032".to_string()]);
+        assert!(is_motorola(&ufs));
+        assert_eq!(read_cid_value(&ufs).as_deref(), Some("0x0032"));
+
+        let emmc = parse_getvar_all(&["(bootloader) emmc_cid: 0x000B".to_string()]);
+        assert!(is_motorola(&emmc));
+        assert_eq!(read_cid_value(&emmc).as_deref(), Some("0x000B"));
+
+        // The usual name wins when the bootloader answers more than one.
+        let both = parse_getvar_all(&[
+            "(bootloader) cid: 0x0032".to_string(),
+            "(bootloader) ufs_cid: 0x000B".to_string(),
+        ]);
+        assert_eq!(read_cid_value(&both).as_deref(), Some("0x0032"));
+
+        // An empty value is not an identity.
+        let empty = parse_getvar_all(&[
+            "(bootloader) cid:".to_string(),
+            "(bootloader) ufs_cid:  ".to_string(),
+        ]);
+        assert_eq!(read_cid_value(&empty), None);
+        assert!(!is_motorola(&empty));
     }
 
     #[test]
