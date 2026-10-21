@@ -12,10 +12,6 @@ use crate::compat_iced::*;
 use crate::text;
 use crate::{driver_install, Message, State};
 
-/// The room a tile's action buttons keep around their labels when the tile
-/// sizes them to their content instead of sharing its width.
-const COMPACT_ACTION_PADDING: [f32; 2] = [3.0, 8.0];
-
 /// A feature tile offered by the smartphone-firmware-flash mode (Mode 2).
 ///
 /// Each variant maps to a localized title and action button; new flashing
@@ -81,7 +77,8 @@ impl SmartphoneFeature {
     ///
     /// The Partition Manager offers three vendors, and an equal third of the
     /// card is narrower than the word "Qualcomm" — the label would bleed out
-    /// of its button.
+    /// of its button. Their padding is the one every other button in the grid
+    /// keeps, so the row is exactly as tall as a single button.
     fn actions_fit_content(self) -> bool {
         matches!(self, Self::PartitionManager)
     }
@@ -202,13 +199,14 @@ fn smartphone_feature_tile(state: &State, feature: SmartphoneFeature) -> Element
         .actions()
         .into_iter()
         .map(|(label_id, message)| -> Element<'_, Message> {
-            let action = button(text(l10n.tr(label_id)));
+            let mut action = button(text(l10n.tr(label_id)));
 
-            let action = if fit_content {
-                action.padding(COMPACT_ACTION_PADDING)
-            } else {
-                action.width(Fill)
-            };
+            // A tile whose buttons size themselves to their labels — the
+            // Partition Manager's three vendors — keeps the padding every
+            // other button in the grid has, so the row is as tall as one.
+            if !fit_content {
+                action = action.width(Fill);
+            }
 
             match message {
                 Some(message) => action.on_press(message).into(),
