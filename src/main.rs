@@ -999,6 +999,9 @@ struct QualcommState {
     backup: Option<PartitionBackup>,
     /// The "Flash XML" card, while it is open.
     xml_flash: Option<XmlFlashDialog>,
+    /// The "Clear all storage" card, while it is open: a warning that counts
+    /// down before its button unlocks.
+    clear_storage: Option<ClearStorage>,
     /// What the "Flash XML" card does once a package is down. It outlives the
     /// card, so the choice a package was flashed with is the one the next
     /// package starts with.
@@ -1393,6 +1396,44 @@ impl RebootMode {
             Self::Fastbootd => Some(firehose::RebootAction::Fastbootd),
             Self::PowerOff => None,
         }
+    }
+}
+
+/// The "Clear all storage" card: a warning whose button only unlocks once the
+/// user has had time to read it.
+///
+/// Erasing every partition takes the phone's accounts, its photos and the
+/// calibration data the modem needs to register on a network, and none of it
+/// comes back. A confirmation dialog is clicked through in a second; a wait is
+/// not, which is the whole point of the card.
+#[derive(Debug, Clone, Copy)]
+struct ClearStorage {
+    /// When the confirmation unlocks.
+    ready_at: std::time::Instant,
+}
+
+impl ClearStorage {
+    /// How long the card makes the user wait before it can be confirmed.
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    fn new() -> Self {
+        Self {
+            ready_at: std::time::Instant::now() + Self::WAIT,
+        }
+    }
+
+    /// How many seconds are left before the button unlocks, at `now`. It is
+    /// counted up rather than down, so the card reads "30 s" as soon as it is
+    /// up: a fraction of a second still waiting is a whole second to show.
+    fn seconds_left(&self, now: std::time::Instant) -> u64 {
+        let left = self.ready_at.saturating_duration_since(now);
+
+        left.as_secs() + u64::from(left.subsec_nanos() > 0)
+    }
+
+    /// Whether the wait is over.
+    fn ready(&self, now: std::time::Instant) -> bool {
+        now >= self.ready_at
     }
 }
 
@@ -3346,6 +3387,17 @@ enum Message {
     QualcommXmlBuildChosen(qfil::Build),
     /// Qualcomm Partition Manager: the files the picker returned.
     QualcommXmlFilesPicked(Option<Vec<std::path::PathBuf>>),
+    /// Qualcomm Partition Manager: the "Clear all storage" card's countdown
+    /// moved, so its warning is drawn again.
+    QualcommClearStorageTicked,
+    /// Qualcomm Partition Manager: the card's button — erases every partition,
+    /// once the wait is over.
+    QualcommClearStorageConfirmed,
+    /// Qualcomm Partition Manager: the card was dismissed.
+    QualcommClearStorageClosed,
+    /// Qualcomm Partition Manager: a click beside the card. It is swallowed, so
+    /// it neither dismisses the card nor reaches the page.
+    QualcommClearStorageBackdropPressed,
     /// Qualcomm Partition Manager: a row of the checklist was toggled.
     QualcommXmlRowToggled(usize),
     /// Qualcomm Partition Manager: what the card does once the package is down.
@@ -3883,6 +3935,15 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         iced::Subscription::none()
     };
 
+    // The "Clear all storage" card counts down while it is up, so its warning
+    // is drawn again once a second.
+    let clear_countdown = if qualcomm::clear_storage_open(state) {
+        iced::time::every(std::time::Duration::from_secs(1))
+            .map(|_| Message::QualcommClearStorageTicked)
+    } else {
+        iced::Subscription::none()
+    };
+
     // A window close request is answered by the app (iced's automatic close
     // is turned off in the window settings), so a running job can keep the
     // window open until it is stopped.
@@ -3910,6 +3971,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     iced::Subscription::batch([
         ticks,
         countdown,
+        clear_countdown,
         port_poll,
         page_input,
         transition,
@@ -4048,6 +4110,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::QualcommBackupClosed
             | Message::QualcommInjectAnswered(_)
             | Message::QualcommXmlClosed
+            | Message::QualcommClearStorageClosed
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -4096,6 +4159,8 @@ const OVERLAY_QUALCOMM_BACKUP: u8 = 0x1B;
 const OVERLAY_QUALCOMM_INJECT_CHECK: u8 = 0x1C;
 /// The Partition Manager's "Flash XML" card.
 const OVERLAY_QUALCOMM_XML_FLASH: u8 = 0x1D;
+/// The "Clear all storage" dialog, with the warning that counts down.
+const OVERLAY_QUALCOMM_CLEAR_STORAGE: u8 = 0x1E;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -4184,6 +4249,10 @@ fn overlay_key(state: &State) -> u8 {
 
     if let Some(step) = qualcomm::xml_flash_card_step(state) {
         return OVERLAY_QUALCOMM_XML_FLASH + step;
+    }
+
+    if qualcomm::clear_storage_open(state) {
+        return OVERLAY_QUALCOMM_CLEAR_STORAGE;
     }
 
     // The LUN picker belongs to the Partition Manager workspace, which is only
@@ -5791,9 +5860,29 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::QualcommDangerZoneSelected(entry) => match entry {
             DangerEntry::FlashStorage => start_qualcomm_storage_flash(state),
             DangerEntry::FlashBackup => start_qualcomm_backup(state),
+            DangerEntry::EraseStorage => start_qualcomm_clear_storage(state),
             // The rest of the section is still to come.
             _ => Task::none(),
         },
+        Message::QualcommClearStorageTicked => Task::none(),
+        Message::QualcommClearStorageBackdropPressed => Task::none(),
+        Message::QualcommClearStorageClosed => {
+            state.flash.qualcomm.clear_storage = None;
+            Task::none()
+        }
+        Message::QualcommClearStorageConfirmed => {
+            let Some(card) = state.flash.qualcomm.clear_storage else {
+                return Task::none();
+            };
+
+            // The wait is the point of the card, so a confirm that arrives
+            // before it is over is ignored rather than obeyed.
+            if !card.ready(std::time::Instant::now()) {
+                return Task::none();
+            }
+
+            start_qualcomm_clear_run(state)
+        }
         Message::QualcommXmlFlash => start_qualcomm_xml_flash(state),
         Message::QualcommXmlBuildChosen(build) => {
             if state.flash.qualcomm.busy {
@@ -11136,6 +11225,20 @@ fn start_qualcomm_backup_run(
     ])
 }
 
+/// "Clear all storage": opens the warning card.
+///
+/// It needs the table — that is what its worker erases — and nothing else: the
+/// wait before the button unlocks is the card's own business.
+fn start_qualcomm_clear_storage(state: &mut State) -> Task<Message> {
+    if state.flash.qualcomm.busy || state.flash.qualcomm.partitions.is_empty() {
+        return Task::none();
+    }
+
+    state.flash.qualcomm.clear_storage = Some(ClearStorage::new());
+
+    Task::none()
+}
+
 /// Erases the sectors of the selected partitions on a worker thread.
 ///
 /// Like a dump, this reuses the programmer that is still running: the storage
@@ -11148,6 +11251,46 @@ fn start_qualcomm_erase(state: &mut State) -> Task<Message> {
     if regions.is_empty() {
         return Task::none();
     }
+
+    start_qualcomm_erase_regions(state, regions)
+}
+
+/// Erases the sectors of every partition of the table: what the Danger Zone's
+/// "Clear all storage" runs once its countdown is over.
+///
+/// The partition table itself stays — it is what the page and the next package
+/// work from — but everything inside the partitions is gone, which is why the
+/// card makes the user wait before it can be confirmed.
+fn start_qualcomm_clear_run(state: &mut State) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+
+    let regions: Vec<firehose::Region> = state
+        .flash
+        .qualcomm
+        .partitions
+        .iter()
+        .map(firehose::Region::of)
+        .collect();
+    if regions.is_empty() {
+        state.flash.qualcomm.clear_storage = None;
+        state.flash.qualcomm.status = QualcommStatus::EraseFailed(
+            state.l10n.tr("qc-partitions-none"),
+        );
+        return Task::none();
+    }
+
+    state.flash.qualcomm.clear_storage = None;
+
+    start_qualcomm_erase_regions(state, regions)
+}
+
+/// Erases the sectors of `regions` on a worker thread.
+fn start_qualcomm_erase_regions(
+    state: &mut State,
+    regions: Vec<firehose::Region>,
+) -> Task<Message> {
     let Some(port) = state.flash.qualcomm.port.clone() else {
         state.flash.qualcomm.status = QualcommStatus::EraseFailed(state.l10n.tr("qc-select-port"));
         return Task::none();
@@ -14164,6 +14307,11 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // The Danger Zone's "Clear all storage" warning, drawn the same way.
+    if let Some(overlay) = qualcomm::clear_storage_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
     // prompt that a close request was refused while a run goes on.
     if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
@@ -16577,6 +16725,85 @@ mod tests {
         assert!(state.flash.qualcomm.lun_dialog.is_none());
         assert!(state.flash.qualcomm.pending_luns.is_empty());
         assert!(!state.flash.qualcomm.busy);
+    }
+
+    /// "Clear all storage" warns before it erases anything: the card counts
+    /// down, a confirm that arrives early is ignored, and the erase only starts
+    /// once the wait is over.
+    #[test]
+    fn clearing_the_storage_waits_before_it_can_be_confirmed() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.programmer_uploaded = true;
+        state.flash.qualcomm.partitions = vec![firehose::Partition {
+            name: "boot_a".to_owned(),
+            lun: 0,
+            start_lba: 0,
+            end_lba: 4095,
+            sector_size: 4096,
+        }];
+
+        // The entry opens a card rather than erasing anything.
+        let _ = update(
+            &mut state,
+            Message::QualcommDangerZoneSelected(DangerEntry::EraseStorage),
+        );
+        assert!(state.flash.qualcomm.clear_storage.is_some());
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_CLEAR_STORAGE);
+        assert!(!state.flash.qualcomm.busy);
+
+        // A confirm while the warning is still counting down does nothing.
+        let _ = update(&mut state, Message::QualcommClearStorageConfirmed);
+        assert!(state.flash.qualcomm.clear_storage.is_some());
+        assert!(!state.flash.qualcomm.busy);
+
+        // Once the wait is over the same message goes through: the card closes
+        // and the erase worker is reached. There is no port here, so it says so
+        // instead of opening anything.
+        state.flash.qualcomm.clear_storage = Some(ClearStorage {
+            ready_at: std::time::Instant::now(),
+        });
+        let _ = update(&mut state, Message::QualcommClearStorageConfirmed);
+        assert!(state.flash.qualcomm.clear_storage.is_none());
+        assert!(matches!(
+            state.flash.qualcomm.status,
+            QualcommStatus::EraseFailed(_)
+        ));
+
+        // Cancelling leaves the storage alone. The card leaves through its
+        // exit animation, so the close only lands once that ran.
+        let _ = update(
+            &mut state,
+            Message::QualcommDangerZoneSelected(DangerEntry::EraseStorage),
+        );
+        let _ = update(&mut state, Message::QualcommClearStorageClosed);
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.flash.qualcomm.clear_storage.is_none());
+        assert_eq!(overlay_key(&state), OVERLAY_NONE);
+    }
+
+    /// The card counts the wait in whole seconds, so it reads "30 s" as soon as
+    /// it is up and reaches zero exactly when the button unlocks.
+    #[test]
+    fn the_clear_storage_countdown_is_whole_seconds() {
+        let now = std::time::Instant::now();
+        let card = ClearStorage {
+            ready_at: now + ClearStorage::WAIT,
+        };
+
+        assert_eq!(ClearStorage::WAIT, std::time::Duration::from_secs(30));
+        assert_eq!(card.seconds_left(now), 30);
+        assert!(!card.ready(now));
+
+        let almost = now + std::time::Duration::from_millis(29_500);
+        assert_eq!(card.seconds_left(almost), 1);
+        assert!(!card.ready(almost));
+
+        let over = now + ClearStorage::WAIT;
+        assert_eq!(card.seconds_left(over), 0);
+        assert!(card.ready(over));
     }
 
     /// Every reboot mode starts its own job, and each one reports its outcome —

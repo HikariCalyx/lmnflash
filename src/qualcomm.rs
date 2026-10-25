@@ -25,8 +25,8 @@ use crate::firmware::{grouped_bytes, human_size, human_size_exact};
 use crate::firmware_flash::menu_style;
 use crate::text;
 use crate::{
-    AfterFlash, DangerEntry, FlashInfoDialog, ImageFit, Labeled, LunDialog, Message, QualcommStatus,
-    RebootMode, State, StorageFlashDialog, StorageType, XmlFlashDialog,
+    AfterFlash, ClearStorage, DangerEntry, FlashInfoDialog, ImageFit, Labeled, LunDialog, Message,
+    QualcommStatus, RebootMode, State, StorageFlashDialog, StorageType, XmlFlashDialog,
 };
 
 /// Id of the partition table's scrollable, so its position survives the page
@@ -1714,6 +1714,97 @@ pub(crate) fn xml_flash_overlay(state: &State) -> Option<Element<'_, Message>> {
     ];
 
     Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// Whether the "Clear all storage" card is up.
+pub(crate) fn clear_storage_open(state: &State) -> bool {
+    state.flash.qualcomm.clear_storage.is_some()
+}
+
+/// The "Clear all storage" card, or `None` while it is closed.
+pub(crate) fn clear_storage_overlay(state: &State) -> Option<Element<'_, Message>> {
+    let card = state.flash.qualcomm.clear_storage.as_ref()?;
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommClearStorageBackdropPressed)
+            .into(),
+        container(clear_storage_card(state, card))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The card itself: what clearing the storage takes with it, and the countdown
+/// that keeps the button shut until the warning has been read.
+fn clear_storage_card<'a>(state: &'a State, card: &'a ClearStorage) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+    let left = card.seconds_left(std::time::Instant::now());
+
+    let mut content = column![
+        text(l10n.tr("qc-clear-title")).size(18.0),
+        horizontal_rule(1),
+        text(l10n.tr("qc-clear-warning"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger),
+        horizontal_rule(1),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    // The wait is what makes the warning mean something, so it is written where
+    // the button is, and the button stays shut until it is over.
+    if left == 0 {
+        content = content.push(
+            text(l10n.tr("qc-clear-ready"))
+                .size(12.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(bright_success),
+        );
+    } else {
+        content = content.push(
+            text(l10n.tr_with_args("qc-clear-wait", &[("seconds", left.to_string())]))
+                .size(12.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph),
+        );
+    }
+
+    let confirm = button(text(l10n.tr("qc-clear-confirm"))).width(Fill);
+    let confirm: Element<'a, Message> = if left == 0 {
+        confirm.on_press(Message::QualcommClearStorageConfirmed).into()
+    } else {
+        confirm.into()
+    };
+
+    content = content.push(
+        row![
+            confirm,
+            button(text(l10n.tr("login-cancel")))
+                .width(Fill)
+                .on_press(Message::QualcommClearStorageClosed),
+        ]
+        .spacing(8)
+        .width(Fill),
+    );
+
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(520)
+    .height(330)
+    .style(darker_card)
+    .into()
 }
 
 /// The card itself: the choice of build, the checklist a package turns into, or
