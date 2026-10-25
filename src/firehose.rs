@@ -100,7 +100,12 @@ const SAHARA_EXECUTE_DATA: u32 = 0x0f;
 /// programmer is already running (an earlier injection that never reset it).
 const SAHARA_XML: u32 = 0x6d78_3f3c;
 
-const SAHARA_VERSION: u32 = 2;
+const SAHARA_VERSION: u32 = 3;
+
+/// The oldest Sahara protocol this page speaks, which is what a hello response
+/// reports as "compatible". Protocol 1 has no command mode, so a phone that
+/// greets with it is only ever served its programmer.
+const SAHARA_COMPATIBLE_VERSION: u32 = 1;
 /// The mode a host that is about to send a programmer asks for. Sahara calls
 /// it "image transfer pending": the phone waits for the host to serve it.
 const SAHARA_MODE_IMAGE_TX_PENDING: u32 = 0;
@@ -118,6 +123,10 @@ const SAHARA_READ_PK_HASH: u32 = 0x03;
 /// The largest Sahara packet accepted (the same limit the reference tools
 /// use; a hello is 48 bytes, a read request 20).
 const SAHARA_MAX_PACKET: u32 = 4096;
+
+/// The largest payload a command's answer may be read into, whatever a greeting
+/// claims: a corrupt `max_packet_size` must not become an allocation.
+const SAHARA_PACKET_CEILING: u32 = 1 << 20;
 
 /// The header of one CPIO `newc` entry: the magic, thirteen 8-digit ASCII hex
 /// fields, then the file name.
@@ -504,6 +513,46 @@ impl Programmer {
     }
 }
 
+/// How the Sahara phase ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Upload {
+    /// The programmer is running in the phone.
+    Done,
+    /// The user stopped it at the identity card; the phone was reset.
+    Cancelled,
+    /// The phone refused the identity commands and only a reset leaves that
+    /// state: the caller opens the port again and repeats without asking.
+    NeedsRestart,
+}
+
+/// Waits for the phone to come back on `port` after a reset.
+///
+/// A boot ROM that reboots drops the USB link, so the handle is gone and the
+/// port has to be opened again — which takes a moment after the re-enumeration.
+fn reopen_after_reset(port: &str, log: &mut FlashLog) -> Result<Transport, String> {
+    log.line(format!(
+        "sahara: waiting up to {} seconds for the phone to come back on {port}",
+        RESET_REOPEN.as_secs()
+    ));
+
+    let mut last = String::new();
+    for _ in 0..20 {
+        std::thread::sleep(RESET_REOPEN / 20);
+
+        match Transport::open(port) {
+            Ok(transport) => return Ok(transport),
+            Err(error) => last = error,
+        }
+    }
+
+    Err(format!(
+        "the phone did not come back on {port} after the reset: {last}"
+    ))
+}
+
+/// How long a reset may take before the port is open again.
+const RESET_REOPEN: Duration = Duration::from_secs(10);
+
 fn inject_session(
     port: &str,
     programmer: &Path,
@@ -515,14 +564,28 @@ fn inject_session(
     let mut programmer = Programmer::open(programmer)?;
     log.line(programmer.log_line());
 
-    let mut session = Session {
-        transport: Transport::open(port)?,
-        log,
-    };
+    // The Sahara phase. A boot ROM that does not know the identity commands
+    // answers them with a NAK — a state only a reset leaves — so that attempt is
+    // repeated once the phone has come back, without asking.
+    //
+    // The port stays open across the whole injection unless a reset forces it
+    // shut: some programmers watch the line and would drop out of Firehose if
+    // the handle were reopened under them.
+    let mut ask_identity = true;
+    let mut transport = Transport::open(port)?;
+    let mut session = loop {
+        let mut session = Session { transport, log };
 
-    if !sahara_upload(&mut session, &mut programmer, confirm)? {
-        return Ok(None);
-    }
+        match sahara_upload(&mut session, &mut programmer, ask_identity, confirm)? {
+            Upload::Cancelled => return Ok(None),
+            Upload::Done => break session,
+            Upload::NeedsRestart => {
+                drop(session);
+                transport = reopen_after_reset(port, log)?;
+                ask_identity = false;
+            }
+        }
+    };
     session.line("sahara: the programmer was uploaded");
 
     // The programmer needs a moment before it listens for commands, and the
@@ -3193,9 +3256,13 @@ fn align4(value: usize) -> usize {
 fn sahara_upload(
     session: &mut Session<'_>,
     programmer: &mut Programmer,
+    ask_identity: bool,
     confirm: &dyn Fn(Preflight) -> InjectAnswer,
-) -> Result<bool, String> {
+) -> Result<Upload, String> {
     let mut greeted = false;
+    // How many image slices the phone has been served. Before the first one, an
+    // end-of-image packet cannot be a verdict on the programmer.
+    let mut served = 0_u64;
     // A packet the exchange already read, waiting to be handled by the loop.
     let mut pending: Option<Sahara> = None;
 
@@ -3208,10 +3275,32 @@ fn sahara_upload(
         match packet {
             Sahara::AlreadyFirehose => {
                 session.line("sahara: the phone is already in Firehose mode");
-                return Ok(true);
+                return Ok(Upload::Done);
             }
-            Sahara::Hello { version } => {
-                session.line(format!("sahara: hello (protocol {version})"));
+            Sahara::Hello {
+                version,
+                version_min,
+                max_packet,
+            } => {
+                session.line(format!(
+                    "sahara: hello (protocol {version}, oldest {version_min}, {max_packet}-byte packets)"
+                ));
+                // The greeting is where the boot ROM says how large a packet it
+                // takes; a command's answer is read within that.
+                session.sahara_packet = max_packet;
+                session.sahara_version = version;
+                session.sahara_version_min = version_min;
+
+                // A boot ROM that wants a version this page does not speak is
+                // answered with the highest one it has and gone ahead with: the
+                // two exchanges that matter (command mode and image transfer)
+                // are the same in every version.
+                let answer = sahara_answer(version, version_min);
+                if answer != 2 {
+                    session.line(format!(
+                        "sahara: the phone wants protocol {version_min} or newer; the upload goes ahead as protocol {answer}"
+                    ));
+                }
 
                 // A boot ROM is the only thing that knows which SoC, OEM and
                 // model the phone really is; a programmer is built for one of
@@ -3223,20 +3312,28 @@ fn sahara_upload(
                 if !greeted {
                     greeted = true;
 
+                    // The retry after a refused identity asks nothing: the boot
+                    // ROM only wants its programmer.
+                    if !ask_identity {
+                        session.send_hello(answer, SAHARA_MODE_IMAGE_TX_PENDING)?;
+                        session.line("sahara: hello response (image transfer mode, without asking who the phone is)");
+                        continue;
+                    }
+
                     if version < 2 {
                         session.line(format!(
                             "sahara: protocol {version} has no command mode; the identity is not available"
                         ));
-                        session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                        session.send_hello(answer, SAHARA_MODE_IMAGE_TX_PENDING)?;
                         session.line("sahara: hello response (image transfer mode)");
                         continue;
                     }
 
-                    if let Err(error) = session.enter_command_mode() {
+                    if let Err(error) = session.enter_command_mode(answer) {
                         session.line(format!(
                             "sahara: the phone did not take commands ({error}); the upload goes on without an identity"
                         ));
-                        session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                        session.send_hello(answer, SAHARA_MODE_IMAGE_TX_PENDING)?;
                         session.line("sahara: hello response (image transfer mode)");
                         continue;
                     }
@@ -3290,7 +3387,7 @@ fn sahara_upload(
                                                 "sahara: the reset was not answered ({error}); the phone may have to be unplugged"
                                             )),
                                         }
-                                        return Ok(false);
+                                        return Ok(Upload::Cancelled);
                                     }
                                     InjectAnswer::Reselect(path) => {
                                         session.line(format!(
@@ -3335,14 +3432,14 @@ fn sahara_upload(
                             session.line(
                                 "sahara: the mode switch was not answered; greeting the phone instead",
                             );
-                            session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                            session.send_hello(answer, SAHARA_MODE_IMAGE_TX_PENDING)?;
                             session.line("sahara: hello response (image transfer mode)");
                         }
                     }
                     continue;
                 }
 
-                session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                session.send_hello(answer, SAHARA_MODE_IMAGE_TX_PENDING)?;
                 session.line("sahara: hello response (image transfer mode)");
             }
             Sahara::ReadData { image, offset, len } => {
@@ -3369,11 +3466,49 @@ fn sahara_upload(
                     ));
                 }
                 session.send(&data[start..end])?;
+                served += 1;
             }
-            Sahara::EndOfImage { status } => {
-                session.line(format!("sahara: end of image (status {status})"));
+            Sahara::EndOfImage { image, status } => {
+                session.line(format!(
+                    "sahara: end of image {image} (status {status})"
+                ));
                 if status != 0 {
-                    return Err(format!("the phone rejected the programmer (Sahara status {status})"));
+                    // Before a single image was served this is not a verdict on
+                    // the programmer: it is the answer to the command-mode
+                    // exchange the identity read needed, and a boot ROM that
+                    // does not know those commands says so with a NAK. Only a
+                    // reset leaves that state, so the session is handed back to
+                    // be repeated without the question.
+                    if served == 0 {
+                        session.line(format!(
+                            "sahara: the phone stopped before any image was sent ({})",
+                            status_text(status)
+                        ));
+
+                        if ask_identity {
+                            session.line(
+                                "sahara: it does not take the identity commands; the session is reset and the upload repeated without asking",
+                            );
+                            match session.sahara_reset() {
+                                Ok(()) => session.line("sahara: the phone was reset"),
+                                Err(error) => session.line(format!(
+                                    "sahara: the reset was not answered ({error}); the port is opened again anyway"
+                                )),
+                            }
+
+                            return Ok(Upload::NeedsRestart);
+                        }
+
+                        return Err(format!(
+                            "the phone stopped before any image was sent ({})",
+                            status_text(status)
+                        ));
+                    }
+
+                    return Err(format!(
+                        "the phone rejected image {image} of the programmer ({})",
+                        status_text(status)
+                    ));
                 }
                 session.send_packet(SAHARA_DONE, &[])?;
             }
@@ -3382,7 +3517,7 @@ fn sahara_upload(
                 // 1 means every image went through; a multi-image programmer
                 // keeps the loop alive while the phone asks for the next one.
                 if status == 1 || programmer.images.len() <= 1 {
-                    return Ok(true);
+                    return Ok(Upload::Done);
                 }
             }
             // The boot ROM said it was ready for the upload after the mode
@@ -3395,6 +3530,44 @@ fn sahara_upload(
                 );
             }
         }
+    }
+}
+
+/// What a Sahara status code means.
+///
+/// The codes are the `SAHARA_NAK_*` ones a boot ROM answers an image transfer
+/// with; the wording is what the log and the failure say, so a NAK reads as a
+/// sentence rather than a number.
+fn status_text(status: u32) -> String {
+    let name = match status {
+        0 => "success",
+        1 => "invalid command",
+        2 => "protocol mismatch",
+        3 => "invalid target protocol",
+        4 => "invalid host protocol",
+        5 => "invalid packet size",
+        6 => "unexpected image id",
+        7 => "invalid header",
+        8 => "invalid data size",
+        9 => "invalid image type",
+        _ => return format!("Sahara status {status}"),
+    };
+
+    format!("Sahara status {status}: {name}")
+}
+
+/// The version a hello response should name.
+///
+/// Protocol 2 is answered with 2 whenever the phone accepts it — that is the
+/// exchange every phone this page has met is happy with, and a protocol 3 boot
+/// ROM that keeps accepting 2 is left exactly where it works today. Only a boot
+/// ROM that refuses anything older than 3 is answered with 3, which is the case
+/// that used to end in a NAK.
+fn sahara_answer(version: u32, version_min: u32) -> u32 {
+    if version_min <= 2 {
+        2.min(version)
+    } else {
+        SAHARA_VERSION.min(version)
     }
 }
 
@@ -3459,8 +3632,14 @@ fn programmer_root_hash(
 enum Sahara {
     Hello {
         /// The boot ROM's Sahara version: a protocol 2 boot ROM is the one
-        /// that can be asked who the phone is.
+        /// older phones have, and a protocol 3 one is the newer one that asks
+        /// for images by id and with 64-bit offsets.
         version: u32,
+        /// The oldest version it accepts. A greeting that wants more than this
+        /// page speaks is logged, and the upload goes ahead anyway.
+        version_min: u32,
+        /// The largest packet it takes, which bounds a command's answer.
+        max_packet: u32,
     },
     ReadData {
         image: u64,
@@ -3468,6 +3647,9 @@ enum Sahara {
         len: u64,
     },
     EndOfImage {
+        /// Which image the phone has finished with: a v3 boot ROM asks for
+        /// several by id, and says which one it just took.
+        image: u32,
         status: u32,
     },
     DoneResp {
@@ -4063,6 +4245,13 @@ struct Transport {
     /// How long a read waits for the phone, so a shorter window can be tried
     /// and the port put back the way it was.
     timeout: Duration,
+    /// The largest packet the boot ROM takes, as its greeting named it. Zero
+    /// until a greeting arrived.
+    sahara_packet: u32,
+    /// The protocol version the boot ROM named, and the oldest one it accepts.
+    /// Zero until a greeting arrived.
+    sahara_version: u32,
+    sahara_version_min: u32,
 }
 
 impl Transport {
@@ -4084,6 +4273,9 @@ impl Transport {
             pending: Vec::new(),
             started: 0,
             timeout: TIMEOUT,
+            sahara_packet: 0,
+            sahara_version: 0,
+            sahara_version_min: 0,
         })
     }
 
@@ -4190,14 +4382,28 @@ impl Transport {
         self.send(&packet)
     }
 
+    /// The largest payload one command's answer may carry.
+    ///
+    /// A greeting names it, so a boot ROM that takes less than this page's own
+    /// ceiling is respected; one that names more is believed up to a sane
+    /// bound, since a corrupt size must not become an allocation.
+    fn sahara_payload(&self) -> u32 {
+        match self.sahara_packet {
+            0 => SAHARA_MAX_PACKET,
+            named => named.min(SAHARA_PACKET_CEILING),
+        }
+    }
+
     /// Answers the boot ROM's greeting, asking for `mode`.
     ///
-    /// The version and "compatible" numbers are 2 and 1 like the reference
-    /// tools report, and the status is success.
-    fn send_hello(&mut self, mode: u32) -> Result<(), String> {
+    /// `named` is the highest version the boot ROM offered: the answer names it,
+    /// or this page's own ceiling when that is lower, so a protocol 2 phone is
+    /// answered with 2 and a protocol 3 one with 3. "Compatible" is the oldest
+    /// this page speaks, and the status is success.
+    fn send_hello(&mut self, named: u32, mode: u32) -> Result<(), String> {
         let mut body = Vec::with_capacity(40);
-        body.extend_from_slice(&SAHARA_VERSION.to_le_bytes());
-        body.extend_from_slice(&1_u32.to_le_bytes());
+        body.extend_from_slice(&named.min(SAHARA_VERSION).to_le_bytes());
+        body.extend_from_slice(&SAHARA_COMPATIBLE_VERSION.to_le_bytes());
         body.extend_from_slice(&0_u32.to_le_bytes());
         body.extend_from_slice(&mode.to_le_bytes());
         body.extend_from_slice(&[0_u8; 24]);
@@ -4211,9 +4417,15 @@ impl Transport {
     /// boot ROM says how many bytes it has, the host asks for them, and the
     /// bytes follow.
     fn command(&mut self, command: u32) -> Result<Vec<u8>, String> {
-        let mut body = Vec::with_capacity(4);
-        body.extend_from_slice(&command.to_le_bytes());
-        self.send_packet(SAHARA_EXECUTE, &body)?;
+        // A protocol 3 boot ROM takes the `client_command` field with the
+        // command — the answer echoes it — while a protocol 2 one is given the
+        // command alone, which is the shape every phone here has accepted.
+        let mut execute = Vec::with_capacity(8);
+        execute.extend_from_slice(&command.to_le_bytes());
+        if self.sahara_version >= 3 {
+            execute.extend_from_slice(&command.to_le_bytes());
+        }
+        self.send_packet(SAHARA_EXECUTE, &execute)?;
 
         let len = match self.read_sahara()? {
             Sahara::CommandResponse {
@@ -4235,11 +4447,13 @@ impl Transport {
             }
         };
 
-        self.send_packet(SAHARA_EXECUTE_DATA, &body)?;
+        // `EXECUTE_DATA` names the client command and nothing else.
+        self.send_packet(SAHARA_EXECUTE_DATA, &command.to_le_bytes())?;
 
-        if len > SAHARA_MAX_PACKET {
+        if len > self.sahara_payload() {
             return Err(format!(
-                "the phone has {len} bytes to read, more than a command may carry"
+                "the phone has {len} bytes to read, more than the {} a command may carry",
+                self.sahara_payload()
             ));
         }
 
@@ -4251,8 +4465,8 @@ impl Transport {
 
     /// Answers the greeting with a request for command mode, and waits for the
     /// boot ROM to say it is ready for commands.
-    fn enter_command_mode(&mut self) -> Result<(), String> {
-        self.send_hello(SAHARA_MODE_COMMAND)?;
+    fn enter_command_mode(&mut self, named: u32) -> Result<(), String> {
+        self.send_hello(named, SAHARA_MODE_COMMAND)?;
 
         match self.read_sahara()? {
             Sahara::CommandReady => Ok(()),
@@ -4325,12 +4539,14 @@ fn parse_sahara(command: u32, body: &[u8]) -> Result<Sahara, String> {
             // The greeting is twelve 32-bit fields: the command and its
             // length, the protocol version, the oldest one it accepts, the
             // largest packet it takes, the mode it is in, then six reserved.
-            if body.len() < 40 {
+            if body.len() < 12 {
                 return Err("the phone sent a malformed greeting".to_owned());
             }
 
             Ok(Sahara::Hello {
                 version: u32::from_le_bytes(body[0..4].try_into().unwrap()),
+                version_min: u32::from_le_bytes(body[4..8].try_into().unwrap()),
+                max_packet: u32::from_le_bytes(body[8..12].try_into().unwrap()),
             })
         }
         SAHARA_CMD_READY => Ok(Sahara::CommandReady),
@@ -4369,6 +4585,7 @@ fn parse_sahara(command: u32, body: &[u8]) -> Result<Sahara, String> {
                 return Err("the phone sent a malformed end-of-image packet".to_owned());
             }
             Ok(Sahara::EndOfImage {
+                image: u32::from_le_bytes(body[0..4].try_into().unwrap()),
                 status: u32::from_le_bytes(body[4..8].try_into().unwrap()),
             })
         }
@@ -5393,25 +5610,59 @@ mod tests {
         assert!(identity.log_line().contains("(32 bytes)"));
     }
 
-    /// The greeting is read for its protocol version — a Sahara 1 boot ROM has
-    /// no command mode, so it is never asked who the phone is.
+    /// The greeting is read for its protocol version and the two numbers a v3
+    /// boot ROM adds to it — a Sahara 1 boot ROM has no command mode, so it is
+    /// never asked who the phone is.
     #[test]
     fn a_greeting_carries_the_protocol_version() {
         let mut body = Vec::new();
+        body.extend_from_slice(&3_u32.to_le_bytes());
         body.extend_from_slice(&2_u32.to_le_bytes());
-        body.extend_from_slice(&1_u32.to_le_bytes());
         body.extend_from_slice(&SAHARA_MAX_PACKET.to_le_bytes());
         body.extend_from_slice(&0_u32.to_le_bytes());
         body.extend_from_slice(&[0_u8; 24]);
 
         match parse_sahara(SAHARA_HELLO, &body).expect("a greeting") {
-            Sahara::Hello { version } => assert_eq!(version, 2),
+            Sahara::Hello {
+                version,
+                version_min,
+                max_packet,
+            } => {
+                assert_eq!((version, version_min, max_packet), (3, 2, SAHARA_MAX_PACKET));
+            }
             other => panic!("a greeting was expected, not {}", other.name()),
         }
 
         // A greeting too short to hold the version is refused rather than
         // guessed at.
         assert!(parse_sahara(SAHARA_HELLO, &body[..8]).is_err());
+    }
+
+    /// A phone that accepts protocol 2 is answered with 2, exactly as before;
+    /// only one that refuses anything older than 3 is answered with 3.
+    #[test]
+    fn the_hello_response_names_the_version_the_phone_accepts() {
+        // The phones this page has met: protocol 2, and protocol 3 keeping 2.
+        assert_eq!(sahara_answer(2, 1), 2);
+        assert_eq!(sahara_answer(3, 2), 2);
+        assert_eq!(sahara_answer(3, 1), 2);
+
+        // A v3-only boot ROM is the case that used to NAK.
+        assert_eq!(sahara_answer(3, 3), 3);
+
+        // A Sahara 1 boot ROM is answered in its own language.
+        assert_eq!(sahara_answer(1, 1), 1);
+    }
+
+    /// A status a boot ROM answers an image transfer with is named in the log
+    /// and in the failure, so a NAK reads as a sentence.
+    #[test]
+    fn a_sahara_status_is_named() {
+        assert_eq!(status_text(0), "Sahara status 0: success");
+        assert_eq!(status_text(1), "Sahara status 1: invalid command");
+        assert_eq!(status_text(6), "Sahara status 6: unexpected image id");
+        // A code this page does not name keeps its number.
+        assert_eq!(status_text(99), "Sahara status 99");
     }
 
     /// The three packets of a boot ROM command: ready, the answer's length,
