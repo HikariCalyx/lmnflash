@@ -37,6 +37,7 @@ mod l10n;
 mod lenovoubl;
 mod login;
 mod lookup;
+mod mbn;
 mod multi_flash;
 mod multi_flash_run;
 mod pac;
@@ -993,6 +994,45 @@ struct QualcommState {
     storage_flash: Option<StorageFlashDialog>,
     /// The "Flash Info" card, while it is open.
     flash_info: Option<FlashInfoDialog>,
+    /// The "Flash Partition Backup" card, while it is open.
+    backup: Option<PartitionBackup>,
+    /// The injection that is waiting on the user's answer, with the identity
+    /// card up once the boot ROM reported who the phone is.
+    injection: Option<InjectionWait>,
+}
+
+/// An injection stopped between reading the phone's identity and uploading the
+/// programmer.
+///
+/// The boot ROM is the only thing that knows the SoC, OEM and model the phone
+/// really is, and it forgets them the moment a programmer takes over. They are
+/// read first, shown, and the upload waits for the user's answer — which is
+/// what the sender is for.
+struct InjectionWait {
+    /// Where the answer goes; the worker is blocked reading it.
+    answer: std::sync::mpsc::Sender<firehose::InjectAnswer>,
+    /// What the boot ROM reported and what the programmer is signed against.
+    /// `None` until the phone answered — and while it is `None` there is no
+    /// card, since there is nothing to show yet.
+    preflight: Option<firehose::Preflight>,
+    /// Whether the file picker is up on top of the card: the card is hidden
+    /// while it is, and comes back with the file the worker still has when it
+    /// is dismissed.
+    reselecting: bool,
+}
+
+/// The "Flash Partition Backup" card: images dumped from partitions, written
+/// back to the partitions they came from.
+///
+/// One row per picked image, each assigned to a partition of the table — which
+/// is the other way round from the whole-storage card, where a row is a target:
+/// a partition backup is a set of files, one per partition.
+struct PartitionBackup {
+    /// The images the user picked.
+    files: Vec<PickedImage>,
+    /// One entry per image: the row of the table it is written to, or `None`
+    /// while it is not assigned.
+    assigned: Vec<Option<usize>>,
 }
 
 /// The "Flash Info" card: what the phone says about its storage.
@@ -1055,14 +1095,12 @@ pub(crate) enum ImageFit {
 }
 
 impl ImageFit {
-    /// What the size of `length` means for `lun`.
-    pub(crate) fn of(length: u64, lun: &firehose::Lun) -> Self {
-        let size = lun.bytes();
-
-        if length > size {
-            Self::Larger(length - size)
-        } else if length < size {
-            Self::Smaller(size - length)
+    /// What the size of `length` means for a target of `capacity` bytes.
+    pub(crate) fn of(length: u64, capacity: u64) -> Self {
+        if length > capacity {
+            Self::Larger(length - capacity)
+        } else if length < capacity {
+            Self::Smaller(capacity - length)
         } else {
             Self::Exact
         }
@@ -1104,6 +1142,9 @@ enum QualcommStatus {
     Table { count: usize },
     /// The injection failed; the text says why.
     InjectFailed(String),
+    /// The injection was stopped at the identity card, before anything was
+    /// uploaded; the phone was reset.
+    InjectCancelled,
     /// The phone is being reset.
     Rebooting,
     /// The reset command went through.
@@ -1146,6 +1187,10 @@ enum QualcommStatus {
     StorageFlashDone { count: usize },
     /// The storage flash failed; the text says why.
     StorageFlashFailed(String),
+    /// Partition images were written back; `count` of them.
+    BackupDone { count: usize },
+    /// The partition write failed; the text says why.
+    BackupFailed(String),
 }
 
 /// The modes the page's Reboot menu offers.
@@ -2976,9 +3021,22 @@ enum Message {
     /// Qualcomm Partition Manager: the injection moved on from the upload to
     /// reading the partition table.
     QualcommFirehoseReading,
+    /// Qualcomm Partition Manager: the boot ROM reported the phone's identity,
+    /// and the injection waits for the user to let the programmer in.
+    QualcommInjectIdentified(firehose::Preflight),
+    /// Qualcomm Partition Manager: the identity card's answer — `true` lets the
+    /// programmer be uploaded, `false` stops the injection and resets the
+    /// phone.
+    QualcommInjectAnswered(bool),
+    /// Qualcomm Partition Manager: the identity card's "Reselect…" button —
+    /// ask for another programmer without ending the session.
+    QualcommInjectReselect,
+    /// Qualcomm Partition Manager: the identity card's scrim was pressed. The
+    /// card stays up: the upload is waiting on it.
+    QualcommInjectCheckBackdropPressed,
     /// Qualcomm Partition Manager: the injection ended with the table it read
-    /// (or the reason it could not).
-    QualcommFirehoseReady(Result<firehose::Table, String>),
+    /// (or `None` when it was stopped first, or the reason it could not).
+    QualcommFirehoseReady(Result<Option<firehose::Table>, String>),
     /// Qualcomm Partition Manager: an entry of the reboot menu was picked.
     /// Only a normal reboot is implemented so far.
     QualcommRebootModeSelected(RebootMode),
@@ -3060,6 +3118,25 @@ enum Message {
     /// Qualcomm Partition Manager: the pause after a whole-storage write is
     /// over, so the table it left behind can be read.
     QualcommStorageFlashSettled,
+    /// Qualcomm Partition Manager: the images the file picker returned for the
+    /// partition-backup card.
+    QualcommBackupImagesPicked(Option<Vec<std::path::PathBuf>>),
+    /// Qualcomm Partition Manager: the backup card's "Select Images…" button —
+    /// ask for the files to write back.
+    QualcommBackupPickRequested,
+    /// Qualcomm Partition Manager: the partition an image of the backup card is
+    /// written to (or `None` to leave it out).
+    QualcommBackupAssigned(usize, Option<usize>),
+    /// Qualcomm Partition Manager: the backup card's Flash button.
+    QualcommBackupConfirmed,
+    /// Qualcomm Partition Manager: the backup card was dismissed.
+    QualcommBackupClosed,
+    /// Qualcomm Partition Manager: a click beside the backup card. It is
+    /// swallowed, so it neither dismisses the card nor reaches the page.
+    QualcommBackupBackdropPressed,
+    /// Qualcomm Partition Manager: the partition write ended with the number of
+    /// images it wrote (or the reason it could not).
+    QualcommBackupFinished(Result<usize, String>),
     /// Qualcomm Partition Manager: "Flash Info" was pressed — ask the phone
     /// what its storage looks like.
     QualcommFlashInfo,
@@ -3726,6 +3803,8 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::QualcommClosePromptCancelled
             | Message::QualcommStorageFlashDialogClosed
             | Message::QualcommFlashInfoClosed
+            | Message::QualcommBackupClosed
+            | Message::QualcommInjectAnswered(_)
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -3767,6 +3846,11 @@ const OVERLAY_QUALCOMM_FLASH_STORAGE: u8 = 0x15;
 /// The Partition Manager's "Flash Info" card; its low nibble is the card it
 /// shows (asking the phone, the reply, or a question that failed).
 const OVERLAY_QUALCOMM_FLASH_INFO: u8 = 0x18;
+/// The Partition Manager's "Flash Partition Backup" card.
+const OVERLAY_QUALCOMM_BACKUP: u8 = 0x1B;
+/// The Partition Manager's "Check the phone's identity" card, which an
+/// injection stops at before it uploads the programmer.
+const OVERLAY_QUALCOMM_INJECT_CHECK: u8 = 0x1C;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -3843,6 +3927,14 @@ fn overlay_key(state: &State) -> u8 {
 
     if let Some(step) = qualcomm::flash_info_card_step(state) {
         return OVERLAY_QUALCOMM_FLASH_INFO + step;
+    }
+
+    if qualcomm::backup_open(state) {
+        return OVERLAY_QUALCOMM_BACKUP;
+    }
+
+    if qualcomm::inject_check_open(state) {
+        return OVERLAY_QUALCOMM_INJECT_CHECK;
     }
 
     // The LUN picker belongs to the Partition Manager workspace, which is only
@@ -4971,9 +5063,25 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::QualcommInjectFirehose => start_qualcomm_injection(state),
         Message::QualcommProgrammerPicked(path) => {
             let Some(path) = path else {
-                // The picker was cancelled; nothing was touched.
+                // The picker was cancelled. An injection that was waiting for
+                // another programmer gets its card back, with the file the
+                // worker already has.
+                if let Some(wait) = &mut state.flash.qualcomm.injection {
+                    wait.reselecting = false;
+                }
                 return Task::none();
             };
+
+            // A session that is waiting at the identity card takes the file:
+            // nothing has been uploaded yet, so it goes on with the new one
+            // rather than being started again.
+            if let Some(wait) = &state.flash.qualcomm.injection {
+                let _ = wait
+                    .answer
+                    .send(firehose::InjectAnswer::Reselect(path));
+                return Task::none();
+            }
+
             let Some(port) = state.flash.qualcomm.port.clone() else {
                 state.flash.qualcomm.status =
                     QualcommStatus::InjectFailed(state.l10n.tr("qc-select-port"));
@@ -4994,6 +5102,31 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             // job instead of claiming an upload that has finished.
             let (progress, events) = iced::futures::channel::mpsc::unbounded();
 
+            // The identity the boot ROM reports stops the worker until the
+            // user has seen it: the values are sent to the page, which puts
+            // them in a card, and the answer comes back down this channel.
+            let (answer, answered) = std::sync::mpsc::channel::<firehose::InjectAnswer>();
+            state.flash.qualcomm.injection = Some(InjectionWait {
+                answer,
+                preflight: None,
+                reselecting: false,
+            });
+
+            let identity_progress = progress.clone();
+            let confirm = move |preflight: firehose::Preflight| {
+                if identity_progress
+                    .unbounded_send(Message::QualcommInjectIdentified(preflight))
+                    .is_err()
+                {
+                    // The page is gone; there is nobody left to ask.
+                    return firehose::InjectAnswer::Cancel;
+                }
+
+                answered
+                    .recv()
+                    .unwrap_or(firehose::InjectAnswer::Cancel)
+            };
+
             Task::batch([
                 Task::perform(
                     async move {
@@ -5003,7 +5136,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                                 let _ = progress.unbounded_send(Message::QualcommFirehoseReading);
                             };
 
-                            firehose::inject(&port, &path, storage, &mut log, &reading)
+                            firehose::inject(&port, &path, storage, &mut log, &reading, &confirm)
                         })
                         .await
                         .unwrap_or_else(|error| {
@@ -5027,12 +5160,62 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             Task::none()
         }
+        Message::QualcommInjectIdentified(preflight) => {
+            // The card goes up on the identity the boot ROM reported, and the
+            // worker waits for the answer this card gives. A card that is
+            // being replaced — another programmer was picked — takes the new
+            // answer and comes back up.
+            if let Some(wait) = &mut state.flash.qualcomm.injection {
+                if wait.preflight.is_none() || wait.reselecting {
+                    wait.preflight = Some(preflight);
+                    wait.reselecting = false;
+                }
+            }
+
+            Task::none()
+        }
+        Message::QualcommInjectCheckBackdropPressed => Task::none(),
+        Message::QualcommInjectReselect => {
+            let Some(wait) = &mut state.flash.qualcomm.injection else {
+                return Task::none();
+            };
+
+            // The card steps aside for the file picker, and the worker keeps
+            // waiting: its answer is what the pick turns into.
+            wait.reselecting = true;
+            pick_qualcomm_programmer(state)
+        }
+        Message::QualcommInjectAnswered(answer) => {
+            let Some(wait) = state.flash.qualcomm.injection.take() else {
+                return Task::none();
+            };
+
+            // The worker is blocked on this; a send that fails means it gave
+            // up already, which is its own business.
+            let _ = wait.answer.send(if answer {
+                firehose::InjectAnswer::Upload
+            } else {
+                firehose::InjectAnswer::Cancel
+            });
+
+            Task::none()
+        }
         Message::QualcommFirehoseReady(result) => {
             let qualcomm = &mut state.flash.qualcomm;
             qualcomm.busy = false;
+            // Whatever the injection was waiting for, it is over: a card left
+            // up would have nothing behind it.
+            qualcomm.injection = None;
 
             match result {
-                Ok(table) => apply_qualcomm_table(qualcomm, table),
+                Ok(Some(table)) => apply_qualcomm_table(qualcomm, table),
+                Ok(None) => {
+                    qualcomm.partitions.clear();
+                    qualcomm.selected.clear();
+                    qualcomm.anchor = None;
+                    qualcomm.detected = None;
+                    qualcomm.status = QualcommStatus::InjectCancelled;
+                }
                 Err(error) => {
                     qualcomm.partitions.clear();
                     qualcomm.selected.clear();
@@ -5389,9 +5572,98 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::QualcommDangerZoneSelected(entry) => match entry {
             DangerEntry::FlashStorage => start_qualcomm_storage_flash(state),
+            DangerEntry::FlashBackup => start_qualcomm_backup(state),
             // The rest of the section is still to come.
             _ => Task::none(),
         },
+        Message::QualcommBackupPickRequested => {
+            if state.flash.qualcomm.backup.is_none() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("qc-backup-title");
+
+            // No extension filter: a dump is a raw image whatever it is
+            // called, and a partition is restored from the file the user
+            // kept — the name decides the partition, not the extension.
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_files()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::QualcommBackupImagesPicked,
+            )
+        }
+        Message::QualcommBackupImagesPicked(files) => {
+            let Some(backup) = &mut state.flash.qualcomm.backup else {
+                return Task::none();
+            };
+            let Some(paths) = files else {
+                // The picker was cancelled; what was assigned stays.
+                return Task::none();
+            };
+
+            let partitions = state.flash.qualcomm.partitions.clone();
+            let images: Vec<PickedImage> = paths
+                .into_iter()
+                .map(|path| {
+                    let length = std::fs::metadata(&path).map(|file| file.len()).unwrap_or(0);
+                    PickedImage { path, length }
+                })
+                .collect();
+
+            // What each image is called decides where it goes: a dump names a
+            // file after the partition it came from, so `boot_a.img` goes back
+            // to `boot_a`.
+            backup.assigned = images
+                .iter()
+                .map(|image| partition_index_by_name(&image.path, &partitions))
+                .collect();
+            backup.files = images;
+
+            Task::none()
+        }
+        Message::QualcommBackupAssigned(row, partition) => {
+            if let Some(backup) = &mut state.flash.qualcomm.backup {
+                if let Some(slot) = backup.assigned.get_mut(row) {
+                    *slot = partition;
+                }
+            }
+
+            Task::none()
+        }
+        Message::QualcommBackupClosed => {
+            state.flash.qualcomm.backup = None;
+            Task::none()
+        }
+        Message::QualcommBackupBackdropPressed => Task::none(),
+        Message::QualcommBackupConfirmed => {
+            let images = match &state.flash.qualcomm.backup {
+                Some(backup) => backup_images(backup, &state.flash.qualcomm.partitions),
+                None => None,
+            };
+            let Some(images) = images else {
+                return Task::none();
+            };
+
+            start_qualcomm_backup_run(state, &images)
+        }
+        Message::QualcommBackupFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            // The images were written into partitions the table already names:
+            // the ranges are the same ones, so the rows stay as they are.
+            qualcomm.status = match result {
+                Ok(count) => QualcommStatus::BackupDone { count },
+                Err(error) => QualcommStatus::BackupFailed(error),
+            };
+
+            Task::none()
+        }
         Message::QualcommStorageFlashLunsRead(result) => {
             let qualcomm = &mut state.flash.qualcomm;
             qualcomm.busy = false;
@@ -9798,6 +10070,13 @@ fn start_qualcomm_injection(state: &State) -> Task<Message> {
     if state.flash.qualcomm.busy || state.flash.qualcomm.port.is_none() {
         return Task::none();
     }
+
+    pick_qualcomm_programmer(state)
+}
+
+/// Asks for a programmer file, whatever state the page is in: the identity card
+/// uses it to let another file be picked in the middle of an injection.
+fn pick_qualcomm_programmer(state: &State) -> Task<Message> {
     let title = state.l10n.tr("qc-firehose-programmer");
     let filter = state.l10n.tr("qc-firehose-programmer-filter");
 
@@ -10191,6 +10470,132 @@ fn start_qualcomm_storage_flash_run(
 /// before its table is read again: the programmer is still flushing what it
 /// was sent, and answers nothing until it is done.
 const STORAGE_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// "Flash Partition Backup": opens the card the images are picked in.
+///
+/// It needs no question to the phone: the partitions are the rows the table
+/// already holds, and each image is written back to the range the table gives
+/// the partition it is named after.
+fn start_qualcomm_backup(state: &mut State) -> Task<Message> {
+    if state.flash.qualcomm.busy || state.flash.qualcomm.partitions.is_empty() {
+        return Task::none();
+    }
+
+    state.flash.qualcomm.backup = Some(PartitionBackup {
+        files: Vec::new(),
+        assigned: Vec::new(),
+    });
+
+    Task::none()
+}
+
+/// The partition a dumped image is named after: `boot_a.img` is `boot_a`,
+/// whatever the extension and whatever the case.
+///
+/// A dump is a raw image, so the file may carry any extension the user gave it
+/// — `boot_a.bin`, `boot_a.raw.img` — or none at all. Each dot-separated
+/// prefix of the name is tried, longest first, and the name is compared
+/// against the table's own, since a dump wrote the table's name and a file
+/// system does not keep the case it was given.
+fn partition_index_by_name(
+    path: &std::path::Path,
+    partitions: &[firehose::Partition],
+) -> Option<usize> {
+    let mut candidate = path.file_name()?.to_str()?;
+
+    loop {
+        if let Some(index) = partitions
+            .iter()
+            .position(|partition| partition.name.eq_ignore_ascii_case(candidate))
+        {
+            return Some(index);
+        }
+
+        candidate = &candidate[..candidate.rfind('.')?];
+    }
+}
+
+/// The partitions the backup card would write to, or `None` when there is
+/// nothing to write — or one of the images is larger than its partition.
+///
+/// The card's button is shut in both cases; this is where that is decided, and
+/// the write path repeats it.
+fn backup_images(
+    backup: &PartitionBackup,
+    partitions: &[firehose::Partition],
+) -> Option<Vec<firehose::RegionImage>> {
+    let mut images = Vec::new();
+
+    for (row, choice) in backup.assigned.iter().enumerate() {
+        let (Some(index), Some(image)) = (*choice, backup.files.get(row)) else {
+            continue;
+        };
+        let Some(partition) = partitions.get(index) else {
+            continue;
+        };
+
+        if image.length > partition.size_bytes() {
+            return None;
+        }
+
+        images.push(firehose::RegionImage {
+            path: image.path.clone(),
+            region: firehose::Region::of(partition),
+        });
+    }
+
+    (!images.is_empty()).then_some(images)
+}
+
+/// Writes the partition images on a worker thread.
+fn start_qualcomm_backup_run(
+    state: &mut State,
+    images: &[firehose::RegionImage],
+) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.backup = None;
+        state.flash.qualcomm.status =
+            QualcommStatus::BackupFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    let images = images.to_vec();
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.backup = None;
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+    state.flash.qualcomm.status = QualcommStatus::Writing {
+        name: String::new(),
+        done: 0,
+        total: 0,
+    };
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    let report = move |step: firehose::Progress| {
+                        let _ = progress.unbounded_send(Message::QualcommWriteProgress(step));
+                    };
+
+                    firehose::flash_partitions(&port, &images, &mut log, &report)
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            Message::QualcommBackupFinished,
+        ),
+        Task::run(events, |message| message),
+    ])
+}
 
 /// Erases the sectors of the selected partitions on a worker thread.
 ///
@@ -13204,6 +13609,17 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // The Partition Manager's "Flash Partition Backup" card, drawn the same way.
+    if let Some(overlay) = qualcomm::backup_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
+    // The "Check the phone's identity" card an injection stops at, with the
+    // phone's boot ROM waiting behind it.
+    if let Some(overlay) = qualcomm::inject_check_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
     // prompt that a close request was refused while a run goes on.
     if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
@@ -14091,7 +14507,7 @@ mod tests {
         // A table read from that port survives a scan that still lists it.
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(firehose::Table {
+            Message::QualcommFirehoseReady(Ok(Some(firehose::Table {
                 storage: StorageType::Ufs,
                 partitions: vec![firehose::Partition {
                     name: "boot_a".to_owned(),
@@ -14100,7 +14516,7 @@ mod tests {
                     end_lba: 4095,
                     sector_size: 4096,
                 }],
-            })),
+            }))),
         );
         state.flash.qualcomm.programmer_uploaded = true;
         let _ = update(
@@ -14112,6 +14528,207 @@ mod tests {
         assert!(state.flash.qualcomm.programmer_uploaded);
     }
 
+    /// The identity the boot ROM reports stops the injection: the card goes up
+    /// with it, and the worker only hears an answer once a button is pressed.
+    #[test]
+    fn an_injection_waits_for_the_identity_to_be_confirmed() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.busy = true;
+
+        // Nothing is up until the boot ROM has answered.
+        assert!(!qualcomm::inject_check_open(&state));
+        assert_eq!(overlay_key(&state), OVERLAY_NONE);
+
+        let (answer, answered) = std::sync::mpsc::channel::<firehose::InjectAnswer>();
+        state.flash.qualcomm.injection = Some(InjectionWait {
+            answer,
+            preflight: None,
+            reselecting: false,
+        });
+        assert!(!qualcomm::inject_check_open(&state));
+
+        // A programmer signed against the same root key the phone reports.
+        let identity = firehose::Identity {
+            hw_id: 0x0028_c0e1_0051_a012,
+            msm_id: 0x28c0_e1,
+            oem_id: 0x0051,
+            model_id: 0xa012,
+            pk_hash: Some(vec![0x3c, 0xce, 0xb5, 0x5b]),
+        };
+        let preflight = firehose::Preflight {
+            identity,
+            programmer: std::path::PathBuf::from("prog_firehose_ddr.elf"),
+            programmer_hash: Ok(vec![0x3c, 0xce, 0xb5, 0x5b]),
+        };
+        assert_eq!(preflight.roots_match(), Some(true));
+
+        let _ = update(&mut state, Message::QualcommInjectIdentified(preflight));
+
+        assert!(qualcomm::inject_check_open(&state));
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_INJECT_CHECK);
+
+        // The card is the only way on: a click beside it does nothing.
+        let _ = update(&mut state, Message::QualcommInjectCheckBackdropPressed);
+        assert!(qualcomm::inject_check_open(&state));
+        assert!(answered.try_recv().is_err());
+
+        // "Continue" answers the worker, and the card plays out.
+        let _ = update(&mut state, Message::QualcommInjectAnswered(true));
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert!(!qualcomm::inject_check_open(&state));
+        assert_eq!(answered.try_recv(), Ok(firehose::InjectAnswer::Upload));
+        // The injection itself is still running: the card closing is not the
+        // end of it.
+        assert!(state.flash.qualcomm.busy);
+
+        // A job that ended before the answer arrived leaves no card behind, and
+        // an answer nobody waits for is dropped.
+        let _ = update(&mut state, Message::QualcommFirehoseReady(Ok(None)));
+        assert!(!qualcomm::inject_check_open(&state));
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::InjectCancelled
+        );
+        assert!(!state.flash.qualcomm.busy);
+
+        let _ = update(&mut state, Message::QualcommInjectAnswered(false));
+        assert_eq!(answered.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected));
+    }
+
+    /// "Reselect…" asks for another file without ending the session: the card
+    /// steps aside for the picker, and the file that comes back goes to the
+    /// worker, which asks again with it.
+    #[test]
+    fn the_identity_card_can_take_another_programmer() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.busy = true;
+
+        let (answer, answered) = std::sync::mpsc::channel::<firehose::InjectAnswer>();
+        state.flash.qualcomm.injection = Some(InjectionWait {
+            answer,
+            preflight: Some(firehose::Preflight {
+                identity: firehose::Identity {
+                    hw_id: 0x0028_c0e1_0051_a012,
+                    msm_id: 0x28c0_e1,
+                    oem_id: 0x0051,
+                    model_id: 0xa012,
+                    pk_hash: Some(vec![0x3c, 0xce, 0xb5, 0x5b]),
+                },
+                programmer: std::path::PathBuf::from("first.elf"),
+                programmer_hash: Err("it is neither an ELF nor an MBN".to_owned()),
+            }),
+            reselecting: false,
+        });
+        assert!(qualcomm::inject_check_open(&state));
+
+        // The card goes away while the picker is up, and the worker is not
+        // answered yet.
+        let _ = update(&mut state, Message::QualcommInjectReselect);
+        assert!(!qualcomm::inject_check_open(&state));
+        assert_eq!(overlay_key(&state), OVERLAY_NONE);
+        assert!(answered.try_recv().is_err());
+        assert!(state.flash.qualcomm.injection.is_some());
+
+        // Dismissing the picker brings the card back with the file the worker
+        // still has.
+        let _ = update(&mut state, Message::QualcommProgrammerPicked(None));
+        assert!(qualcomm::inject_check_open(&state));
+
+        // Picking one hands it to the worker instead of starting over.
+        let _ = update(&mut state, Message::QualcommInjectReselect);
+        let _ = update(
+            &mut state,
+            Message::QualcommProgrammerPicked(Some(std::path::PathBuf::from("second.elf"))),
+        );
+        assert_eq!(
+            answered.try_recv(),
+            Ok(firehose::InjectAnswer::Reselect(
+                std::path::PathBuf::from("second.elf")
+            ))
+        );
+        // The session is still the one that is running: no new log, no new
+        // busy state.
+        assert!(state.flash.qualcomm.injection.is_some());
+        assert!(state.flash.qualcomm.busy);
+
+        // The worker asks again with the file it read.
+        let _ = update(
+            &mut state,
+            Message::QualcommInjectIdentified(firehose::Preflight {
+                identity: firehose::Identity {
+                    hw_id: 0x0028_c0e1_0051_a012,
+                    msm_id: 0x28c0_e1,
+                    oem_id: 0x0051,
+                    model_id: 0xa012,
+                    pk_hash: Some(vec![0x3c, 0xce, 0xb5, 0x5b]),
+                },
+                programmer: std::path::PathBuf::from("second.elf"),
+                programmer_hash: Ok(vec![0x3c, 0xce, 0xb5, 0x5b]),
+            }),
+        );
+
+        assert!(qualcomm::inject_check_open(&state));
+        assert_eq!(
+            state
+                .flash
+                .qualcomm
+                .injection
+                .as_ref()
+                .and_then(|wait| wait.preflight.as_ref())
+                .map(|preflight| preflight.programmer.clone()),
+            Some(std::path::PathBuf::from("second.elf"))
+        );
+    }
+
+    /// "Cancel" at the identity card stops the injection: the answer is `false`,
+    /// so the worker resets the phone instead of uploading the programmer.
+    #[test]
+    fn cancelling_the_identity_card_stops_the_injection() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.busy = true;
+
+        let (answer, answered) = std::sync::mpsc::channel::<firehose::InjectAnswer>();
+        state.flash.qualcomm.injection = Some(InjectionWait {
+            answer,
+            preflight: Some(firehose::Preflight {
+                identity: firehose::Identity {
+                    hw_id: 0x0028_c0e1_0051_a012,
+                    msm_id: 0x28c0_e1,
+                    oem_id: 0x0051,
+                    model_id: 0xa012,
+                    pk_hash: Some(vec![0x3c, 0xce, 0xb5, 0x5b]),
+                },
+                programmer: std::path::PathBuf::from("prog_firehose_ddr.elf"),
+                programmer_hash: Ok(vec![0x3c, 0xce, 0xb5, 0x5b]),
+            }),
+            reselecting: false,
+        });
+        assert!(qualcomm::inject_check_open(&state));
+
+        let _ = update(&mut state, Message::QualcommInjectAnswered(false));
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert!(!qualcomm::inject_check_open(&state));
+        assert_eq!(answered.try_recv(), Ok(firehose::InjectAnswer::Cancel));
+
+        // The worker answers with nothing to apply, and the page says the
+        // injection was stopped rather than failed.
+        let _ = update(&mut state, Message::QualcommFirehoseReady(Ok(None)));
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::InjectCancelled
+        );
+        assert!(state.flash.qualcomm.partitions.is_empty());
+    }
+
     /// A finished injection hands the table to the page; a failed one clears
     /// it, so a stale table never sits next to an error.
     #[test]
@@ -14120,7 +14737,7 @@ mod tests {
 
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(firehose::Table {
+            Message::QualcommFirehoseReady(Ok(Some(firehose::Table {
                 storage: StorageType::Ufs,
                 partitions: vec![
                     firehose::Partition {
@@ -14138,7 +14755,7 @@ mod tests {
                         sector_size: 4096,
                     },
                 ],
-            })),
+            }))),
         );
 
         assert_eq!(state.flash.qualcomm.partitions.len(), 2);
@@ -14185,7 +14802,7 @@ mod tests {
 
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(table("boot"))),
+            Message::QualcommFirehoseReady(Ok(Some(table("boot")))),
         );
         assert_eq!(
             state.flash.qualcomm.selected,
@@ -14284,7 +14901,7 @@ mod tests {
         // A new table is a new list of rows, so no selection carries over.
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(table("system"))),
+            Message::QualcommFirehoseReady(Ok(Some(table("system")))),
         );
         assert_eq!(
             state.flash.qualcomm.selected,
@@ -14312,7 +14929,7 @@ mod tests {
 
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(table.clone())),
+            Message::QualcommFirehoseReady(Ok(Some(table.clone()))),
         );
         assert_eq!(state.flash.qualcomm.partitions.len(), 2);
 
@@ -14327,7 +14944,7 @@ mod tests {
         // With one, the page is busy until the read answers.
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(table.clone())),
+            Message::QualcommFirehoseReady(Ok(Some(table.clone()))),
         );
         state.flash.qualcomm.programmer_uploaded = true;
         let _ = update(&mut state, Message::QualcommRefresh);
@@ -14365,7 +14982,7 @@ mod tests {
         state.flash.qualcomm.port = Some("COM7".to_owned());
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(firehose::Table {
+            Message::QualcommFirehoseReady(Ok(Some(firehose::Table {
                 storage: StorageType::Ufs,
                 partitions: (0..2_u64)
                     .map(|index| firehose::Partition {
@@ -14376,7 +14993,7 @@ mod tests {
                         sector_size: 4096,
                     })
                     .collect(),
-            })),
+            }))),
         );
         state.flash.qualcomm.programmer_uploaded = true;
         let _ = update(&mut state, Message::QualcommPartitionClicked(0));
@@ -14534,16 +15151,207 @@ mod tests {
             sectors: 1024,
         };
         assert_eq!(
-            ImageFit::of(4096, &lun),
+            ImageFit::of(4096, lun.bytes()),
             ImageFit::Smaller(lun.bytes() - 4096)
         );
-        assert_eq!(ImageFit::of(lun.bytes(), &lun), ImageFit::Exact);
+        assert_eq!(ImageFit::of(lun.bytes(), lun.bytes()), ImageFit::Exact);
         assert_eq!(
-            ImageFit::of(lun.bytes() + 4096, &lun),
+            ImageFit::of(lun.bytes() + 4096, lun.bytes()),
             ImageFit::Larger(4096)
         );
 
         std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// The partition-backup card: one row per image, each written to the
+    /// partition the image is named after.
+    #[test]
+    fn the_backup_card_assigns_the_images_to_their_partitions() {
+        let directory = std::env::temp_dir().join(format!(
+            "lmnflash-backup-card-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+
+        let mut state = State::default();
+
+        // A table has to be there: the partitions are the targets.
+        let _ = update(
+            &mut state,
+            Message::QualcommDangerZoneSelected(DangerEntry::FlashBackup),
+        );
+        assert!(!qualcomm::backup_open(&state));
+
+        state.flash.qualcomm.partitions = vec![
+            firehose::Partition {
+                name: "boot_a".to_owned(),
+                lun: 0,
+                start_lba: 0,
+                end_lba: 4095,
+                sector_size: 4096,
+            },
+            firehose::Partition {
+                name: "system_a".to_owned(),
+                lun: 0,
+                start_lba: 4096,
+                end_lba: 8191,
+                sector_size: 4096,
+            },
+        ];
+
+        let _ = update(
+            &mut state,
+            Message::QualcommDangerZoneSelected(DangerEntry::FlashBackup),
+        );
+        assert!(qualcomm::backup_open(&state));
+
+        let mut paths = Vec::new();
+        for name in ["boot_a.img", "boot.img"] {
+            let path = directory.join(name);
+            std::fs::write(&path, vec![0_u8; 4096]).expect("the image");
+            paths.push(path);
+        }
+
+        let _ = update(
+            &mut state,
+            Message::QualcommBackupImagesPicked(Some(paths.clone())),
+        );
+
+        let backup = state.flash.qualcomm.backup.as_ref().expect("the card is up");
+        // The dump names a file after its partition, so the first image finds
+        // its row on its own; a name the table does not have waits for one.
+        assert_eq!(backup.assigned, [Some(0), None]);
+
+        let images = backup_images(backup, &state.flash.qualcomm.partitions)
+            .expect("one image is assigned");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].path, paths[0]);
+        assert_eq!(images[0].region.name, "boot_a");
+        assert_eq!(
+            (images[0].region.start_lba, images[0].region.end_lba),
+            (0, 4095)
+        );
+
+        // The second image is assigned by hand to the other partition, and the
+        // region follows the table, not the file.
+        let _ = update(&mut state, Message::QualcommBackupAssigned(1, Some(1)));
+        let backup = state.flash.qualcomm.backup.as_ref().expect("the card is up");
+        let images = backup_images(backup, &state.flash.qualcomm.partitions)
+            .expect("two images are assigned");
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[1].path, paths[1]);
+        assert_eq!(images[1].region.name, "system_a");
+        assert_eq!(
+            (images[1].region.start_lba, images[1].region.end_lba),
+            (4096, 8191)
+        );
+
+        // Writing them leaves the rows where they were: the ranges did not
+        // move, so there is nothing to read again.
+        state.flash.qualcomm.busy = true;
+        state.flash.qualcomm.backup = None;
+        let _ = update(&mut state, Message::QualcommBackupFinished(Ok(2)));
+
+        assert!(!state.flash.qualcomm.busy);
+        assert_eq!(
+            state.flash.qualcomm.status,
+            QualcommStatus::BackupDone { count: 2 }
+        );
+        assert_eq!(state.flash.qualcomm.partitions.len(), 2);
+
+        // Closing the card leaves nothing behind.
+        let _ = update(&mut state, Message::QualcommBackupClosed);
+        assert!(!qualcomm::backup_open(&state));
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// An image larger than the partition it is assigned to cannot be written:
+    /// the extra sectors would land on whatever follows.
+    #[test]
+    fn an_image_larger_than_its_partition_is_not_restored() {
+        let path = std::path::PathBuf::from("boot_a.img");
+        let partitions = vec![firehose::Partition {
+            name: "boot_a".to_owned(),
+            lun: 0,
+            start_lba: 0,
+            // Two sectors: 8 KiB, which the image below overruns.
+            end_lba: 1,
+            sector_size: 4096,
+        }];
+
+        let backup = PartitionBackup {
+            files: vec![PickedImage {
+                path,
+                length: 4096 * 3,
+            }],
+            assigned: vec![Some(0)],
+        };
+
+        assert!(backup_images(&backup, &partitions).is_none());
+
+        // The same image on a partition of its own size goes through.
+        let backup = PartitionBackup {
+            files: vec![PickedImage {
+                path: std::path::PathBuf::from("boot_a.img"),
+                length: 4096,
+            }],
+            assigned: vec![Some(0)],
+        };
+        let images = backup_images(&backup, &partitions).expect("the image fits");
+        assert_eq!(images[0].region.name, "boot_a");
+
+        // An image assigned to no partition is not written either.
+        let backup = PartitionBackup {
+            files: vec![PickedImage {
+                path: std::path::PathBuf::from("boot_a.img"),
+                length: 4096,
+            }],
+            assigned: vec![None],
+        };
+        assert!(backup_images(&backup, &partitions).is_none());
+    }
+
+    /// A file is matched to a partition by its name alone, and the case the
+    /// file system kept does not matter.
+    #[test]
+    fn a_file_name_finds_its_partition() {
+        let partitions = vec![
+            firehose::Partition {
+                name: "boot_a".to_owned(),
+                lun: 0,
+                start_lba: 0,
+                end_lba: 0,
+                sector_size: 4096,
+            },
+            firehose::Partition {
+                name: "system_a".to_owned(),
+                lun: 1,
+                start_lba: 0,
+                end_lba: 0,
+                sector_size: 4096,
+            },
+        ];
+
+        for (name, expected) in [
+            ("boot_a.img", Some(0)),
+            ("BOOT_A.IMG", Some(0)),
+            ("system_a.bin", Some(1)),
+            ("Boot_A", Some(0)),
+            // Any extension, or several: the dots are peeled off until the
+            // name is the table's.
+            ("boot_a.raw.bin", Some(0)),
+            ("system_a.tar.gz", Some(1)),
+            ("boot.img", None),
+            ("super.img", None),
+        ] {
+            assert_eq!(
+                partition_index_by_name(std::path::Path::new(name), &partitions),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     /// A whole-storage write leaves the rows behind — but not the media, which
@@ -14752,7 +15560,7 @@ mod tests {
         let mut state = State::default();
         let _ = update(
             &mut state,
-            Message::QualcommFirehoseReady(Ok(firehose::Table {
+            Message::QualcommFirehoseReady(Ok(Some(firehose::Table {
                 storage: StorageType::Ufs,
                 partitions: vec![firehose::Partition {
                     name: "boot_a".to_owned(),
@@ -14761,7 +15569,7 @@ mod tests {
                     end_lba: 4095,
                     sector_size: 4096,
                 }],
-            })),
+            }))),
         );
         state.flash.qualcomm.programmer_uploaded = true;
         let _ = update(&mut state, Message::QualcommPartitionClicked(0));
@@ -15053,7 +15861,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let _ = update(&mut state, Message::QualcommFirehoseReady(Ok(table)));
+        let _ = update(&mut state, Message::QualcommFirehoseReady(Ok(Some(table))));
         assert_eq!(state.flash.qualcomm.selected.len(), 3);
         state.flash.qualcomm.modifiers = iced::keyboard::Modifiers::CTRL;
         let _ = update(&mut state, Message::QualcommPartitionClicked(0));

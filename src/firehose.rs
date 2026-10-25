@@ -48,6 +48,11 @@ const FIREHOSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// listening for commands the moment the upload ends.
 const PROGRAMMER_SETTLE: Duration = Duration::from_secs(4);
 
+/// How long a boot ROM gets to answer the mode switch that ends a command-mode
+/// session. It usually answers at once; one that says nothing wants the
+/// greeting instead (see [`sahara_upload`]).
+const MODE_SWITCH_WAIT: Duration = Duration::from_secs(3);
+
 /// The file types the programmer picker offers: a plain MBN, a single-image
 /// ELF, and the CPIO archive newer platforms use.
 pub(crate) const PROGRAMMER_EXTENSIONS: [&str; 3] = ["mbn", "elf", "melf"];
@@ -74,6 +79,22 @@ const SAHARA_END_OF_IMAGE: u32 = 0x04;
 const SAHARA_DONE: u32 = 0x05;
 /// The device confirms the end of an image, or asks for the next one.
 const SAHARA_DONE_RESP: u32 = 0x06;
+/// The host asks the device to reset itself.
+const SAHARA_RESET: u32 = 0x07;
+/// The device says it is resetting.
+const SAHARA_RESET_RESP: u32 = 0x08;
+/// The host asks the boot ROM to switch to another mode; a boot ROM that is
+/// taking commands has no other way back to uploading.
+const SAHARA_SWITCH_MODE: u32 = 0x0c;
+/// The device says it is ready for the mode the host asked for — what a boot
+/// ROM answers when it is told to take commands instead of an image.
+const SAHARA_CMD_READY: u32 = 0x0b;
+/// The host asks the boot ROM to run one of its own commands.
+const SAHARA_EXECUTE: u32 = 0x0d;
+/// The boot ROM answers a command, naming how many bytes it has ready.
+const SAHARA_EXECUTE_RESP: u32 = 0x0e;
+/// The host asks for those bytes.
+const SAHARA_EXECUTE_DATA: u32 = 0x0f;
 /// "<?xm": the first four bytes of the Firehose XML a phone sends when a
 /// programmer is already running (an earlier injection that never reset it).
 const SAHARA_XML: u32 = 0x6d78_3f3c;
@@ -82,6 +103,16 @@ const SAHARA_VERSION: u32 = 2;
 /// The mode a host that is about to send a programmer asks for. Sahara calls
 /// it "image transfer pending": the phone waits for the host to serve it.
 const SAHARA_MODE_IMAGE_TX_PENDING: u32 = 0;
+/// The mode a host asks for when it wants to run the boot ROM's own commands
+/// rather than an upload.
+const SAHARA_MODE_COMMAND: u32 = 0x03;
+
+/// The boot ROM's "read the hardware ID" command: eight bytes naming the SoC,
+/// the OEM and the model the phone was built for.
+const SAHARA_READ_HW_ID: u32 = 0x02;
+/// The boot ROM's "read the OEM public key hash" command: the SHA-256 of the
+/// root certificate the phone's images are signed against.
+const SAHARA_READ_PK_HASH: u32 = 0x03;
 
 /// The largest Sahara packet accepted (the same limit the reference tools
 /// use; a hello is 48 bytes, a read request 20).
@@ -262,6 +293,97 @@ pub struct Table {
     pub partitions: Vec<Partition>,
 }
 
+/// Who the phone says it is, read from its boot ROM before a programmer is
+/// uploaded.
+///
+/// A programmer is built — and signed — for one SoC and one OEM, and the boot
+/// ROM is the only thing that knows which ones the phone in front of the host
+/// really has. It answers with a single 64-bit hardware ID, which carries four
+/// values: the model in its low sixteen bits, the OEM in the next sixteen, and
+/// the SoC in the twenty-four above them.
+///
+/// The hash of the OEM's public key is a second answer, and the strongest one:
+/// it says which root certificate the phone's images have to be signed against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    /// The hardware ID as the boot ROM reported it.
+    pub hw_id: u64,
+    /// The SoC, e.g. `0x28C0E1` for an MSM8998.
+    pub msm_id: u32,
+    /// The OEM that signed the phone's images.
+    pub oem_id: u16,
+    /// The model, as the OEM numbered it.
+    pub model_id: u16,
+    /// SHA-256 of the OEM's root certificate, when the boot ROM gives it out.
+    pub pk_hash: Option<Vec<u8>>,
+}
+
+impl Identity {
+    /// Reads the four values out of the hardware ID.
+    ///
+    /// `msm_id` is the top 24 bits of the 32-bit half below the hardware
+    /// version, so the top byte of the ID — the hardware version, `0x00` on
+    /// every phone this was written for — is left out of it.
+    fn of(hw_id: u64) -> Self {
+        Self {
+            hw_id,
+            msm_id: ((hw_id >> 32) & 0x00ff_ffff) as u32,
+            oem_id: ((hw_id >> 16) & 0xffff) as u16,
+            model_id: (hw_id & 0xffff) as u16,
+            pk_hash: None,
+        }
+    }
+
+    /// The hardware ID in the sixteen hex digits the tools print it as.
+    pub fn hw_id_text(&self) -> String {
+        format!("{:#018X}", self.hw_id)
+    }
+
+    /// The SoC's twenty-four bits, the way a programmer's file name spells
+    /// them (`prog_firehose_8996_ddr.elf` is MSM8996).
+    pub fn msm_id_text(&self) -> String {
+        format!("{:#08X}", self.msm_id)
+    }
+
+    pub fn oem_id_text(&self) -> String {
+        format!("{:#06X}", self.oem_id)
+    }
+
+    pub fn model_id_text(&self) -> String {
+        format!("{:#06X}", self.model_id)
+    }
+
+    /// The OEM public key hash in hex, `None` when the boot ROM kept it to
+    /// itself.
+    pub fn pk_hash_text(&self) -> Option<String> {
+        let hash = self.pk_hash.as_ref()?;
+
+        Some(hash.iter().map(|byte| format!("{byte:02X}")).collect())
+    }
+
+    /// The one line the session log records it as.
+    fn log_line(&self) -> String {
+        let mut line = format!(
+            "sahara: identity {} (msm {}, oem {}, model {})",
+            self.hw_id_text(),
+            self.msm_id_text(),
+            self.oem_id_text(),
+            self.model_id_text()
+        );
+
+        match &self.pk_hash {
+            Some(hash) => {
+                line.push_str(", pk hash ");
+                line.push_str(&self.pk_hash_text().unwrap_or_default());
+                line.push_str(&format!(" ({} bytes)", hash.len()));
+            }
+            None => line.push_str(", pk hash not reported"),
+        }
+
+        line
+    }
+}
+
 /// One physical partition (LUN) of the storage, as the phone reports it.
 ///
 /// A dump of a whole LUN reads it from its first sector, the partition table
@@ -300,13 +422,20 @@ impl Lun {
 /// configure exactly that one, while [`StorageType::Autodetect`] tries the
 /// candidates in [`candidates`] order until one answers with a GPT. `log`
 /// receives the detailed account of the session.
+///
+/// Before the programmer goes in, `confirm` is handed the identity the boot
+/// ROM reports and has to say whether the upload may go on: this is the only
+/// moment the phone names its SoC, its OEM and its model, and a programmer is
+/// built for one of each. Nothing is checked here — the answer is the user's —
+/// and a `false` resets the phone and ends the session with `Ok(None)`.
 pub fn inject(
     port: &str,
     programmer: &Path,
     storage: StorageType,
     log: &mut FlashLog,
     on_reading: &dyn Fn(),
-) -> Result<Table, String> {
+    confirm: &dyn Fn(Preflight) -> InjectAnswer,
+) -> Result<Option<Table>, String> {
     log.line(format!(
         "LMN Flash {} - Partition Manager",
         env!("CARGO_PKG_VERSION")
@@ -314,18 +443,61 @@ pub fn inject(
     log.line(format!("port: {port}"));
     log.line(format!("requested storage: {}", storage_name(storage)));
 
-    let result = inject_session(port, programmer, storage, log, on_reading);
+    let result = inject_session(port, programmer, storage, log, on_reading, confirm);
 
     match &result {
-        Ok(table) => log.line(format!(
+        Ok(Some(table)) => log.line(format!(
             "done: {} partitions on {}",
             table.partitions.len(),
             storage_name(table.storage)
         )),
+        Ok(None) => log.line("stopped: the programmer was not uploaded"),
         Err(error) => log.line(format!("failed: {error}")),
     }
 
     result
+}
+
+/// What the user chose at the identity card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InjectAnswer {
+    /// Go on: upload the programmer the card names.
+    Upload,
+    /// Another file was picked: read it instead, and ask again. Nothing has
+    /// been uploaded yet, so the session simply goes on with the new one.
+    Reselect(PathBuf),
+    /// Stop here: the phone is reset and nothing is uploaded.
+    Cancel,
+}
+
+/// The programmer an upload serves, and the file it came from.
+///
+/// It is kept whole rather than as bytes alone so a pick of another file in the
+/// middle of the identity card can replace it without touching the phone.
+struct Programmer {
+    path: PathBuf,
+    images: Vec<Option<Vec<u8>>>,
+}
+
+impl Programmer {
+    fn open(path: &Path) -> Result<Self, String> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            images: programmer_images(path)?,
+        })
+    }
+
+    /// The line the session log opens with.
+    fn log_line(&self) -> String {
+        let count = self.images.iter().filter(|image| image.is_some()).count();
+        let bytes: usize = self.images.iter().flatten().map(Vec::len).sum();
+
+        format!(
+            "programmer: {} ({}, {count} image(s))",
+            self.path.display(),
+            crate::firmware::human_size(bytes as u64)
+        )
+    }
 }
 
 fn inject_session(
@@ -334,22 +506,19 @@ fn inject_session(
     storage: StorageType,
     log: &mut FlashLog,
     on_reading: &dyn Fn(),
-) -> Result<Table, String> {
-    let images = programmer_images(programmer)?;
-    let image_count = images.iter().filter(|image| image.is_some()).count();
-    let image_bytes: usize = images.iter().flatten().map(Vec::len).sum();
-    log.line(format!(
-        "programmer: {} ({}, {image_count} image(s))",
-        programmer.display(),
-        crate::firmware::human_size(image_bytes as u64)
-    ));
+    confirm: &dyn Fn(Preflight) -> InjectAnswer,
+) -> Result<Option<Table>, String> {
+    let mut programmer = Programmer::open(programmer)?;
+    log.line(programmer.log_line());
 
     let mut session = Session {
         transport: Transport::open(port)?,
         log,
     };
 
-    sahara_upload(&mut session, &images)?;
+    if !sahara_upload(&mut session, &mut programmer, confirm)? {
+        return Ok(None);
+    }
     session.line("sahara: the programmer was uploaded");
 
     // The programmer needs a moment before it listens for commands, and the
@@ -370,7 +539,7 @@ fn inject_session(
     // a `<response>` of its own), so the greeting is not read here: the first
     // command's response reader drains it before the answer it waits for.
     let mut last_error = String::from("the phone did not report any storage");
-    for candidate in candidates(storage, programmer) {
+    for candidate in candidates(storage, &programmer.path) {
         let sector_size = sector_size(candidate);
         session.line(format!(
             "storage {}: configuring ({} byte sectors)",
@@ -405,10 +574,10 @@ fn inject_session(
                     ));
                 }
 
-                return Ok(Table {
+                return Ok(Some(Table {
                     storage: candidate,
                     partitions,
-                });
+                }));
             }
             Err(error) => {
                 session.line(format!(
@@ -421,6 +590,76 @@ fn inject_session(
     }
 
     Err(last_error)
+}
+
+/// What an injection asks the user to look at before the programmer goes in.
+///
+/// The two sides of the same question: the boot ROM says which root key the
+/// phone is fused for, and the programmer carries the one it is signed
+/// against. They have to be the same key — unless the phone is unfused, in
+/// which case it checks no signature at all and any programmer will do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preflight {
+    /// Who the boot ROM says the phone is.
+    pub identity: Identity,
+    /// The programmer that is waiting behind the card.
+    pub programmer: PathBuf,
+    /// The hash of the root certificate the programmer is signed against, or
+    /// why it could not be read out of the file.
+    pub programmer_hash: Result<Vec<u8>, String>,
+}
+
+/// The root keys Qualcomm's own test signing uses. A phone that reports either
+/// of them has no fused key of its own: secure boot is off, and the boot ROM
+/// accepts a programmer signed with anything, so the two keys cannot disagree.
+const TEST_ROOTS: [[u8; 32]; 2] = [
+    [
+        0xcc, 0x31, 0x53, 0xa8, 0x02, 0x93, 0x93, 0x9b, 0x90, 0xd0, 0x2d, 0x3b, 0xf8, 0xb2, 0x3e,
+        0x02, 0x92, 0xe4, 0x52, 0xfe, 0xf6, 0x62, 0xc7, 0x49, 0x98, 0x42, 0x1a, 0xda, 0xd4, 0x2a,
+        0x38, 0x0f,
+    ],
+    [
+        0x7b, 0xe4, 0x9b, 0x72, 0xf9, 0xe4, 0x33, 0x72, 0x23, 0xcc, 0xb8, 0x4d, 0x6e, 0xcc, 0xca,
+        0x4e, 0x61, 0xce, 0x16, 0xe3, 0x60, 0x2a, 0xc2, 0x00, 0x8c, 0xb1, 0x8b, 0x75, 0xba, 0xbe,
+        0x6d, 0x09,
+    ],
+];
+
+impl Preflight {
+    /// Whether the phone is unfused — that is, whether it reported one of
+    /// Qualcomm's test root keys instead of a real one.
+    ///
+    /// An unfused boot ROM verifies no signature, so a programmer that is
+    /// signed against a different key still runs; the two hashes are not
+    /// supposed to match there.
+    pub fn unfused(&self) -> bool {
+        let Some(phone) = self.identity.pk_hash.as_deref() else {
+            return false;
+        };
+
+        TEST_ROOTS
+            .iter()
+            .any(|root| root.as_slice() == phone)
+    }
+
+    /// Whether the programmer is signed against the key the phone is fused for.
+    ///
+    /// `None` when the two cannot be compared — the programmer's chain could
+    /// not be read, or the boot ROM kept its own hash back.
+    pub fn roots_match(&self) -> Option<bool> {
+        let phone = self.identity.pk_hash.as_ref()?;
+        let programmer = self.programmer_hash.as_ref().ok()?;
+
+        Some(phone == programmer)
+    }
+
+    /// The programmer's root key hash in hex, `None` when it could not be
+    /// read.
+    pub fn programmer_hash_text(&self) -> Option<String> {
+        let hash = self.programmer_hash.as_ref().ok()?;
+
+        Some(hash.iter().map(|byte| format!("{byte:02X}")).collect())
+    }
 }
 
 /// What the page's Reboot menu asks the phone to do before it resets.
@@ -1217,31 +1456,41 @@ pub struct LunImage {
     pub lun: u8,
 }
 
-/// How long one image is, checked against the LUN it is written to.
+/// How long one image is, checked against the room it is written into.
 ///
-/// An image may be shorter than its LUN — a partial backup is restored as far
-/// as it goes — but one byte longer than the LUN is refused: the extra sectors
-/// would spill into whatever the phone keeps after it.
+/// An image may be shorter than its partition — a partial backup is restored as
+/// far as it goes — but one byte longer is refused: the extra sectors would
+/// spill into whatever the phone keeps after it. `what` names the target in the
+/// error, whichever kind of partition it is.
+fn image_length(path: &Path, capacity: u64, what: &str) -> Result<u64, String> {
+    let length = std::fs::metadata(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?
+        .len();
+    if length == 0 {
+        return Err(format!("{} is empty", path.display()));
+    }
+    if length > capacity {
+        return Err(format!(
+            "{} holds {length} bytes, but {what} only has {capacity} bytes",
+            path.display()
+        ));
+    }
+
+    Ok(length)
+}
+
+/// How long one image is, checked against the LUN it is written to.
 fn checked_image(image: &LunImage, luns: &[Lun]) -> Result<(Lun, u64), String> {
     let lun = luns
         .iter()
         .find(|lun| lun.number == image.lun)
         .ok_or_else(|| format!("this storage has no LUN {}", image.lun))?;
 
-    let length = std::fs::metadata(&image.path)
-        .map_err(|error| format!("could not read {}: {error}", image.path.display()))?
-        .len();
-    if length == 0 {
-        return Err(format!("{} is empty", image.path.display()));
-    }
-    if length > lun.bytes() {
-        return Err(format!(
-            "{} holds {length} bytes, but LUN {} only has {} bytes",
-            image.path.display(),
-            lun.number,
-            lun.bytes()
-        ));
-    }
+    let length = image_length(
+        &image.path,
+        lun.bytes(),
+        &format!("LUN {}", lun.number),
+    )?;
 
     Ok((lun.clone(), length))
 }
@@ -1336,6 +1585,121 @@ fn flash_storage_session(
         )?;
 
         before = before.saturating_add(padded(*length, lun.sector_size));
+    }
+
+    Ok(images.len())
+}
+
+/// One partition image and the partition it is written back to.
+///
+/// The range is the one the table names, so the image lands exactly where the
+/// partition is — and an image that is too long is refused rather than written
+/// over the next one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionImage {
+    pub path: PathBuf,
+    pub region: Region,
+}
+
+/// Writes partition images back to the partitions they were dumped from.
+///
+/// This is the counterpart of a dump of selected partitions: one file per
+/// partition, written back to the range the table gives it. Nothing is erased
+/// first, so an image shorter than its partition leaves the rest of it as it
+/// was, and every size is checked before the first sector is written.
+pub fn flash_partitions(
+    port: &str,
+    images: &[RegionImage],
+    log: &mut FlashLog,
+    on_progress: &dyn Fn(Progress),
+) -> Result<usize, String> {
+    log.line(format!(
+        "LMN Flash {} - Partition Manager",
+        env!("CARGO_PKG_VERSION")
+    ));
+    log.line(format!("port: {port}"));
+    log.line(format!("action: write {} partition image(s)", images.len()));
+    for image in images {
+        log.line(format!(
+            "  lun {} {} (sectors {}..{}): {}",
+            image.region.lun,
+            image.region.name,
+            image.region.start_lba,
+            image.region.end_lba,
+            image.path.display()
+        ));
+    }
+
+    let result = flash_partitions_session(port, images, log, on_progress);
+
+    match &result {
+        Ok(count) => log.line(format!("done: {count} image(s) written")),
+        Err(error) => log.line(format!("failed: {error}")),
+    }
+
+    result
+}
+
+fn flash_partitions_session(
+    port: &str,
+    images: &[RegionImage],
+    log: &mut FlashLog,
+    on_progress: &dyn Fn(Progress),
+) -> Result<usize, String> {
+    if images.is_empty() {
+        return Err("there is no image to write".to_owned());
+    }
+
+    // Every image is checked against its partition before the port is opened.
+    let mut checked = Vec::with_capacity(images.len());
+    for image in images {
+        let length = image_length(
+            &image.path,
+            image.region.bytes(),
+            &format!("partition {}", image.region.name),
+        )?;
+        checked.push(length);
+    }
+
+    let mut session = Session {
+        transport: Transport::open(port)?,
+        log,
+    };
+    session.set_read_timeout(FIREHOSE_TIMEOUT)?;
+
+    let overall_total = images
+        .iter()
+        .zip(&checked)
+        .map(|(image, length)| padded(*length, image.region.sector_size))
+        .fold(0_u64, u64::saturating_add);
+    let mut before = 0_u64;
+
+    for (image, length) in images.iter().zip(&checked) {
+        let mut file = File::open(&image.path)
+            .map_err(|error| format!("could not read {}: {error}", image.path.display()))?;
+
+        session.line(format!(
+            "writing {} ({length} bytes) to lun {} {} (sectors {}..{})",
+            image.path.display(),
+            image.region.lun,
+            image.region.name,
+            image.region.start_lba,
+            image.region.end_lba
+        ));
+        program_image(
+            &mut session,
+            &image.region,
+            &mut Image::File {
+                file: &mut file,
+                path: &image.path,
+                length: *length,
+            },
+            before,
+            overall_total,
+            on_progress,
+        )?;
+
+        before = before.saturating_add(padded(*length, image.region.sector_size));
     }
 
     Ok(images.len())
@@ -1846,38 +2210,177 @@ fn align4(value: usize) -> usize {
 
 /// The transport with Sahara: answers the greeting, serves the image slices
 /// the phone asks for, and finishes when the phone has every image.
+///
+/// Returns whether the upload went ahead: the boot ROM is asked who the phone
+/// is before the programmer goes in, `confirm` decides whether it may, and a
+/// `false` leaves the phone reset and nothing uploaded.
 fn sahara_upload(
     session: &mut Session<'_>,
-    images: &[Option<Vec<u8>>],
-) -> Result<(), String> {
+    programmer: &mut Programmer,
+    confirm: &dyn Fn(Preflight) -> InjectAnswer,
+) -> Result<bool, String> {
+    let mut greeted = false;
+    // A packet the exchange already read, waiting to be handled by the loop.
+    let mut pending: Option<Sahara> = None;
+
     loop {
-        match session.read_sahara()? {
+        let packet = match pending.take() {
+            Some(packet) => packet,
+            None => session.read_sahara()?,
+        };
+
+        match packet {
             Sahara::AlreadyFirehose => {
                 session.line("sahara: the phone is already in Firehose mode");
-                return Ok(());
+                return Ok(true);
             }
-            Sahara::Hello => {
-                session.line("sahara: hello");
-                // The reply names the mode the host wants; the version and
-                // "compatible" numbers are 2 and 1 like the reference tools.
-                let mut body = Vec::with_capacity(40);
-                body.extend_from_slice(&SAHARA_VERSION.to_le_bytes());
-                body.extend_from_slice(&1_u32.to_le_bytes());
-                body.extend_from_slice(&0_u32.to_le_bytes()); // status: success
-                body.extend_from_slice(&SAHARA_MODE_IMAGE_TX_PENDING.to_le_bytes());
-                body.extend_from_slice(&[0_u8; 24]);
-                session.send_packet(SAHARA_HELLO_RESP, &body)?;
+            Sahara::Hello { version } => {
+                session.line(format!("sahara: hello (protocol {version})"));
+
+                // A boot ROM is the only thing that knows which SoC, OEM and
+                // model the phone really is; a programmer is built for one of
+                // each. The greeting is answered once, asking for command mode,
+                // which is how the identity is read — and a boot ROM that has
+                // taken commands only goes back to uploading on a mode switch.
+                // A programmer that is several images long greets a second time
+                // between them, and is not asked again.
+                if !greeted {
+                    greeted = true;
+
+                    if version < 2 {
+                        session.line(format!(
+                            "sahara: protocol {version} has no command mode; the identity is not available"
+                        ));
+                        session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                        session.line("sahara: hello response (image transfer mode)");
+                        continue;
+                    }
+
+                    if let Err(error) = session.enter_command_mode() {
+                        session.line(format!(
+                            "sahara: the phone did not take commands ({error}); the upload goes on without an identity"
+                        ));
+                        session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                        session.line("sahara: hello response (image transfer mode)");
+                        continue;
+                    }
+
+                    match read_identity(session, version) {
+                        Ok(identity) => {
+                            session.line(identity.log_line());
+
+                            // The card stays up until the user goes on: another
+                            // file may be picked in the meantime, and nothing has
+                            // been uploaded yet, so the session simply goes on
+                            // with it.
+                            loop {
+                                let preflight = Preflight {
+                                    identity: identity.clone(),
+                                    programmer: programmer.path.clone(),
+                                    programmer_hash: programmer_root_hash(
+                                        &programmer.images,
+                                        crate::mbn::Hash::of_length(
+                                            identity.pk_hash.as_ref().map_or(0, Vec::len),
+                                        ),
+                                    ),
+                                };
+
+                                match &preflight.programmer_hash {
+                                    Ok(hash) => session.line(format!(
+                                        "programmer: root key hash {} ({} bytes)",
+                                        hash.iter()
+                                            .map(|byte| format!("{byte:02X}"))
+                                            .collect::<String>(),
+                                        hash.len()
+                                    )),
+                                    Err(error) => session.line(format!(
+                                        "programmer: the root key hash was not read ({error})"
+                                    )),
+                                }
+
+                                match confirm(preflight) {
+                                    InjectAnswer::Upload => break,
+                                    InjectAnswer::Cancel => {
+                                        session.line("sahara: the user stopped the upload");
+                                        // The phone is still taking commands, and
+                                        // the reset is the one packet that ends a
+                                        // session from anywhere. If it is not
+                                        // answered either, the log says so — the
+                                        // page still reports a cancellation, which
+                                        // is what it was.
+                                        match session.sahara_reset() {
+                                            Ok(()) => session.line("sahara: the phone was reset"),
+                                            Err(error) => session.line(format!(
+                                                "sahara: the reset was not answered ({error}); the phone may have to be unplugged"
+                                            )),
+                                        }
+                                        return Ok(false);
+                                    }
+                                    InjectAnswer::Reselect(path) => {
+                                        session.line(format!(
+                                            "sahara: another programmer was picked: {}",
+                                            path.display()
+                                        ));
+
+                                        match Programmer::open(&path) {
+                                            Ok(picked) => {
+                                                session.line(picked.log_line());
+                                                *programmer = picked;
+                                            }
+                                            // The card comes back with the file
+                                            // that is still loaded, and the log
+                                            // says why the new one was not.
+                                            Err(error) => session
+                                                .line(format!("programmer: {error}")),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => session.line(format!(
+                            "sahara: the identity was not read ({error}); the upload goes on with it unknown"
+                        )),
+                    }
+
+                    // Whether or not the phone answered, it is taking commands
+                    // now, where a greeting is refused: the mode switch is what
+                    // puts it back in front of the upload. What it answers to
+                    // that is the boot ROM's business — being ready, asking for
+                    // the first slice, or nothing at all — so the answer is put
+                    // back for the loop to handle, and a boot ROM that says
+                    // nothing gets the greeting it is waiting for.
+                    session.switch_to_upload_mode()?;
+                    match session.try_read_sahara(MODE_SWITCH_WAIT)? {
+                        Some(answer) => {
+                            session.line("sahara: switched back to image transfer mode");
+                            pending = Some(answer);
+                        }
+                        None => {
+                            session.line(
+                                "sahara: the mode switch was not answered; greeting the phone instead",
+                            );
+                            session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
+                            session.line("sahara: hello response (image transfer mode)");
+                        }
+                    }
+                    continue;
+                }
+
+                session.send_hello(SAHARA_MODE_IMAGE_TX_PENDING)?;
                 session.line("sahara: hello response (image transfer mode)");
             }
             Sahara::ReadData { image, offset, len } => {
+                if !greeted {
+                    return Err("the phone asked for an image before it was greeted".to_owned());
+                }
                 session.line(format!(
                     "sahara: image {image}, {} bytes at offset {offset}",
                     len
                 ));
                 // A single-image programmer is always added as image 0, even
                 // when the phone asks for id 13.
-                let index = if images.len() == 1 { 0 } else { image as usize };
-                let Some(Some(data)) = images.get(index) else {
+                let index = if programmer.images.len() == 1 { 0 } else { image as usize };
+                let Some(Some(data)) = programmer.images.get(index) else {
                     return Err(format!("the phone asked for image {image}, which the programmer does not carry"));
                 };
 
@@ -1902,17 +2405,87 @@ fn sahara_upload(
                 session.line(format!("sahara: done response (status {status})"));
                 // 1 means every image went through; a multi-image programmer
                 // keeps the loop alive while the phone asks for the next one.
-                if status == 1 || images.len() <= 1 {
-                    return Ok(());
+                if status == 1 || programmer.images.len() <= 1 {
+                    return Ok(true);
                 }
+            }
+            // The boot ROM said it was ready for the upload after the mode
+            // switch; the first slice request follows.
+            Sahara::CommandReady => session.line("sahara: ready for the image"),
+            Sahara::CommandResponse { .. } | Sahara::Reset => {
+                return Err(
+                    "the phone answered a command while the programmer was being uploaded"
+                        .to_owned(),
+                );
             }
         }
     }
 }
 
+/// Reads the answers the boot ROM gives about itself, once it is taking
+/// commands.
+///
+/// Two commands: the hardware ID, and then the OEM public key hash. A boot ROM
+/// that keeps the hash back is no reason to stop — the ids are what a programmer
+/// is matched by, and a protocol 3 boot ROM is known to withhold the hash — so
+/// only the hardware ID read can fail the lot.
+fn read_identity(session: &mut Session<'_>, version: u32) -> Result<Identity, String> {
+    let hw_id = session.command(SAHARA_READ_HW_ID)?;
+    if hw_id.len() < 8 {
+        return Err(format!(
+            "the phone answered {} bytes to the hardware ID read, not eight",
+            hw_id.len()
+        ));
+    }
+
+    let mut identity = Identity::of(u64::from_le_bytes(hw_id[..8].try_into().unwrap()));
+
+    if version < 3 {
+        match session.command(SAHARA_READ_PK_HASH) {
+            Ok(hash) if hash.len() >= 32 => identity.pk_hash = Some(hash[..32].to_vec()),
+            Ok(hash) => session.line(format!(
+                "sahara: the PK hash read answered {} bytes, not the 32 of a SHA-256",
+                hash.len()
+            )),
+            Err(error) => session.line(format!("sahara: the PK hash was not read ({error})")),
+        }
+    } else {
+        session.line(format!(
+            "sahara: protocol {version} does not hand out the PK hash"
+        ));
+    }
+
+    Ok(identity)
+}
+
+/// Reads the hash of the root certificate a programmer is signed against.
+///
+/// A `.melf` carries several images and only some of them are signed, so every
+/// one of them is tried until one holds a chain.
+fn programmer_root_hash(
+    images: &[Option<Vec<u8>>],
+    hash: crate::mbn::Hash,
+) -> Result<Vec<u8>, String> {
+    let mut images = images.iter().flatten();
+    let mut reason = String::from("the programmer carries no image");
+
+    for image in images.by_ref() {
+        match crate::mbn::root_hash(image, hash) {
+            Ok(root) => return Ok(root),
+            Err(error) => reason = error,
+        }
+    }
+
+    Err(reason)
+}
+
 /// The Sahara packets the upload reacts to.
 enum Sahara {
-    Hello,
+    Hello {
+        /// The boot ROM's Sahara version: a protocol 2 boot ROM is the one
+        /// that can be asked who the phone is.
+        version: u32,
+    },
     ReadData {
         image: u64,
         offset: u64,
@@ -1925,6 +2498,28 @@ enum Sahara {
         status: u32,
     },
     AlreadyFirehose,
+    /// The boot ROM took the mode it was asked for and waits for commands.
+    CommandReady,
+    /// The boot ROM ran a command and has `len` bytes ready to be read.
+    CommandResponse { command: u32, len: u32 },
+    /// The boot ROM is resetting.
+    Reset,
+}
+
+impl Sahara {
+    /// What the packet was, for the errors that name one.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Hello { .. } => "a greeting",
+            Self::ReadData { .. } => "an image request",
+            Self::EndOfImage { .. } => "an end of image",
+            Self::DoneResp { .. } => "a done response",
+            Self::AlreadyFirehose => "Firehose XML",
+            Self::CommandReady => "a command-ready answer",
+            Self::CommandResponse { .. } => "a command response",
+            Self::Reset => "a reset response",
+        }
+    }
 }
 
 // --- Firehose -------------------------------------------------------------
@@ -2466,6 +3061,9 @@ struct Transport {
     port: SerialPort,
     pending: Vec<u8>,
     started: usize,
+    /// How long a read waits for the phone, so a shorter window can be tried
+    /// and the port put back the way it was.
+    timeout: Duration,
 }
 
 impl Transport {
@@ -2486,6 +3084,7 @@ impl Transport {
             port,
             pending: Vec::new(),
             started: 0,
+            timeout: TIMEOUT,
         })
     }
 
@@ -2505,7 +3104,36 @@ impl Transport {
     fn set_read_timeout(&mut self, timeout: Duration) -> Result<(), String> {
         self.port
             .set_read_timeout(timeout)
-            .map_err(|error| format!("could not change the read timeout: {error}"))
+            .map_err(|error| format!("could not change the read timeout: {error}"))?;
+        self.timeout = timeout;
+
+        Ok(())
+    }
+
+    /// Reads one Sahara packet, but gives up after `window` and answers `None`
+    /// when the phone says nothing in it.
+    ///
+    /// What a boot ROM answers to a mode switch varies: a boot ROM that stays
+    /// silent is not an error here, it is one that wants to be greeted instead —
+    /// the caller decides, and the port is left waiting as long as it did.
+    fn try_read_sahara(&mut self, window: Duration) -> Result<Option<Sahara>, String> {
+        let previous = self.timeout;
+        self.port
+            .set_read_timeout(window)
+            .map_err(|error| format!("could not change the read timeout: {error}"))?;
+
+        let answer = self.read_sahara();
+
+        self.port
+            .set_read_timeout(previous)
+            .map_err(|error| format!("could not change the read timeout: {error}"))?;
+
+        match answer {
+            Ok(packet) => Ok(Some(packet)),
+            // Nothing arrived, or what arrived was not a packet: the exchange
+            // below either greets the phone or ends with its own error.
+            Err(_) => Ok(None),
+        }
     }
 
     fn read_exact(&mut self, out: &mut [u8]) -> Result<(), String> {
@@ -2563,6 +3191,108 @@ impl Transport {
         self.send(&packet)
     }
 
+    /// Answers the boot ROM's greeting, asking for `mode`.
+    ///
+    /// The version and "compatible" numbers are 2 and 1 like the reference
+    /// tools report, and the status is success.
+    fn send_hello(&mut self, mode: u32) -> Result<(), String> {
+        let mut body = Vec::with_capacity(40);
+        body.extend_from_slice(&SAHARA_VERSION.to_le_bytes());
+        body.extend_from_slice(&1_u32.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&mode.to_le_bytes());
+        body.extend_from_slice(&[0_u8; 24]);
+
+        self.send_packet(SAHARA_HELLO_RESP, &body)
+    }
+
+    /// Runs one of the boot ROM's own commands and reads its answer.
+    ///
+    /// The exchange is three packets and a raw read: the command goes out, the
+    /// boot ROM says how many bytes it has, the host asks for them, and the
+    /// bytes follow.
+    fn command(&mut self, command: u32) -> Result<Vec<u8>, String> {
+        let mut body = Vec::with_capacity(4);
+        body.extend_from_slice(&command.to_le_bytes());
+        self.send_packet(SAHARA_EXECUTE, &body)?;
+
+        let len = match self.read_sahara()? {
+            Sahara::CommandResponse {
+                command: answered,
+                len,
+            } => {
+                if answered != command {
+                    return Err(format!(
+                        "the phone answered command {answered:#x} when {command:#x} was asked"
+                    ));
+                }
+                len
+            }
+            other => {
+                return Err(format!(
+                    "the phone answered {} instead of a command response",
+                    other.name()
+                ));
+            }
+        };
+
+        self.send_packet(SAHARA_EXECUTE_DATA, &body)?;
+
+        if len > SAHARA_MAX_PACKET {
+            return Err(format!(
+                "the phone has {len} bytes to read, more than a command may carry"
+            ));
+        }
+
+        let mut data = vec![0_u8; len as usize];
+        self.read_exact(&mut data)?;
+
+        Ok(data)
+    }
+
+    /// Answers the greeting with a request for command mode, and waits for the
+    /// boot ROM to say it is ready for commands.
+    fn enter_command_mode(&mut self) -> Result<(), String> {
+        self.send_hello(SAHARA_MODE_COMMAND)?;
+
+        match self.read_sahara()? {
+            Sahara::CommandReady => Ok(()),
+            other => Err(format!(
+                "the phone did not accept command mode ({})",
+                other.name()
+            )),
+        }
+    }
+
+    /// Puts a boot ROM that is taking commands back into the mode it uploads
+    /// in.
+    ///
+    /// A greeting is not accepted any more once the boot ROM is in command mode
+    /// — it answers one with a NAK, which is where an injection used to die —
+    /// so the only way back is Sahara's mode switch. What comes back is left to
+    /// the upload loop: a boot ROM may say it is ready first, or start asking
+    /// for the first slice straight away.
+    fn switch_to_upload_mode(&mut self) -> Result<(), String> {
+        self.send_packet(
+            SAHARA_SWITCH_MODE,
+            &SAHARA_MODE_IMAGE_TX_PENDING.to_le_bytes(),
+        )
+    }
+
+    /// Asks the boot ROM to reset the phone — the way out of a session that
+    /// will not upload anything.
+    fn sahara_reset(&mut self) -> Result<(), String> {
+        self.send_packet(SAHARA_RESET, &[])?;
+
+        match self.read_sahara()? {
+            Sahara::Reset => Ok(()),
+            other => Err(format!(
+                "the phone answered {} to the reset request",
+                other.name()
+            )),
+        }
+    }
+
     /// Reads one Sahara packet.
     fn read_sahara(&mut self) -> Result<Sahara, String> {
         let mut header = [0_u8; 8];
@@ -2592,7 +3322,29 @@ impl Transport {
 /// Reads the body of one Sahara packet.
 fn parse_sahara(command: u32, body: &[u8]) -> Result<Sahara, String> {
     match command {
-        SAHARA_HELLO => Ok(Sahara::Hello),
+        SAHARA_HELLO => {
+            // The greeting is twelve 32-bit fields: the command and its
+            // length, the protocol version, the oldest one it accepts, the
+            // largest packet it takes, the mode it is in, then six reserved.
+            if body.len() < 40 {
+                return Err("the phone sent a malformed greeting".to_owned());
+            }
+
+            Ok(Sahara::Hello {
+                version: u32::from_le_bytes(body[0..4].try_into().unwrap()),
+            })
+        }
+        SAHARA_CMD_READY => Ok(Sahara::CommandReady),
+        SAHARA_RESET_RESP => Ok(Sahara::Reset),
+        SAHARA_EXECUTE_RESP => {
+            if body.len() < 8 {
+                return Err("the phone sent a malformed command response".to_owned());
+            }
+            Ok(Sahara::CommandResponse {
+                command: u32::from_le_bytes(body[0..4].try_into().unwrap()),
+                len: u32::from_le_bytes(body[4..8].try_into().unwrap()),
+            })
+        }
         SAHARA_READ_DATA => {
             if body.len() < 12 {
                 return Err("the phone sent a malformed image request".to_owned());
@@ -3503,5 +4255,255 @@ mod tests {
         assert!(checked_image(&elsewhere, &luns).is_err());
 
         std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// A partition image is checked against the range of its partition before
+    /// the port is opened, so an image that cannot be written is refused while
+    /// nothing has been touched.
+    #[test]
+    fn a_partition_image_is_checked_against_its_partition() {
+        let directory = std::env::temp_dir().join(format!(
+            "lmnflash-partition-flash-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+
+        let region = |name: &str, start_lba: u64, end_lba: u64| Region {
+            name: name.to_owned(),
+            lun: 0,
+            start_lba,
+            end_lba,
+            sector_size: 4096,
+        };
+
+        // Two sectors: 8192 bytes, which is what the partition holds.
+        let boot = region("boot_a", 0, 1);
+        assert_eq!(boot.bytes(), 8192);
+
+        let write = |name: &str, length: usize, region: Region| {
+            let path = directory.join(name);
+            std::fs::write(&path, vec![0x5A_u8; length]).expect("the image");
+            RegionImage { path, region }
+        };
+
+        // Exactly the size of the partition, and shorter: both are written.
+        assert_eq!(
+            image_length(&write("boot_a.img", 8192, boot.clone()).path, boot.bytes(), "partition boot_a")
+                .expect("it fits"),
+            8192
+        );
+        assert_eq!(
+            image_length(&write("boot_a-partial.img", 4096, boot.clone()).path, boot.bytes(), "partition boot_a")
+                .expect("it fits"),
+            4096
+        );
+
+        // One sector more is refused, and named.
+        let oversized = write("boot_a-too-big.img", 12_288, boot.clone());
+        let error = image_length(&oversized.path, boot.bytes(), "partition boot_a")
+            .expect_err("it does not fit");
+        assert!(error.contains("partition boot_a"), "{error}");
+        assert!(error.contains("only has 8192 bytes"), "{error}");
+
+        // An empty file is not an image.
+        let empty = write("boot_a-empty.img", 0, boot.clone());
+        assert!(image_length(&empty.path, boot.bytes(), "partition boot_a").is_err());
+
+        // The write path repeats the check before it opens the port, so a
+        // refusal here never reaches the phone — the port below is not a
+        // device at all.
+        let mut log = FlashLog::create(directory.join("flash.log"));
+        let error = flash_partitions("NOPE", &[oversized], &mut log, &|_| {})
+            .expect_err("it does not fit");
+        assert!(error.contains("partition boot_a"), "{error}");
+
+        let error = flash_partitions("NOPE", &[], &mut log, &|_| {})
+            .expect_err("there is nothing to write");
+        assert!(error.contains("no image"), "{error}");
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// The hardware ID the boot ROM answers with carries all four values the
+    /// card shows: the model in its low sixteen bits, the OEM above it, and the
+    /// SoC above that.
+    #[test]
+    fn the_identity_is_read_out_of_the_hardware_id() {
+        // An MSM8998: the ID `bkerler/edl` prints for one.
+        let identity = Identity::of(0x0028_c0e1_0051_a012);
+
+        assert_eq!(identity.msm_id, 0x28c0_e1);
+        assert_eq!(identity.oem_id, 0x0051);
+        assert_eq!(identity.model_id, 0xa012);
+        assert_eq!(identity.hw_id_text(), "0x0028C0E10051A012");
+        assert_eq!(identity.msm_id_text(), "0x28C0E1");
+        assert_eq!(identity.oem_id_text(), "0x0051");
+        assert_eq!(identity.model_id_text(), "0xA012");
+
+        // A phone whose IDs are small still prints four (and six) digits, so
+        // the rows line up.
+        let identity = Identity::of(0x0000_9600_0000_0001);
+        assert_eq!(identity.msm_id, 0x0096_00);
+        assert_eq!(identity.msm_id_text(), "0x009600");
+        assert_eq!(identity.oem_id_text(), "0x0000");
+        assert_eq!(identity.model_id_text(), "0x0001");
+    }
+
+    /// The key hash is printed as sixty-four uppercase hex digits — the way the
+    /// loaders are matched by — and is simply absent when the boot ROM kept it
+    /// back.
+    #[test]
+    fn the_key_hash_is_printed_as_hex() {
+        let mut identity = Identity::of(0x0028_c0e1_0051_a012);
+        assert_eq!(identity.pk_hash_text(), None);
+
+        identity.pk_hash = Some(vec![
+            0x3c, 0xce, 0xb5, 0x5b, 0x6d, 0x88, 0xa0, 0xbe, 0xa0, 0xe2, 0x4d, 0x96, 0x41, 0x50, 0x0f,
+            0xa2, 0x39, 0x73, 0x8b, 0x42, 0x57, 0x50, 0x31, 0x18, 0x8d, 0x3a, 0xaf, 0x92, 0x34,
+            0x9b, 0x3b, 0x14,
+        ]);
+
+        let text = identity.pk_hash_text().expect("the hash was reported");
+        assert_eq!(text.len(), 64);
+        assert_eq!(
+            text,
+            "3CCEB55B6D88A0BEA0E24D9641500FA239738B42575031188D3AAF92349B3B14"
+        );
+        // The log carries it next to the ids, and says how long it was.
+        assert!(identity.log_line().contains("pk hash 3CCEB55B"), "{}", identity.log_line());
+        assert!(identity.log_line().contains("(32 bytes)"));
+    }
+
+    /// The greeting is read for its protocol version — a Sahara 1 boot ROM has
+    /// no command mode, so it is never asked who the phone is.
+    #[test]
+    fn a_greeting_carries_the_protocol_version() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2_u32.to_le_bytes());
+        body.extend_from_slice(&1_u32.to_le_bytes());
+        body.extend_from_slice(&SAHARA_MAX_PACKET.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&[0_u8; 24]);
+
+        match parse_sahara(SAHARA_HELLO, &body).expect("a greeting") {
+            Sahara::Hello { version } => assert_eq!(version, 2),
+            other => panic!("a greeting was expected, not {}", other.name()),
+        }
+
+        // A greeting too short to hold the version is refused rather than
+        // guessed at.
+        assert!(parse_sahara(SAHARA_HELLO, &body[..8]).is_err());
+    }
+
+    /// The three packets of a boot ROM command: ready, the answer's length,
+    /// and the reset response that ends a session nobody uploads to.
+    #[test]
+    fn the_command_packets_are_read() {
+        assert!(matches!(
+            parse_sahara(SAHARA_CMD_READY, &[]),
+            Ok(Sahara::CommandReady)
+        ));
+        assert!(matches!(
+            parse_sahara(SAHARA_RESET_RESP, &[]),
+            Ok(Sahara::Reset)
+        ));
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&SAHARA_READ_HW_ID.to_le_bytes());
+        body.extend_from_slice(&8_u32.to_le_bytes());
+
+        match parse_sahara(SAHARA_EXECUTE_RESP, &body).expect("a command response") {
+            Sahara::CommandResponse { command, len } => {
+                assert_eq!(command, SAHARA_READ_HW_ID);
+                assert_eq!(len, 8);
+            }
+            other => panic!("a command response was expected, not {}", other.name()),
+        }
+
+        assert!(parse_sahara(SAHARA_EXECUTE_RESP, &body[..4]).is_err());
+    }
+
+    /// A phone that reports one of Qualcomm's test root keys is unfused: secure
+    /// boot is off, so the programmer's key never has to match it.
+    #[test]
+    fn an_unfused_phone_is_recognised_by_its_test_root_key() {
+        // The hashes an MSM8998 in EDL reports with secure boot off.
+        let test_roots: [[u8; 32]; 2] = [
+            // 7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09
+            [
+                0x7b, 0xe4, 0x9b, 0x72, 0xf9, 0xe4, 0x33, 0x72, 0x23, 0xcc, 0xb8, 0x4d, 0x6e, 0xcc,
+                0xca, 0x4e, 0x61, 0xce, 0x16, 0xe3, 0x60, 0x2a, 0xc2, 0x00, 0x8c, 0xb1, 0x8b, 0x75,
+                0xba, 0xbe, 0x6d, 0x09,
+            ],
+            // cc3153a80293939b90d02d3bf8b23e0292e452fef662c74998421adad42a380f
+            [
+                0xcc, 0x31, 0x53, 0xa8, 0x02, 0x93, 0x93, 0x9b, 0x90, 0xd0, 0x2d, 0x3b, 0xf8, 0xb2,
+                0x3e, 0x02, 0x92, 0xe4, 0x52, 0xfe, 0xf6, 0x62, 0xc7, 0x49, 0x98, 0x42, 0x1a, 0xda,
+                0xd4, 0x2a, 0x38, 0x0f,
+            ],
+        ];
+
+        for root in test_roots {
+            // The programmer is signed against a retail key, and that is fine.
+            let preflight = Preflight {
+                identity: firehose_identity(Some(root.to_vec())),
+                programmer: PathBuf::from("prog_firehose_ddr.elf"),
+                programmer_hash: Ok(vec![0x7f, 0xe2, 0x40, 0xdd]),
+            };
+
+            assert!(preflight.unfused());
+            assert_eq!(preflight.roots_match(), Some(false));
+        }
+
+        // A fused phone reports its own key, and there the two must agree.
+        let preflight = Preflight {
+            identity: firehose_identity(Some(vec![0x7f, 0xe2, 0x40, 0xdd])),
+            programmer: PathBuf::from("prog_firehose_ddr.elf"),
+            programmer_hash: Ok(vec![0x7f, 0xe2, 0x40, 0xdd]),
+        };
+        assert!(!preflight.unfused());
+        assert_eq!(preflight.roots_match(), Some(true));
+
+        // A boot ROM that kept its hash back is not unfused either — there is
+        // simply nothing to compare.
+        let preflight = Preflight {
+            identity: firehose_identity(None),
+            programmer: PathBuf::from("prog_firehose_ddr.elf"),
+            programmer_hash: Err("it is neither an ELF nor an MBN".to_owned()),
+        };
+        assert!(!preflight.unfused());
+        assert_eq!(preflight.roots_match(), None);
+    }
+
+    /// An identity with the MSM8998's ids and the given key hash.
+    fn firehose_identity(pk_hash: Option<Vec<u8>>) -> Identity {
+        Identity {
+            hw_id: 0x0005_e0e1_0000_0000,
+            msm_id: 0x05e0_e1,
+            oem_id: 0,
+            model_id: 0,
+            pk_hash,
+        }
+    }
+
+    /// The hash a programmer is signed against comes out of its own images: a
+    /// `melf` holds several and only some of them carry a chain, so they are
+    /// tried until one does.
+    #[test]
+    fn the_programmers_root_hash_comes_out_of_its_images() {
+        // Two images, neither of them a programmer.
+        let images = vec![
+            None,
+            Some(b"not a programmer".to_vec()),
+            Some(b"still not one".to_vec()),
+        ];
+        let error = programmer_root_hash(&images, crate::mbn::Hash::Sha256)
+            .expect_err("neither image holds a chain");
+        assert!(error.contains("neither an ELF nor an MBN"), "{error}");
+
+        // A programmer that carries no image at all says so.
+        let error = programmer_root_hash(&[], crate::mbn::Hash::Sha256)
+            .expect_err("there is no image");
+        assert!(error.contains("carries no image"), "{error}");
     }
 }

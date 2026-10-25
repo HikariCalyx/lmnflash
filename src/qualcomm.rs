@@ -39,6 +39,24 @@ const LUN_SCROLL_ID: &str = "qualcomm-luns";
 /// Id of the storage-flash card's list.
 const STORAGE_FLASH_SCROLL_ID: &str = "qualcomm-storage-flash";
 
+/// How tall the two write cards' lists are: the card keeps its buttons in view
+/// below them, and the list scrolls on its own.
+const STORAGE_FLASH_LIST_HEIGHT: f32 = 180.0;
+
+/// Id of the partition-backup card's list.
+const BACKUP_SCROLL_ID: &str = "qualcomm-backup";
+
+/// The width of one partition dropdown in the backup card.
+const BACKUP_MENU_WIDTH: f32 = 190.0;
+
+/// The width of the labels of the identity card's rows, so the four values
+/// line up.
+const INJECT_ID_LABEL_WIDTH: f32 = 110.0;
+
+/// How many hex characters of the key hash go on one line: the hash is
+/// sixty-four of them, which is twice what the card is wide.
+const INJECT_HASH_CHUNK: usize = 32;
+
 /// The width of a fact's label in the "Flash Info" card: wide enough for the
 /// longest one the phone sends without squeezing its value.
 const STORAGE_INFO_LABEL_WIDTH: f32 = 230.0;
@@ -484,6 +502,11 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
                 .style(iced::widget::text::danger)
                 .into(),
         ),
+        QualcommStatus::InjectCancelled => Some(
+            text(l10n.tr("qc-inject-cancelled"))
+                .size(12.0)
+                .into(),
+        ),
         QualcommStatus::Rebooted => Some(
             text(l10n.tr("qc-reboot-sent"))
                 .size(12.0)
@@ -633,6 +656,21 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
             .size(12.0)
             .style(iced::widget::text::danger)
             .into(),
+        ),
+        QualcommStatus::BackupDone { count } => Some(
+            text(l10n.tr_with_args(
+                "qc-backup-done",
+                &[("count", count.to_string())],
+            ))
+            .size(12.0)
+            .style(bright_success)
+            .into(),
+        ),
+        QualcommStatus::BackupFailed(error) => Some(
+            text(l10n.tr_with_args("qc-backup-failed", &[("error", error.clone())]))
+                .size(12.0)
+                .style(iced::widget::text::danger)
+                .into(),
         ),
         QualcommStatus::WriteDone(name) => Some(
             text(l10n.tr_with_args("qc-write-done", &[("name", name.clone())]))
@@ -918,7 +956,7 @@ fn storage_flash_card<'a>(
                 .width(Fill);
 
                 if let Some(file) = chosen.and_then(|index| files.get(index)) {
-                    match ImageFit::of(file.length, lun) {
+                    match ImageFit::of(file.length, lun.bytes()) {
                         ImageFit::Exact => fits += 1,
                         ImageFit::Smaller(difference) => {
                             fits += 1;
@@ -960,7 +998,7 @@ fn storage_flash_card<'a>(
                     )
                     .id(iced::widget::Id::new(STORAGE_FLASH_SCROLL_ID))
                     .width(Fill)
-                    .height(180),
+                    .height(STORAGE_FLASH_LIST_HEIGHT),
                 )
                 .padding(6)
                 .width(Fill)
@@ -1200,6 +1238,401 @@ fn file_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Whether the "Flash Partition Backup" card is up.
+pub(crate) fn backup_open(state: &State) -> bool {
+    state.flash.qualcomm.backup.is_some()
+}
+
+/// The "Flash Partition Backup" card, or `None` while it is closed.
+pub(crate) fn backup_overlay(state: &State) -> Option<Element<'_, Message>> {
+    if !backup_open(state) {
+        return None;
+    }
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommBackupBackdropPressed)
+            .into(),
+        container(backup_card(state))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The card itself: one row per picked image, with the partition it goes back
+/// to.
+fn backup_card<'a>(state: &'a State) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+    let qualcomm = &state.flash.qualcomm;
+    let backup = qualcomm.backup.as_ref().expect("the card is open");
+
+    let mut content = column![
+        text(l10n.tr("qc-danger-flash-backup")).size(18.0),
+        text(l10n.tr("qc-backup-hint"))
+            .size(13.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+        horizontal_rule(1),
+        button(text(l10n.tr("qc-flash-storage-pick-many")))
+            .on_press(Message::QualcommBackupPickRequested),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    let none_label = l10n.tr("qc-flash-storage-none");
+    let partitions = &qualcomm.partitions;
+    let mut rows: Vec<Element<'a, Message>> = Vec::new();
+    let mut assigned = 0_usize;
+    let mut fits = 0_usize;
+    let mut broken = false;
+
+    for (row, image) in backup.files.iter().enumerate() {
+        let chosen = backup.assigned.get(row).copied().flatten();
+        let chosen = chosen.filter(|index| *index < partitions.len());
+
+        // A partition an image is already assigned to is left out of this
+        // row's choices: one file, one partition.
+        let mut options: Vec<Labeled<Option<usize>>> = vec![Labeled {
+            value: None,
+            label: none_label.clone(),
+        }];
+        for (index, partition) in partitions.iter().enumerate() {
+            let taken = backup
+                .assigned
+                .iter()
+                .enumerate()
+                .any(|(other, choice)| other != row && *choice == Some(index));
+
+            if taken {
+                continue;
+            }
+
+            options.push(Labeled {
+                value: Some(index),
+                label: partition.name.clone(),
+            });
+        }
+
+        let selected = Labeled {
+            value: chosen,
+            label: chosen.map_or_else(
+                || none_label.clone(),
+                |index| partitions[index].name.clone(),
+            ),
+        };
+
+        let menu: iced::widget::PickList<
+            'a,
+            Labeled<Option<usize>>,
+            Vec<Labeled<Option<usize>>>,
+            Labeled<Option<usize>>,
+            Message,
+            crate::fluent::Theme,
+        > = pick_list(options, Some(selected), move |option| {
+            Message::QualcommBackupAssigned(row, option.value)
+        })
+        .placeholder(none_label.clone())
+        .width(BACKUP_MENU_WIDTH)
+        .text_shaping(Shaping::Advanced);
+
+        let mut line = column![
+            row![
+                text(file_name(&image.path)).size(12.0).width(Fill),
+                menu,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .width(Fill),
+        ]
+        .spacing(2)
+        .width(Fill);
+
+        if let Some(partition) = chosen.and_then(|index| partitions.get(index)) {
+            assigned += 1;
+            match ImageFit::of(image.length, partition.size_bytes()) {
+                ImageFit::Exact => fits += 1,
+                ImageFit::Smaller(difference) => {
+                    fits += 1;
+                    line = line.push(
+                        text(l10n.tr_with_args(
+                            "qc-backup-smaller",
+                            &[("size", human_size(difference))],
+                        ))
+                        .size(11.0)
+                        .width(Fill)
+                        .wrapping(Wrapping::WordOrGlyph),
+                    );
+                }
+                ImageFit::Larger(difference) => {
+                    broken = true;
+                    line = line.push(
+                        text(l10n.tr_with_args(
+                            "qc-backup-larger",
+                            &[("size", human_size(difference))],
+                        ))
+                        .size(11.0)
+                        .width(Fill)
+                        .wrapping(Wrapping::WordOrGlyph)
+                        .style(iced::widget::text::danger),
+                    );
+                }
+            }
+        }
+
+        rows.push(line.into());
+    }
+
+    content = content.push(
+        container(
+            scrollable(
+                iced::widget::Column::with_children(rows)
+                    .spacing(8)
+                    .align_x(Alignment::Start),
+            )
+            .id(iced::widget::Id::new(BACKUP_SCROLL_ID))
+            .width(Fill)
+            .height(STORAGE_FLASH_LIST_HEIGHT),
+        )
+        .padding(6)
+        .width(Fill)
+        .style(container::rounded_box),
+    );
+
+    if assigned == 0 {
+        content = content.push(text(l10n.tr("qc-backup-nothing")).size(12.0));
+    }
+
+    content = content.push(horizontal_rule(1));
+
+    // An image that does not fit its partition shuts the button: the extra
+    // sectors would be written over the next partition.
+    let flash = button(text(l10n.tr("qc-flash-storage-go"))).width(Fill);
+    let flash: Element<'a, Message> = if fits == 0 || broken {
+        flash.into()
+    } else {
+        flash.on_press(Message::QualcommBackupConfirmed).into()
+    };
+
+    content = content.push(
+        row![
+            flash,
+            button(text(l10n.tr("login-cancel")))
+                .width(Fill)
+                .on_press(Message::QualcommBackupClosed),
+        ]
+        .spacing(8)
+        .width(Fill),
+    );
+
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(620)
+    .height(480)
+    .style(darker_card)
+    .into()
+}
+
+/// Whether the "Check the phone's identity" card is up.
+pub(crate) fn inject_check_open(state: &State) -> bool {
+    state
+        .flash
+        .qualcomm
+        .injection
+        .as_ref()
+        .is_some_and(|wait| wait.preflight.is_some() && !wait.reselecting)
+}
+
+/// The "Check the phone's identity" card, or `None` while it is closed.
+pub(crate) fn inject_check_overlay(state: &State) -> Option<Element<'_, Message>> {
+    if !inject_check_open(state) {
+        return None;
+    }
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommInjectCheckBackdropPressed)
+            .into(),
+        container(inject_check_card(state))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The card an injection stops at: the identity the phone's boot ROM reported,
+/// and the programmer waiting behind it.
+///
+/// The values are what a programmer has to be built for, so they are shown in
+/// the same monospace face the page prints offsets in, one per row, with the
+/// programmer's own name under them. The last of them is the key hash, and
+/// below it the card says whether the programmer waiting behind it is signed
+/// against that same root key — which it has to be to run at all.
+fn inject_check_card<'a>(state: &'a State) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+    let wait = state
+        .flash
+        .qualcomm
+        .injection
+        .as_ref()
+        .expect("the card is open");
+    let preflight = wait.preflight.as_ref().expect("the card is open");
+    let identity = &preflight.identity;
+
+    let mut rows = column![].spacing(6).width(Fill);
+    for (label, value) in [
+        ("HW_ID", identity.hw_id_text()),
+        ("MSM_ID", identity.msm_id_text()),
+        ("OEM_ID", identity.oem_id_text()),
+        ("MODEL_ID", identity.model_id_text()),
+        // A boot ROM that keeps the key hash back leaves a dash rather than a
+        // row that is not there: the four ids above are still worth reading.
+        (
+            "PK_HASH",
+            identity.pk_hash_text().unwrap_or_else(|| "—".to_owned()),
+        ),
+    ] {
+        rows = rows.push(
+            row![
+                container(text(label).size(13.0))
+                    .width(INJECT_ID_LABEL_WIDTH)
+                    .align_y(Alignment::Center),
+                // The key hash is sixty-four characters, so it is broken in two
+                // halves; the four ids above it are short enough to stay on one
+                // line.
+                {
+                    let characters: Vec<char> = value.chars().collect();
+                    let mut lines = column![].spacing(2).width(Fill);
+                    for chunk in characters.chunks(INJECT_HASH_CHUNK) {
+                        lines = lines.push(
+                            text(chunk.iter().collect::<String>())
+                                .size(13.0)
+                                .font(crate::output_font()),
+                        );
+                    }
+                    lines
+                },
+            ]
+            .spacing(8)
+            .width(Fill),
+        );
+    }
+
+    container(
+        column![
+            text(l10n.tr("qc-inject-check-title")).size(18.0),
+            horizontal_rule(1),
+            text(l10n.tr("qc-inject-check-hint"))
+                .size(13.0)
+                .width(Fill)
+                .wrapping(Wrapping::WordOrGlyph),
+            container(rows)
+                .padding(12)
+                .width(Fill)
+                .style(container::rounded_box),
+            // Whether the programmer belongs to this phone: the one thing the
+            // card exists for.
+            root_comparison(l10n, preflight),
+            text(l10n.tr_with_args(
+                "qc-inject-check-programmer",
+                &[("name", file_name(&preflight.programmer))],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph),
+            horizontal_rule(1),
+            row![
+                button(text(l10n.tr("qc-inject-check-continue")))
+                    .width(Fill)
+                    .on_press(Message::QualcommInjectAnswered(true)),
+                button(text(l10n.tr("qc-inject-check-reselect")))
+                    .width(Fill)
+                    .on_press(Message::QualcommInjectReselect),
+                button(text(l10n.tr("qc-inject-check-cancel")))
+                    .width(Fill)
+                    .on_press(Message::QualcommInjectAnswered(false)),
+            ]
+            .spacing(8)
+            .width(Fill),
+        ]
+        .spacing(10)
+        .width(Fill),
+    )
+    .padding(16)
+    .width(480)
+    .style(darker_card)
+    .into()
+}
+
+/// The line that says whether the programmer is signed against the root key the
+/// phone is fused for.
+///
+/// The programmer's own hash is only spelled out when the two differ or could
+/// not be compared: when they match it says exactly what the `PK_HASH` row
+/// above already shows. A phone that reports one of Qualcomm's test root keys
+/// is unfused — secure boot is off — so nothing is checked against the
+/// programmer and the two hashes may well differ.
+fn root_comparison<'a>(
+    l10n: &'a crate::l10n::Bundle,
+    preflight: &crate::firehose::Preflight,
+) -> Element<'a, Message> {
+    if preflight.unfused() {
+        return text(l10n.tr("qc-inject-check-unfused"))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .into();
+    }
+
+    match preflight.roots_match() {
+        Some(true) => text(l10n.tr("qc-inject-check-match"))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(bright_success)
+            .into(),
+        Some(false) => {
+            let hash = preflight
+                .programmer_hash_text()
+                .unwrap_or_else(|| "—".to_owned());
+
+            text(l10n.tr_with_args(
+                "qc-inject-check-mismatch",
+                &[("hash", hash)],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(iced::widget::text::danger)
+            .into()
+        }
+        // Nothing to compare: either the boot ROM kept its hash back, or the
+        // programmer's chain could not be read. The second says why.
+        None => match &preflight.programmer_hash {
+            Ok(_) => Element::from(Space::new(Fill, 0)),
+            Err(error) => text(l10n.tr_with_args(
+                "qc-inject-check-unread",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .width(Fill)
+            .wrapping(Wrapping::WordOrGlyph)
+            .into(),
+        },
+    }
 }
 
 /// Which card the LUN picker shows, as the low nibble of its overlay key, or
