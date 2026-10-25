@@ -25,8 +25,8 @@ use crate::firmware::{grouped_bytes, human_size, human_size_exact};
 use crate::firmware_flash::menu_style;
 use crate::text;
 use crate::{
-    DangerEntry, FlashInfoDialog, ImageFit, Labeled, LunDialog, Message, QualcommStatus, RebootMode,
-    State, StorageFlashDialog, StorageType,
+    AfterFlash, DangerEntry, FlashInfoDialog, ImageFit, Labeled, LunDialog, Message, QualcommStatus,
+    RebootMode, State, StorageFlashDialog, StorageType, XmlFlashDialog,
 };
 
 /// Id of the partition table's scrollable, so its position survives the page
@@ -45,6 +45,16 @@ const STORAGE_FLASH_LIST_HEIGHT: f32 = 180.0;
 
 /// Id of the partition-backup card's list.
 const BACKUP_SCROLL_ID: &str = "qualcomm-backup";
+
+/// Id of the "Flash XML" card's checklist.
+const XML_FLASH_SCROLL_ID: &str = "qualcomm-xml-flash";
+
+/// How tall the checklist is: the card keeps its buttons in view below it.
+const XML_FLASH_LIST_HEIGHT: f32 = 200.0;
+
+/// The width of the card's "After Flashing" menu: wide enough for its longest
+/// entry ("Reboot to recovery").
+const AFTER_FLASH_MENU_WIDTH: f32 = 190.0;
 
 /// The width of one partition dropdown in the backup card.
 const BACKUP_MENU_WIDTH: f32 = 190.0;
@@ -130,7 +140,9 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     // but the session is not, and a normal reset needs no table: only that one
     // is offered until the table is read again.
     let reboot_modes: Vec<RebootMode> = if qualcomm.partitions.is_empty() {
-        vec![RebootMode::Normal]
+        // Without a table the modes that name partitions in it have nothing to
+        // work with; a plain reset and a power-off still do.
+        vec![RebootMode::Normal, RebootMode::PowerOff]
     } else {
         RebootMode::ALL.to_vec()
     };
@@ -207,6 +219,14 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         button(text(l10n.tr("qc-erase")))
     };
 
+    // The package flash runs on the programmer in the phone, so its button
+    // waits for one and for no job to be under way.
+    let flash_xml = if qualcomm.programmer_uploaded && !qualcomm.busy {
+        button(text(l10n.tr("qc-flash-xml"))).on_press(Message::QualcommXmlFlash)
+    } else {
+        button(text(l10n.tr("qc-flash-xml")))
+    };
+
     let actions = split_row(
         vec![
             dump.into(),
@@ -214,7 +234,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
             erase.into(),
             refresh_button(qualcomm.programmer_uploaded && !qualcomm.busy),
         ],
-        vec![pending(l10n.tr("qc-flash-xml"))],
+        vec![flash_xml.into()],
     );
 
     // The partition table: the head stays in place while the body scrolls.
@@ -507,11 +527,41 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
                 .size(12.0)
                 .into(),
         ),
+        QualcommStatus::XmlFlashDone { count } => Some(
+            text(l10n.tr_with_args(
+                "qc-xml-done",
+                &[("count", count.to_string())],
+            ))
+            .size(12.0)
+            .style(bright_success)
+            .into(),
+        ),
+        QualcommStatus::XmlFlashFailed(error) => Some(
+            text(l10n.tr_with_args("qc-xml-failed", &[("error", error.clone())]))
+                .size(12.0)
+                .style(iced::widget::text::danger)
+                .into(),
+        ),
         QualcommStatus::Rebooted => Some(
             text(l10n.tr("qc-reboot-sent"))
                 .size(12.0)
                 .style(bright_success)
                 .into(),
+        ),
+        QualcommStatus::PowerOffSent => Some(
+            text(l10n.tr("qc-power-off-sent"))
+                .size(12.0)
+                .style(bright_success)
+                .into(),
+        ),
+        QualcommStatus::PowerOffFailed(error) => Some(
+            text(l10n.tr_with_args(
+                "qc-power-off-failed",
+                &[("error", error.clone())],
+            ))
+            .size(12.0)
+            .style(iced::widget::text::danger)
+            .into(),
         ),
         QualcommStatus::RebootFailed(error) => Some(
             text(l10n.tr_with_args("qc-reboot-failed", &[("error", error.clone())]))
@@ -1635,6 +1685,257 @@ fn root_comparison<'a>(
     }
 }
 
+/// Which card the "Flash XML" dialog shows, as the low nibble of its overlay
+/// key, or `None` while it is closed.
+pub(crate) fn xml_flash_card_step(state: &State) -> Option<u8> {
+    Some(match state.flash.qualcomm.xml_flash.as_ref()? {
+        // Asking what kind of package it is, and the picker that follows it,
+        // are the same card: the picker is a window of its own.
+        XmlFlashDialog::Choosing | XmlFlashDialog::Picking(_) => 0,
+        XmlFlashDialog::Ready(_) => 1,
+        XmlFlashDialog::Failed(_) => 2,
+    })
+}
+
+/// The "Flash XML" card, or `None` while it is closed.
+pub(crate) fn xml_flash_overlay(state: &State) -> Option<Element<'_, Message>> {
+    let dialog = state.flash.qualcomm.xml_flash.as_ref()?;
+
+    let children: Vec<Element<'_, Message>> = vec![
+        mouse_area(Space::new(Fill, Fill))
+            .on_press(Message::QualcommXmlBackdropPressed)
+            .into(),
+        container(xml_flash_card(state, dialog))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+    ];
+
+    Some(iced::widget::Stack::with_children(children).into())
+}
+
+/// The card itself: the choice of build, the checklist a package turns into, or
+/// why the files could not be read.
+fn xml_flash_card<'a>(state: &'a State, dialog: &'a XmlFlashDialog) -> Element<'a, Message> {
+    let l10n = &state.l10n;
+
+    let mut content = column![
+        text(l10n.tr("qc-xml-title")).size(18.0),
+        horizontal_rule(1),
+    ]
+    .spacing(10)
+    .width(Fill);
+
+    match dialog {
+        XmlFlashDialog::Choosing | XmlFlashDialog::Picking(_) => {
+            content = content.push(
+                text(l10n.tr("qc-xml-choose"))
+                    .size(13.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph),
+            );
+            content = content.push(
+                button(text(l10n.tr("qc-xml-meta")))
+                    .width(Fill)
+                    .on_press(Message::QualcommXmlBuildChosen(crate::qfil::Build::Meta)),
+            );
+            content = content.push(
+                button(text(l10n.tr("qc-xml-flat")))
+                    .width(Fill)
+                    .on_press(Message::QualcommXmlBuildChosen(crate::qfil::Build::Flat)),
+            );
+            content = content.push(horizontal_rule(1));
+            content = content.push(
+                button(text(l10n.tr("login-cancel")))
+                    .width(Fill)
+                    .on_press(Message::QualcommXmlClosed),
+            );
+        }
+        XmlFlashDialog::Ready(plan) => {
+            content = content.push(
+                text(l10n.tr("qc-xml-hint"))
+                    .size(12.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph),
+            );
+
+            // The programmer the package names, when it is a meta build: the
+            // page flashes with the one it has running, so this says which.
+            if let Some(programmer) = &plan.plan.programmer {
+                content = content.push(
+                    text(l10n.tr_with_args(
+                        "qc-xml-programmer",
+                        &[("name", file_name(programmer))],
+                    ))
+                    .size(12.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph),
+                );
+            }
+
+            let mut rows: Vec<Element<'a, Message>> = Vec::new();
+            for (index, entry) in plan.plan.entries.iter().enumerate() {
+                let chosen = plan.chosen.get(index).copied().unwrap_or(false);
+
+                let mut line = column![
+                    row![
+                        checkbox(entry.label.clone(), chosen)
+                            .on_toggle(move |_| Message::QualcommXmlRowToggled(index)),
+                        text(entry.file.clone())
+                            .size(12.0)
+                            .width(Fill)
+                            .wrapping(Wrapping::WordOrGlyph),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .width(Fill),
+                ]
+                .spacing(2)
+                .width(Fill);
+
+                if !entry.exists {
+                    line = line.push(
+                        text(l10n.tr_with_args(
+                            "qc-xml-no-file",
+                            &[("name", entry.file.clone())],
+                        ))
+                        .size(11.0)
+                        .width(Fill)
+                        .wrapping(Wrapping::WordOrGlyph)
+                        .style(iced::widget::text::danger),
+                    );
+                } else if entry.sparse {
+                    line = line.push(
+                        text(l10n.tr("qc-xml-sparse"))
+                            .size(11.0)
+                            .width(Fill)
+                            .wrapping(Wrapping::WordOrGlyph),
+                    );
+                }
+
+                rows.push(line.into());
+            }
+
+            content = content.push(
+                container(
+                    scrollable(
+                        iced::widget::Column::with_children(rows)
+                            .spacing(8)
+                            .align_x(Alignment::Start),
+                    )
+                    .id(iced::widget::Id::new(XML_FLASH_SCROLL_ID))
+                    .width(Fill)
+                    .height(XML_FLASH_LIST_HEIGHT),
+                )
+                .padding(6)
+                .width(Fill)
+                .style(container::rounded_box),
+            );
+
+            let missing = plan.plan.missing();
+            if !missing.is_empty() {
+                content = content.push(
+                    text(l10n.tr_with_args(
+                        "qc-xml-missing",
+                        &[
+                            ("count", missing.len().to_string()),
+                            ("files", missing.join(", ")),
+                        ],
+                    ))
+                    .size(11.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
+                    .style(iced::widget::text::danger),
+                );
+            }
+
+            // [After Flashing ▾]: what the phone does once the package is
+            // down. The packages end differently by themselves, and the choice
+            // stays for the next package as well.
+            let after_options: Vec<Labeled<AfterFlash>> = AfterFlash::ALL
+                .iter()
+                .map(|&after| Labeled {
+                    value: after,
+                    label: l10n.tr(after.message_id()),
+                })
+                .collect();
+            let after_selected = Labeled {
+                value: state.flash.qualcomm.after_flash,
+                label: l10n.tr(state.flash.qualcomm.after_flash.message_id()),
+            };
+            let after: iced::widget::PickList<
+                'a,
+                Labeled<AfterFlash>,
+                Vec<Labeled<AfterFlash>>,
+                Labeled<AfterFlash>,
+                Message,
+                crate::fluent::Theme,
+            > = pick_list(after_options, Some(after_selected), |option| {
+                Message::QualcommXmlAfterFlashSelected(option.value)
+            })
+            .width(AFTER_FLASH_MENU_WIDTH)
+            .text_shaping(Shaping::Advanced);
+
+            content = content.push(
+                row![
+                    text(l10n.tr("qc-xml-after")).size(12.0).width(Fill),
+                    after,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .width(Fill),
+            );
+
+            content = content.push(horizontal_rule(1));
+
+            let flash = button(text(l10n.tr("qc-xml-go"))).width(Fill);
+            let flash: Element<'a, Message> = if plan.kept() == 0 {
+                flash.into()
+            } else {
+                flash.on_press(Message::QualcommXmlConfirmed).into()
+            };
+
+            content = content.push(
+                row![
+                    flash,
+                    button(text(l10n.tr("login-cancel")))
+                        .width(Fill)
+                        .on_press(Message::QualcommXmlClosed),
+                ]
+                .spacing(8)
+                .width(Fill),
+            );
+        }
+        XmlFlashDialog::Failed(error) => {
+            content = content.push(
+                text(error.clone())
+                    .size(13.0)
+                    .width(Fill)
+                    .wrapping(Wrapping::WordOrGlyph)
+                    .style(iced::widget::text::danger),
+            );
+            content = content.push(horizontal_rule(1));
+            content = content.push(
+                button(text(l10n.tr("login-cancel")))
+                    .width(Fill)
+                    .on_press(Message::QualcommXmlClosed),
+            );
+        }
+    }
+
+    container(
+        scrollable(container(content).padding(16).width(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .width(560)
+    .height(440)
+    .style(darker_card)
+    .into()
+}
+
 /// Which card the LUN picker shows, as the low nibble of its overlay key, or
 /// `None` while no picker is open.
 ///
@@ -1865,15 +2166,6 @@ fn split_row<'a>(
     iced::widget::Stack::with_children(vec![start.into(), end.into()])
         .width(Fill)
         .into()
-}
-
-/// A control that belongs to the page's layout but has no job yet.
-///
-/// iced draws a button without `on_press` greyed out and ignores clicks on it,
-/// which is exactly how the page shows that the Firehose side is still to
-/// come.
-fn pending<'a>(label: String) -> Element<'a, Message> {
-    button(text(label)).into()
 }
 
 /// The refresh control: an icon rather than the word, so the action row keeps

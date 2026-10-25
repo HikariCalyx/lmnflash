@@ -115,7 +115,11 @@ fn pbkdf1(password: &[u8], salt: &[u8], length: usize, iterations: u32) -> Vec<u
 }
 
 /// Decrypts an in-memory encrypted file, returning the verified body.
-fn decrypt_bytes(data: &[u8], password: &str) -> Result<Vec<u8>, DecryptError> {
+///
+/// The Flash XML card reads `contents.x` and the encrypted `rawprogram*.x` /
+/// `patch*.x` files of an L tablet package through this, so nothing has to be
+/// written next to them first.
+pub(crate) fn decrypt_bytes(data: &[u8], password: &str) -> Result<Vec<u8>, DecryptError> {
     if data.len() < 32 {
         return Err(DecryptError::TooShort);
     }

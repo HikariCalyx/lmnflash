@@ -50,6 +50,7 @@ mod preset_file;
 mod protocol;
 mod qualcomm;
 mod qualcomm_ports;
+mod qfil;
 mod scatter;
 mod smartphone;
 mod spd_script;
@@ -996,6 +997,16 @@ struct QualcommState {
     flash_info: Option<FlashInfoDialog>,
     /// The "Flash Partition Backup" card, while it is open.
     backup: Option<PartitionBackup>,
+    /// The "Flash XML" card, while it is open.
+    xml_flash: Option<XmlFlashDialog>,
+    /// What the "Flash XML" card does once a package is down. It outlives the
+    /// card, so the choice a package was flashed with is the one the next
+    /// package starts with.
+    after_flash: AfterFlash,
+    /// The "after flashing" choice of the flash that just finished. It waits
+    /// for the table that flash left behind, since the modes that write `misc`
+    /// read its sectors from it.
+    pending_after_flash: Option<AfterFlash>,
     /// The injection that is waiting on the user's answer, with the identity
     /// card up once the boot ROM reported who the phone is.
     injection: Option<InjectionWait>,
@@ -1019,6 +1030,136 @@ struct InjectionWait {
     /// while it is, and comes back with the file the worker still has when it
     /// is dismissed.
     reselecting: bool,
+}
+
+/// The "Flash XML" card: a package read into the rows a flash would run.
+///
+/// A meta build names its files itself, so only `contents.xml` is picked; a
+/// flat build is picked as the `rawprogram`/`patch` files it is made of. Both
+/// end on the same checklist, which is the one thing the user confirms.
+#[derive(Clone)]
+enum XmlFlashDialog {
+    /// Asking whether the package is a meta or a flat build.
+    Choosing,
+    /// Asking for the files of the build the user picked.
+    Picking(qfil::Build),
+    /// The files were read: the checklist, with the rows the user keeps.
+    Ready(XmlFlashPlan),
+    /// The package could not be read; the card says why.
+    Failed(String),
+}
+
+/// What a package flash would do, and what of it the user kept.
+#[derive(Clone)]
+struct XmlFlashPlan {
+    plan: qfil::Plan,
+    /// One per image of the plan: whether it is flashed. An image that is not
+    /// on disk cannot be ticked, and the three partitions the packages are
+    /// flashed without start unticked.
+    chosen: Vec<bool>,
+}
+
+impl XmlFlashPlan {
+    /// Reads a plan into the checklist's starting state.
+    fn new(plan: qfil::Plan) -> Self {
+        let chosen = plan
+            .entries
+            .iter()
+            .map(|entry| entry.exists && !qfil::Plan::skipped_by_default(&entry.label))
+            .collect();
+
+        Self { plan, chosen }
+    }
+
+    /// The rows the user kept, as the steps a flash runs.
+    ///
+    /// The order is the package's own: an erase that clears a partition before
+    /// its image goes down has to stay in front of it.
+    fn steps(&self) -> Vec<firehose::PackageStep> {
+        let mut steps = Vec::new();
+
+        for action in &self.plan.actions {
+            match action {
+                qfil::Action::Program(index) => {
+                    let Some(entry) = self.plan.entries.get(*index) else {
+                        continue;
+                    };
+
+                    if self.chosen.get(*index).copied().unwrap_or(false) {
+                        steps.push(firehose::PackageStep::Write(firehose::RangeWrite {
+                            label: entry.label.clone(),
+                            path: entry.path.clone(),
+                            lun: entry.lun,
+                            sector_size: entry.sector_size,
+                            start_sector: entry.start_sector.clone(),
+                            sectors: entry.sectors,
+                            file_sector_offset: entry.file_sector_offset,
+                        }));
+                    }
+                }
+                qfil::Action::Erase(index) => {
+                    let Some(erase) = self.plan.erases.get(*index) else {
+                        continue;
+                    };
+
+                    // A partition the user left out of the flash is not cleared
+                    // either; one the package only erases has no row to leave
+                    // out, so it always runs.
+                    let kept = self
+                        .plan
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| entry.label == erase.label)
+                        .fold(false, |kept, (index, _)| {
+                            kept || self.chosen.get(index).copied().unwrap_or(false)
+                        });
+
+                    let known = self
+                        .plan
+                        .entries
+                        .iter()
+                        .any(|entry| entry.label == erase.label);
+
+                    if kept || !known {
+                        steps.push(firehose::PackageStep::Erase(firehose::RangeErase {
+                            label: erase.label.clone(),
+                            lun: erase.lun,
+                            sector_size: erase.sector_size,
+                            start_sector: erase.start_sector.clone(),
+                            sectors: erase.sectors,
+                            zero: erase.zero,
+                        }));
+                    }
+                }
+            }
+        }
+
+        steps
+    }
+
+    /// The patches of the package, ready to run.
+    fn patches(&self) -> Vec<firehose::RangePatch> {
+        self.plan
+            .patches
+            .iter()
+            .map(|patch| firehose::RangePatch {
+                label: patch.label.clone(),
+                lun: patch.lun,
+                sector_size: patch.sector_size,
+                start_sector: patch.start_sector.clone(),
+                byte_offset: patch.byte_offset,
+                size: patch.size,
+                value: patch.value.clone(),
+                what: patch.what.clone(),
+            })
+            .collect()
+    }
+
+    /// How many images are ticked.
+    fn kept(&self) -> usize {
+        self.chosen.iter().filter(|chosen| **chosen).count()
+    }
 }
 
 /// The "Flash Partition Backup" card: images dumped from partitions, written
@@ -1145,12 +1286,20 @@ enum QualcommStatus {
     /// The injection was stopped at the identity card, before anything was
     /// uploaded; the phone was reset.
     InjectCancelled,
+    /// The package flash went through; the count is how many images it wrote.
+    XmlFlashDone { count: usize },
+    /// The package flash failed; the text says why.
+    XmlFlashFailed(String),
     /// The phone is being reset.
     Rebooting,
     /// The reset command went through.
     Rebooted,
     /// The reset failed; the text says why.
     RebootFailed(String),
+    /// The power-off command went through.
+    PowerOffSent,
+    /// The phone could not be switched off; the text says why.
+    PowerOffFailed(String),
     /// One partition is being read into a file; `done` of `total` bytes.
     Dumping { name: String, done: u64, total: u64 },
     /// One image is being written to a partition.
@@ -1197,7 +1346,9 @@ enum QualcommStatus {
 ///
 /// Every one of them is a Firehose session of its own: the mode decides what is
 /// written into the storage — the OEM-unlocking flag in FRP/config, or a boot
-/// command in `misc` — before the phone is reset.
+/// command in `misc` — before the phone is reset. The last one ends the session
+/// instead: the phone is switched off and does not come back until its power
+/// button is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RebootMode {
     Normal,
@@ -1205,16 +1356,18 @@ enum RebootMode {
     OemUnlock,
     Recovery,
     Fastbootd,
+    PowerOff,
 }
 
 impl RebootMode {
     /// The entries the menu shows, in order.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Normal,
         Self::FactoryReset,
         Self::OemUnlock,
         Self::Recovery,
         Self::Fastbootd,
+        Self::PowerOff,
     ];
 
     /// The FTL id of its label.
@@ -1225,18 +1378,80 @@ impl RebootMode {
             Self::OemUnlock => "qc-reboot-oem-unlock",
             Self::Recovery => "qc-reboot-recovery",
             Self::Fastbootd => "qc-reboot-fastbootd",
+            Self::PowerOff => "qc-after-power-off",
         }
     }
 
-    /// The work the mode asks the programmer for.
-    fn action(self) -> firehose::RebootAction {
+    /// The work the mode asks the programmer for; a power-off is a command of
+    /// its own, and writes nothing first.
+    fn action(self) -> Option<firehose::RebootAction> {
         match self {
-            Self::Normal => firehose::RebootAction::Normal,
-            Self::FactoryReset => firehose::RebootAction::FactoryReset,
-            Self::OemUnlock => firehose::RebootAction::OemUnlock,
-            Self::Recovery => firehose::RebootAction::Recovery,
-            Self::Fastbootd => firehose::RebootAction::Fastbootd,
+            Self::Normal => Some(firehose::RebootAction::Normal),
+            Self::FactoryReset => Some(firehose::RebootAction::FactoryReset),
+            Self::OemUnlock => Some(firehose::RebootAction::OemUnlock),
+            Self::Recovery => Some(firehose::RebootAction::Recovery),
+            Self::Fastbootd => Some(firehose::RebootAction::Fastbootd),
+            Self::PowerOff => None,
         }
+    }
+}
+
+/// What the "Flash XML" card does once the package is down.
+///
+/// The packages end differently by themselves: KaiOS's ships a `poweroff.xml`,
+/// others leave the phone in Firehose for the next step, and a phone that was
+/// only half-flashed before usually wants a plain reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AfterFlash {
+    /// Leave the phone in Firehose, with the table read again.
+    #[default]
+    Stay,
+    /// Reset it into the system.
+    Reboot,
+    /// Switch it off.
+    PowerOff,
+    /// Put recovery's command in `misc` and reset.
+    Recovery,
+    /// Put fastbootd's command in `misc` and reset.
+    Fastbootd,
+}
+
+impl AfterFlash {
+    /// The choices the card offers, in the order it shows them.
+    const ALL: [Self; 5] = [
+        Self::Stay,
+        Self::Reboot,
+        Self::PowerOff,
+        Self::Recovery,
+        Self::Fastbootd,
+    ];
+
+    /// The FTL id of its label.
+    fn message_id(self) -> &'static str {
+        match self {
+            Self::Stay => "qc-after-stay",
+            Self::Reboot => "firmware-flash-reboot",
+            Self::PowerOff => "qc-after-power-off",
+            Self::Recovery => "qc-reboot-recovery",
+            Self::Fastbootd => "qc-reboot-fastbootd",
+        }
+    }
+
+    /// The reset it stands for, when it is one the reboot menu knows: a
+    /// power-off is a command of its own, and staying is no command at all.
+    fn action(self) -> Option<firehose::RebootAction> {
+        match self {
+            Self::Stay | Self::PowerOff => None,
+            Self::Reboot => Some(firehose::RebootAction::Normal),
+            Self::Recovery => Some(firehose::RebootAction::Recovery),
+            Self::Fastbootd => Some(firehose::RebootAction::Fastbootd),
+        }
+    }
+
+    /// Whether it takes the phone out of Firehose, which is what makes the page
+    /// drop the session it was holding.
+    fn leaves_firehose(self) -> bool {
+        !matches!(self, Self::Stay)
     }
 }
 
@@ -3124,6 +3339,33 @@ enum Message {
     /// Qualcomm Partition Manager: the backup card's "Select Images…" button —
     /// ask for the files to write back.
     QualcommBackupPickRequested,
+    /// Qualcomm Partition Manager: the page's "Flash XML" button — open the
+    /// card the package is chosen in.
+    QualcommXmlFlash,
+    /// Qualcomm Partition Manager: the build the package is.
+    QualcommXmlBuildChosen(qfil::Build),
+    /// Qualcomm Partition Manager: the files the picker returned.
+    QualcommXmlFilesPicked(Option<Vec<std::path::PathBuf>>),
+    /// Qualcomm Partition Manager: a row of the checklist was toggled.
+    QualcommXmlRowToggled(usize),
+    /// Qualcomm Partition Manager: what the card does once the package is down.
+    QualcommXmlAfterFlashSelected(AfterFlash),
+    /// Qualcomm Partition Manager: the checklist's Flash button.
+    QualcommXmlConfirmed,
+    /// Qualcomm Partition Manager: the card was dismissed.
+    QualcommXmlClosed,
+    /// Qualcomm Partition Manager: a click beside the card. It is swallowed,
+    /// so it neither dismisses the card nor reaches the page.
+    QualcommXmlBackdropPressed,
+    /// Qualcomm Partition Manager: the package flash ended with the number of
+    /// images it wrote (or the reason it could not).
+    QualcommXmlFlashFinished(Result<usize, String>),
+    /// Qualcomm Partition Manager: the pause after a package flash is over, so
+    /// the table it left behind can be read.
+    QualcommXmlFlashSettled,
+    /// Qualcomm Partition Manager: the power-off that follows a package flash
+    /// went through or failed.
+    QualcommPowerOffFinished(Result<(), String>),
     /// Qualcomm Partition Manager: the partition an image of the backup card is
     /// written to (or `None` to leave it out).
     QualcommBackupAssigned(usize, Option<usize>),
@@ -3805,6 +4047,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::QualcommFlashInfoClosed
             | Message::QualcommBackupClosed
             | Message::QualcommInjectAnswered(_)
+            | Message::QualcommXmlClosed
             | Message::FastbootDevicePickerCancelled
     )
 }
@@ -3851,6 +4094,8 @@ const OVERLAY_QUALCOMM_BACKUP: u8 = 0x1B;
 /// The Partition Manager's "Check the phone's identity" card, which an
 /// injection stops at before it uploads the programmer.
 const OVERLAY_QUALCOMM_INJECT_CHECK: u8 = 0x1C;
+/// The Partition Manager's "Flash XML" card.
+const OVERLAY_QUALCOMM_XML_FLASH: u8 = 0x1D;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
 const OVERLAY_BOOTLOADER_CHOOSER: u8 = 0x10;
 const OVERLAY_BOOTLOADER_MANUAL: u8 = 0x20;
@@ -3935,6 +4180,10 @@ fn overlay_key(state: &State) -> u8 {
 
     if qualcomm::inject_check_open(state) {
         return OVERLAY_QUALCOMM_INJECT_CHECK;
+    }
+
+    if let Some(step) = qualcomm::xml_flash_card_step(state) {
+        return OVERLAY_QUALCOMM_XML_FLASH + step;
     }
 
     // The LUN picker belongs to the Partition Manager workspace, which is only
@@ -5227,55 +5476,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             Task::none()
         }
-        Message::QualcommRebootModeSelected(mode) => {
-            if state.flash.qualcomm.busy {
-                return Task::none();
-            }
-            let Some(port) = state.flash.qualcomm.port.clone() else {
-                state.flash.qualcomm.status =
-                    QualcommStatus::RebootFailed(state.l10n.tr("qc-select-port"));
-                return Task::none();
-            };
-
-            // The modes act on the table the injection read: the partitions
-            // they clear and the `misc` block they write are named in it.
-            let partitions = state.flash.qualcomm.partitions.clone();
-            let action = mode.action();
-
-            state.flash.qualcomm.busy = true;
-            state.flash.qualcomm.status = QualcommStatus::Rebooting;
-            state.flash.qualcomm.progress = Some(firehose::Progress::default());
-
-            // A reboot is a Firehose command like any other, so it gets its own
-            // logged session: the phone may have been left in a strange state
-            // by whatever ran before it.
-            let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
-            state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
-
-            let (progress, events) = iced::futures::channel::mpsc::unbounded();
-
-            Task::batch([
-                Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            let mut log = log;
-                            let report = move |step: firehose::Progress| {
-                                let _ = progress
-                                    .unbounded_send(Message::QualcommRebootProgress(step));
-                            };
-
-                            firehose::reboot(&port, &partitions, action, &mut log, &report)
-                        })
-                        .await
-                        .unwrap_or_else(|error| {
-                            Err(format!("the Firehose worker stopped: {error}"))
-                        })
-                    },
-                    Message::QualcommResetFinished,
-                ),
-                Task::run(events, |message| message),
-            ])
-        }
+        Message::QualcommRebootModeSelected(mode) => start_qualcomm_reset(state, mode.action()),
         Message::QualcommRebootProgress(progress) => {
             if state.flash.qualcomm.busy {
                 state.flash.qualcomm.progress = Some(progress);
@@ -5298,6 +5499,23 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             qualcomm.status = match result {
                 Ok(()) => QualcommStatus::Rebooted,
                 Err(error) => QualcommStatus::RebootFailed(error),
+            };
+
+            Task::none()
+        }
+        Message::QualcommPowerOffFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            // A phone that is off has no programmer in RAM either.
+            qualcomm.programmer_uploaded = false;
+            qualcomm.partitions.clear();
+            qualcomm.selected.clear();
+            qualcomm.anchor = None;
+            qualcomm.progress = None;
+            qualcomm.detected = None;
+            qualcomm.status = match result {
+                Ok(()) => QualcommStatus::PowerOffSent,
+                Err(error) => QualcommStatus::PowerOffFailed(error),
             };
 
             Task::none()
@@ -5576,6 +5794,163 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             // The rest of the section is still to come.
             _ => Task::none(),
         },
+        Message::QualcommXmlFlash => start_qualcomm_xml_flash(state),
+        Message::QualcommXmlBuildChosen(build) => {
+            if state.flash.qualcomm.busy {
+                return Task::none();
+            }
+            let Some(_) = state.flash.qualcomm.xml_flash.as_mut() else {
+                return Task::none();
+            };
+
+            state.flash.qualcomm.xml_flash = Some(XmlFlashDialog::Picking(build));
+
+            let title = state.l10n.tr(match build {
+                qfil::Build::Meta => "qc-xml-pick-meta",
+                qfil::Build::Flat => "qc-xml-pick-flat",
+            });
+
+            // The picker shows the files a package is made of first — the
+            // `rawprogram<N>` and `patch<N>` XMLs, or the one `contents` file —
+            // and keeps "All files" for a package shipped under other names,
+            // which the reader tells apart by what is inside them anyway.
+            let package = state.l10n.tr(match build {
+                qfil::Build::Meta => "qc-xml-filter",
+                qfil::Build::Flat => "qc-xml-filter-flat",
+            });
+            let everything = state.l10n.tr("qc-xml-filter-all");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let dialog = rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter(&package, &["xml", "x"])
+                            .add_filter(&everything, &["*"]);
+
+                        match build {
+                            qfil::Build::Meta => dialog.pick_file().map(|file| vec![file]),
+                            qfil::Build::Flat => dialog.pick_files(),
+                        }
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::QualcommXmlFilesPicked,
+            )
+        }
+        Message::QualcommXmlFilesPicked(files) => {
+            let Some(XmlFlashDialog::Picking(build)) = state.flash.qualcomm.xml_flash.clone()
+            else {
+                return Task::none();
+            };
+
+            let Some(files) = files else {
+                // The picker was dismissed: back to the question of what kind
+                // of package this is.
+                state.flash.qualcomm.xml_flash = Some(XmlFlashDialog::Choosing);
+                return Task::none();
+            };
+
+            let plan = match build {
+                qfil::Build::Meta => files
+                    .first()
+                    .ok_or_else(|| "no package file was picked".to_owned())
+                    .and_then(|contents| qfil::meta(contents)),
+                qfil::Build::Flat => qfil::flat(&files),
+            };
+
+            state.flash.qualcomm.xml_flash = Some(match plan {
+                Ok(plan) => XmlFlashDialog::Ready(XmlFlashPlan::new(plan)),
+                Err(error) => XmlFlashDialog::Failed(error),
+            });
+
+            Task::none()
+        }
+        Message::QualcommXmlRowToggled(row) => {
+            if let Some(XmlFlashDialog::Ready(plan)) = &mut state.flash.qualcomm.xml_flash {
+                // An image that is not on disk keeps its row as it is.
+                let writable = plan
+                    .plan
+                    .entries
+                    .get(row)
+                    .is_some_and(|entry| entry.exists);
+
+                if writable {
+                    if let Some(chosen) = plan.chosen.get_mut(row) {
+                        *chosen = !*chosen;
+                    }
+                }
+            }
+
+            Task::none()
+        }
+        Message::QualcommXmlBackdropPressed => Task::none(),
+        Message::QualcommXmlAfterFlashSelected(after) => {
+            state.flash.qualcomm.after_flash = after;
+            Task::none()
+        }
+        Message::QualcommXmlClosed => {
+            state.flash.qualcomm.xml_flash = None;
+            Task::none()
+        }
+        Message::QualcommXmlConfirmed => {
+            let Some(XmlFlashDialog::Ready(plan)) = &state.flash.qualcomm.xml_flash else {
+                return Task::none();
+            };
+
+            let steps = plan.steps();
+            let patches = plan.patches();
+
+            start_qualcomm_xml_flash_run(state, &steps, &patches)
+        }
+        Message::QualcommXmlFlashFinished(result) => {
+            let qualcomm = &mut state.flash.qualcomm;
+            qualcomm.busy = false;
+            qualcomm.progress = None;
+            // A package rewrites the partitions it flashes, and may add or
+            // remove some: the rows go, and the table is read again below.
+            qualcomm.partitions.clear();
+            qualcomm.selected.clear();
+            qualcomm.anchor = None;
+            qualcomm.status = match result {
+                Ok(count) => QualcommStatus::XmlFlashDone { count },
+                Err(error) => QualcommStatus::XmlFlashFailed(error),
+            };
+
+            match qualcomm.status {
+                QualcommStatus::XmlFlashDone { .. } => {
+                    // What the card asked for after the flash waits for the
+                    // table the flash left behind: `misc` and the rest are
+                    // named in it.
+                    if qualcomm.after_flash.leaves_firehose() {
+                        qualcomm.pending_after_flash = Some(qualcomm.after_flash);
+                    }
+
+                    Task::perform(
+                        async {
+                            let _ = tokio::task::spawn_blocking(|| {
+                                std::thread::sleep(STORAGE_SETTLE)
+                            })
+                            .await;
+                        },
+                        |()| Message::QualcommXmlFlashSettled,
+                    )
+                }
+                _ => Task::none(),
+            }
+        }
+        Message::QualcommXmlFlashSettled => {
+            if state.flash.qualcomm.busy
+                || !state.flash.qualcomm.programmer_uploaded
+                || state.flash.qualcomm.detected.is_none()
+                || !matches!(state.flash.qualcomm.status, QualcommStatus::XmlFlashDone { .. })
+            {
+                return Task::none();
+            }
+
+            start_qualcomm_refresh(state)
+        }
         Message::QualcommBackupPickRequested => {
             if state.flash.qualcomm.backup.is_none() {
                 return Task::none();
@@ -6110,7 +6485,12 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
 
-            Task::none()
+            // What the card asked for after the flash runs now: the table it
+            // works from is the one the flash left behind.
+            match state.flash.qualcomm.pending_after_flash.take() {
+                Some(after) => start_qualcomm_after_flash(state, after),
+                None => Task::none(),
+            }
         }
         Message::MultiFlashPresetManage => {
             state.flash.multi_flash.preset_dialog = true;
@@ -10471,6 +10851,165 @@ fn start_qualcomm_storage_flash_run(
 /// was sent, and answers nothing until it is done.
 const STORAGE_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
 
+/// "Flash XML": opens the card the package is chosen in.
+///
+/// A package is flashed by the programmer that is already running, so the
+/// button needs a session — the same one dumping and writing need.
+fn start_qualcomm_xml_flash(state: &mut State) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    if !state.flash.qualcomm.programmer_uploaded {
+        state.flash.qualcomm.status =
+            QualcommStatus::XmlFlashFailed(state.l10n.tr("qc-xml-inject-first"));
+        return Task::none();
+    }
+
+    state.flash.qualcomm.xml_flash = Some(XmlFlashDialog::Choosing);
+
+    Task::none()
+}
+
+/// Flashes the rows the checklist kept on a worker thread.
+///
+/// The programmer is still running in the phone, so this only reopens the port;
+/// every image is checked before the first sector is written, and the patches
+/// run last, once the images are down.
+fn start_qualcomm_xml_flash_run(
+    state: &mut State,
+    steps: &[firehose::PackageStep],
+    patches: &[firehose::RangePatch],
+) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.xml_flash = None;
+        state.flash.qualcomm.status =
+            QualcommStatus::XmlFlashFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+    if steps.is_empty() {
+        return Task::none();
+    }
+
+    let steps = steps.to_vec();
+    let patches = patches.to_vec();
+
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.xml_flash = None;
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+    // The first report names the image it is writing; until then the bar is
+    // empty and the line says so.
+    state.flash.qualcomm.status = QualcommStatus::Writing {
+        name: String::new(),
+        done: 0,
+        total: 0,
+    };
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    let report = move |step: firehose::Progress| {
+                        let _ = progress.unbounded_send(Message::QualcommWriteProgress(step));
+                    };
+
+                    firehose::flash_package(&port, &steps, &patches, &mut log, &report)
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            Message::QualcommXmlFlashFinished,
+        ),
+        Task::run(events, |message| message),
+    ])
+}
+
+/// Runs what the "Flash XML" card asked for once the package is down.
+///
+/// A reset is one command on the session the flash left open, and so is a
+/// power-off; the modes that write `misc` — recovery and fastbootd — read its
+/// sectors from the table, which is why the caller hands this the table the
+/// flash left behind rather than the one the injection read.
+fn start_qualcomm_after_flash(state: &mut State, after: AfterFlash) -> Task<Message> {
+    if !after.leaves_firehose() {
+        return Task::none();
+    }
+
+    start_qualcomm_reset(state, after.action())
+}
+
+/// Resets the phone — or switches it off — on the session it is already in.
+///
+/// `action` is the work the reboot mode asks for; `None` is a power-off, which
+/// writes nothing first. Either way the phone leaves Firehose, so the page
+/// drops the programmer and the table it read.
+fn start_qualcomm_reset(
+    state: &mut State,
+    action: Option<firehose::RebootAction>,
+) -> Task<Message> {
+    if state.flash.qualcomm.busy {
+        return Task::none();
+    }
+    let Some(port) = state.flash.qualcomm.port.clone() else {
+        state.flash.qualcomm.status =
+            QualcommStatus::RebootFailed(state.l10n.tr("qc-select-port"));
+        return Task::none();
+    };
+
+    // The modes act on the table the injection read: the partitions they clear
+    // and the `misc` block they write are named in it.
+    let partitions = state.flash.qualcomm.partitions.clone();
+
+    state.flash.qualcomm.busy = true;
+    state.flash.qualcomm.status = QualcommStatus::Rebooting;
+    state.flash.qualcomm.progress = Some(firehose::Progress::default());
+
+    // A reset is a Firehose command like any other, so it gets its own logged
+    // session: the phone may have been left in a strange state by whatever ran
+    // before it.
+    let log = flash_log::FlashLog::create(flash_log::partition_manager_path(&port));
+    state.flash.qualcomm.log_path = Some(log.path().to_path_buf());
+
+    let (progress, events) = iced::futures::channel::mpsc::unbounded();
+
+    Task::batch([
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut log = log;
+                    match action {
+                        Some(action) => {
+                            let report = move |step: firehose::Progress| {
+                                let _ = progress
+                                    .unbounded_send(Message::QualcommRebootProgress(step));
+                            };
+
+                            firehose::reboot(&port, &partitions, action, &mut log, &report)
+                        }
+                        // No reset to run: the phone is told to switch off,
+                        // which is one command and writes nothing first.
+                        None => firehose::power_off(&port, &mut log),
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("the Firehose worker stopped: {error}")))
+            },
+            move |result| match action {
+                Some(_) => Message::QualcommResetFinished(result),
+                None => Message::QualcommPowerOffFinished(result),
+            },
+        ),
+        Task::run(events, |message| message),
+    ])
+}
+
 /// "Flash Partition Backup": opens the card the images are picked in.
 ///
 /// It needs no question to the phone: the partitions are the rows the table
@@ -13620,6 +14159,11 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // The Partition Manager's "Flash XML" card, drawn the same way.
+    if let Some(overlay) = qualcomm::xml_flash_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // The Multi Flashing page's modals: its "Preset Manage" dialog, and the
     // prompt that a close request was refused while a run goes on.
     if let Some(overlay) = multi_flash::close_prompt_overlay(state) {
@@ -14526,6 +15070,278 @@ mod tests {
         assert_eq!(state.flash.qualcomm.port.as_deref(), Some("COM7"));
         assert_eq!(state.flash.qualcomm.partitions.len(), 1);
         assert!(state.flash.qualcomm.programmer_uploaded);
+    }
+
+    /// What the card chose to do after flashing is remembered for the next
+    /// package, and a flash that went through hands it to the step that reads
+    /// the table back — which is where the modes that write `misc` get its
+    /// sectors from.
+    #[test]
+    fn the_after_flashing_choice_runs_once_the_table_is_back() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.programmer_uploaded = true;
+
+        // The default does nothing at all.
+        assert_eq!(state.flash.qualcomm.after_flash, AfterFlash::Stay);
+        let _ = update(&mut state, Message::QualcommXmlFlashFinished(Ok(2)));
+        assert!(state.flash.qualcomm.pending_after_flash.is_none());
+        assert!(!state.flash.qualcomm.busy);
+
+        // A choice outlives the card it was made in.
+        let _ = update(
+            &mut state,
+            Message::QualcommXmlAfterFlashSelected(AfterFlash::PowerOff),
+        );
+        assert_eq!(state.flash.qualcomm.after_flash, AfterFlash::PowerOff);
+
+        // A flash that failed runs nothing.
+        let _ = update(
+            &mut state,
+            Message::QualcommXmlFlashFinished(Err("the phone said NAK".to_owned())),
+        );
+        assert!(state.flash.qualcomm.pending_after_flash.is_none());
+
+        // A flash that went through keeps it for the table read.
+        let _ = update(&mut state, Message::QualcommXmlFlashFinished(Ok(2)));
+        assert_eq!(
+            state.flash.qualcomm.pending_after_flash,
+            Some(AfterFlash::PowerOff)
+        );
+
+        // And the read runs it: with a port it becomes the job in flight.
+        state.flash.qualcomm.port = Some("COM26".to_owned());
+        let _ = update(
+            &mut state,
+            Message::QualcommRefreshed(Ok(firehose::Table {
+                storage: StorageType::Ufs,
+                partitions: Vec::new(),
+            })),
+        );
+        assert!(state.flash.qualcomm.pending_after_flash.is_none());
+        assert!(state.flash.qualcomm.busy);
+        assert!(matches!(
+            state.flash.qualcomm.status,
+            QualcommStatus::Rebooting
+        ));
+    }
+
+    /// Without a port there is nothing to switch off or reset, so the choice
+    /// says why instead of leaving the page looking busy.
+    #[test]
+    fn the_after_flashing_choice_needs_a_port() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.pending_after_flash = Some(AfterFlash::Reboot);
+
+        let _ = update(
+            &mut state,
+            Message::QualcommRefreshed(Err("no GUID partition table".to_owned())),
+        );
+
+        assert!(state.flash.qualcomm.pending_after_flash.is_none());
+        assert!(!state.flash.qualcomm.busy);
+        assert!(matches!(
+            state.flash.qualcomm.status,
+            QualcommStatus::RebootFailed(_)
+        ));
+    }
+
+    /// "Flash XML" runs on the programmer that is already in the phone: without
+    /// one the button says so instead of opening a card that could not flash.
+    #[test]
+    fn the_xml_flash_needs_a_running_programmer() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+
+        let _ = update(&mut state, Message::QualcommXmlFlash);
+
+        assert!(state.flash.qualcomm.xml_flash.is_none());
+        assert_eq!(overlay_key(&state), OVERLAY_NONE);
+        assert!(matches!(
+            state.flash.qualcomm.status,
+            QualcommStatus::XmlFlashFailed(_)
+        ));
+
+        // With the programmer running, the card asks what kind of package it
+        // is.
+        state.flash.qualcomm.programmer_uploaded = true;
+        let _ = update(&mut state, Message::QualcommXmlFlash);
+
+        assert_eq!(overlay_key(&state), OVERLAY_QUALCOMM_XML_FLASH);
+        assert!(matches!(
+            state.flash.qualcomm.xml_flash,
+            Some(XmlFlashDialog::Choosing)
+        ));
+
+        let _ = update(&mut state, Message::QualcommXmlClosed);
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+        assert!(state.flash.qualcomm.xml_flash.is_none());
+    }
+
+    /// The checklist starts on the images that are there, minus the three
+    /// partitions the packages are flashed without, and the steps it runs are
+    /// the rows the user kept.
+    #[test]
+    fn the_xml_checklist_starts_on_what_can_be_flashed() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+
+        let entry = |label: &str, file: &str, exists: bool| qfil::Entry {
+            label: label.to_owned(),
+            file: file.to_owned(),
+            path: std::path::PathBuf::from(file),
+            exists,
+            lun: 0,
+            sector_size: 4096,
+            start_sector: qfil::Sector::At(0),
+            sectors: 2,
+            file_sector_offset: 0,
+            sparse: false,
+        };
+
+        let plan = qfil::Plan {
+            entries: vec![
+                entry("xbl_a", "xbl.elf", true),
+                entry("sec", "sec.img", true),
+                entry("system_a", "system.img", false),
+                // A sparse image is an ordinary row: the flash expands its
+                // chunks as it writes them.
+                qfil::Entry {
+                    sparse: true,
+                    ..entry("super", "super.img", true)
+                },
+            ],
+            erases: vec![
+                qfil::Erase {
+                    label: "sec".to_owned(),
+                    lun: 0,
+                    sector_size: 4096,
+                    start_sector: qfil::Sector::At(100),
+                    sectors: 8,
+                    zero: false,
+                },
+                qfil::Erase {
+                    label: "userdata".to_owned(),
+                    lun: 0,
+                    sector_size: 4096,
+                    start_sector: qfil::Sector::At(200),
+                    sectors: 8,
+                    zero: false,
+                },
+            ],
+            patches: vec![qfil::Patch {
+                label: "DISK".to_owned(),
+                lun: 0,
+                sector_size: 4096,
+                start_sector: qfil::Sector::At(4095),
+                byte_offset: 16,
+                size: 4,
+                value: "NUM_DISK_SECTORS-1.".to_owned(),
+                what: "the last sector".to_owned(),
+            }],
+            // The order the file lists them in: `sec` is erased before its
+            // image goes down, and `userdata` is only erased.
+            actions: vec![
+                qfil::Action::Program(0),
+                qfil::Action::Erase(0),
+                qfil::Action::Program(1),
+                qfil::Action::Program(2),
+                qfil::Action::Erase(1),
+                qfil::Action::Program(3),
+            ],
+            ..qfil::Plan::default()
+        };
+
+        // The image that is there is ticked, `sec` is not, and neither is the
+        // one that is missing.
+        let checklist = XmlFlashPlan::new(plan.clone());
+        assert_eq!(checklist.chosen, [true, false, false, true]);
+        assert_eq!(checklist.kept(), 2);
+
+        // Only the ticked rows become writes, and an erase goes with its row.
+        let steps = checklist.steps();
+        assert_eq!(steps.len(), 3);
+        match &steps[0] {
+            firehose::PackageStep::Write(write) => {
+                assert_eq!(write.label, "xbl_a");
+                assert_eq!(write.path, std::path::PathBuf::from("xbl.elf"));
+                assert_eq!(write.bytes(), 8192);
+            }
+            other => panic!("a write was expected, not {other:?}"),
+        }
+        // `userdata` has no image of its own, so its erase is always run.
+        match &steps[1] {
+            firehose::PackageStep::Erase(erase) => assert_eq!(erase.label, "userdata"),
+            other => panic!("an erase was expected, not {other:?}"),
+        }
+        // The sparse image is written like any other; the flash is what
+        // expands its chunks.
+        match &steps[2] {
+            firehose::PackageStep::Write(write) => assert_eq!(write.label, "super"),
+            other => panic!("a write was expected, not {other:?}"),
+        }
+
+        // Ticking `sec` brings its erase with it, and the patch is handed on.
+        state.flash.qualcomm.xml_flash =
+            Some(XmlFlashDialog::Ready(XmlFlashPlan::new(plan)));
+        let _ = update(&mut state, Message::QualcommXmlRowToggled(1));
+
+        let XmlFlashDialog::Ready(checklist) =
+            state.flash.qualcomm.xml_flash.as_ref().expect("the card")
+        else {
+            panic!("the checklist stays up");
+        };
+
+        assert_eq!(checklist.chosen, [true, true, false, true]);
+        assert_eq!(checklist.kept(), 3);
+        // `sec`'s erase comes with its row, and the missing image is not
+        // written: three writes and two erases.
+        assert_eq!(checklist.steps().len(), 5);
+        assert_eq!(checklist.patches().len(), 1);
+
+        // An image that is not on disk cannot be ticked at all.
+        let _ = update(&mut state, Message::QualcommXmlRowToggled(2));
+        let XmlFlashDialog::Ready(checklist) =
+            state.flash.qualcomm.xml_flash.as_ref().expect("the card")
+        else {
+            panic!("the checklist stays up");
+        };
+        assert_eq!(checklist.chosen[2], false);
+    }
+
+    /// A package whose files cannot be read says why instead of showing a
+    /// checklist.
+    #[test]
+    fn a_package_that_cannot_be_read_says_why() {
+        let mut state = State::default();
+        state.flash.qualcomm.open = true;
+        state.flash.qualcomm.programmer_uploaded = true;
+        state.flash.qualcomm.xml_flash = Some(XmlFlashDialog::Picking(qfil::Build::Meta));
+
+        let _ = update(
+            &mut state,
+            Message::QualcommXmlFilesPicked(Some(vec![
+                std::path::PathBuf::from("this/is/not/there/contents.xml"),
+            ])),
+        );
+
+        match &state.flash.qualcomm.xml_flash {
+            Some(XmlFlashDialog::Failed(error)) => {
+                assert!(error.contains("contents.xml"), "{error}")
+            }
+            _ => panic!("the card says the package could not be read"),
+        }
+
+        // Dismissing the picker goes back to the question it came from.
+        state.flash.qualcomm.xml_flash = Some(XmlFlashDialog::Picking(qfil::Build::Flat));
+        let _ = update(&mut state, Message::QualcommXmlFilesPicked(None));
+        assert!(matches!(
+            state.flash.qualcomm.xml_flash,
+            Some(XmlFlashDialog::Choosing)
+        ));
     }
 
     /// The identity the boot ROM reports stops the injection: the card goes up
@@ -15763,7 +16579,8 @@ mod tests {
         assert!(!state.flash.qualcomm.busy);
     }
 
-    /// Every reboot mode starts its own job, and each one reports its outcome.
+    /// Every reboot mode starts its own job, and each one reports its outcome —
+    /// a power-off ends with the words of its own.
     #[test]
     fn every_reboot_mode_starts_a_job() {
         for mode in RebootMode::ALL {
@@ -15783,14 +16600,22 @@ mod tests {
             );
             assert!(state.flash.qualcomm.progress.is_some(), "{mode:?} has no progress");
 
+            let reason = "the phone did not answer".to_owned();
             let _ = update(
                 &mut state,
-                Message::QualcommResetFinished(Err("the phone did not answer".to_owned())),
+                match mode.action() {
+                    Some(_) => Message::QualcommResetFinished(Err(reason.clone())),
+                    None => Message::QualcommPowerOffFinished(Err(reason.clone())),
+                },
             );
             assert!(!state.flash.qualcomm.busy);
             assert_eq!(
                 state.flash.qualcomm.status,
-                QualcommStatus::RebootFailed("the phone did not answer".to_owned())
+                match mode.action() {
+                    Some(_) => QualcommStatus::RebootFailed(reason),
+                    None => QualcommStatus::PowerOffFailed(reason),
+                },
+                "{mode:?} reported the wrong outcome"
             );
         }
     }
