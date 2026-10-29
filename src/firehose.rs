@@ -1607,43 +1607,20 @@ pub struct LunImage {
     pub lun: u8,
 }
 
-/// How long one image is, checked against the room it is written into.
-///
-/// An image may be shorter than its partition — a partial backup is restored as
-/// far as it goes — but one byte longer is refused: the extra sectors would
-/// spill into whatever the phone keeps after it. `what` names the target in the
-/// error, whichever kind of partition it is.
-fn image_length(path: &Path, capacity: u64, what: &str) -> Result<u64, String> {
-    let length = std::fs::metadata(path)
-        .map_err(|error| format!("could not read {}: {error}", path.display()))?
-        .len();
-    if length == 0 {
-        return Err(format!("{} is empty", path.display()));
-    }
-    if length > capacity {
-        return Err(format!(
-            "{} holds {length} bytes, but {what} only has {capacity} bytes",
-            path.display()
-        ));
-    }
-
-    Ok(length)
-}
-
-/// How long one image is, checked against the LUN it is written to.
-fn checked_image(image: &LunImage, luns: &[Lun]) -> Result<(Lun, u64), String> {
+/// One whole-storage image, checked against the LUN it is written to.
+fn checked_image(image: &LunImage, luns: &[Lun]) -> Result<(Lun, Prepared), String> {
     let lun = luns
         .iter()
         .find(|lun| lun.number == image.lun)
         .ok_or_else(|| format!("this storage has no LUN {}", image.lun))?;
 
-    let length = image_length(
+    let prepared = prepare_image(
         &image.path,
-        lun.bytes(),
+        Some(lun.bytes()),
         &format!("LUN {}", lun.number),
     )?;
 
-    Ok((lun.clone(), length))
+    Ok((lun.clone(), prepared))
 }
 
 /// Writes whole-storage images back to the physical partitions they belong to.
@@ -1696,8 +1673,8 @@ fn flash_storage_session(
     // Every image is checked against its LUN before the port is even opened.
     let mut checked = Vec::with_capacity(images.len());
     for image in images {
-        let (lun, length) = checked_image(image, luns)?;
-        checked.push((lun, length));
+        let (lun, prepared) = checked_image(image, luns)?;
+        checked.push((lun, prepared));
     }
 
     let mut session = Session {
@@ -1708,34 +1685,36 @@ fn flash_storage_session(
 
     let overall_total = checked
         .iter()
-        .map(|(lun, length)| padded(*length, lun.sector_size))
+        .map(|(lun, prepared)| padded(prepared.length(), lun.sector_size))
         .fold(0_u64, u64::saturating_add);
     let mut before = 0_u64;
 
-    for (image, (lun, length)) in images.iter().zip(&checked) {
-        let mut file = File::open(&image.path)
-            .map_err(|error| format!("could not read {}: {error}", image.path.display()))?;
-
+    for (image, (lun, prepared)) in images.iter().zip(&checked) {
         session.line(format!(
-            "writing {} ({length} bytes) to lun {} ({} bytes)",
+            "writing {} ({}{} bytes) to lun {} ({} bytes)",
             image.path.display(),
+            prepared.length(),
+            if prepared.is_sparse() {
+                " once expanded, "
+            } else {
+                ""
+            },
             lun.number,
             lun.bytes()
         ));
-        program_image(
+
+        write_prepared(
             &mut session,
             &lun.region(),
-            &mut Image::File {
-                file: &mut file,
-                path: &image.path,
-                length: *length,
-            },
+            &image.path,
+            prepared,
+            0,
             before,
             overall_total,
             on_progress,
         )?;
 
-        before = before.saturating_add(padded(*length, lun.sector_size));
+        before = before.saturating_add(padded(prepared.length(), lun.sector_size));
     }
 
     Ok(images.len())
@@ -1768,13 +1747,14 @@ impl RangeWrite {
         self.sectors.saturating_mul(u64::from(self.sector_size))
     }
 
-    /// The range as the page's own region type, once the start is known.
-    fn region(&self, start: &Place) -> Region {
+    /// The range over `sectors` sectors, which the package may leave at zero —
+    /// then the image itself says how long it is.
+    fn region_with(&self, start: &Place, sectors: u64) -> Region {
         Region {
             name: self.label.clone(),
             lun: self.lun,
             start_lba: start.lba(),
-            end_lba: start.lba().saturating_add(self.sectors).saturating_sub(1),
+            end_lba: start.lba().saturating_add(sectors).saturating_sub(1),
             sector_size: self.sector_size,
             start_expression: start.expression().map(str::to_owned),
         }
@@ -1923,21 +1903,22 @@ fn flash_package_session(
     }
 
     // Every image is checked before the port is opened: a flash that stops
-    // halfway through is worse than one that never started.
-    for step in steps {
+    // halfway through is worse than one that never started. The length each one
+    // covers is kept, so the bar follows the bytes of storage rather than the
+    // bytes the files weigh.
+    let mut covered = vec![0_u64; steps.len()];
+
+    for (index, step) in steps.iter().enumerate() {
         let PackageStep::Write(write) = step else {
             continue;
         };
 
-        let mut file = File::open(&write.path)
+        let file = File::open(&write.path)
             .map_err(|error| format!("could not read {}: {error}", write.path.display()))?;
         let size = file
             .metadata()
             .map_err(|error| format!("could not read {}: {error}", write.path.display()))?
             .len();
-        if size == 0 {
-            return Err(format!("{} is empty", write.path.display()));
-        }
         if size < write.file_sector_offset.saturating_mul(u64::from(write.sector_size)) {
             return Err(format!(
                 "{} is smaller than the offset {} the package reads it from",
@@ -1945,23 +1926,27 @@ fn flash_package_session(
                 write.file_sector_offset
             ));
         }
+        drop(file);
 
         // An Android sparse image is a container of chunks, not the bytes the
         // storage wants: it is walked here, before a single sector is written,
         // so a broken one is refused while the storage is still whole.
-        let mut magic = [0_u8; 4];
-        if file.read_exact(&mut magic).is_ok() && magic == SPARSE_MAGIC {
-            if write.file_sector_offset != 0 {
-                return Err(format!(
-                    "{} is a sparse image, and a sparse image cannot be read from an \
-                     offset inside the file",
-                    write.path.display()
-                ));
-            }
+        let capacity = (write.bytes() > 0).then(|| write.bytes());
+        let prepared = prepare_image(
+            &write.path,
+            capacity,
+            &format!("the {} partition", write.label),
+        )?;
 
-            check_sparse_image(&write.path, write.bytes())?;
-            continue;
+        if prepared.is_sparse() && write.file_sector_offset != 0 {
+            return Err(format!(
+                "{} is a sparse image, and a sparse image cannot be read from an \
+                 offset inside the file",
+                write.path.display()
+            ));
         }
+
+        covered[index] = prepared.length();
     }
 
     let mut session = Session {
@@ -1972,8 +1957,9 @@ fn flash_package_session(
 
     let overall_total = steps
         .iter()
-        .map(|step| match step {
-            PackageStep::Write(write) => write.bytes(),
+        .enumerate()
+        .map(|(index, step)| match step {
+            PackageStep::Write(_) => covered.get(index).copied().unwrap_or(0),
             PackageStep::Erase(erase) => erase
                 .sectors
                 .saturating_mul(u64::from(erase.sector_size)),
@@ -2396,60 +2382,67 @@ fn write_image(
     overall_total: u64,
     on_progress: &dyn Fn(Progress),
 ) -> Result<(), String> {
-    let region = write.region(start);
-    let mut file = File::open(&write.path)
-        .map_err(|error| format!("could not read {}: {error}", write.path.display()))?;
+    // A package may leave the sector count at zero, which is how a sparse image
+    // is written when its own header already says how long it is.
+    let capacity = (write.bytes() > 0).then(|| write.bytes());
+    let prepared = prepare_image(
+        &write.path,
+        capacity,
+        &format!("the {} partition", write.label),
+    )?;
+
+    if prepared.is_sparse() && write.file_sector_offset != 0 {
+        return Err(format!(
+            "{} is a sparse image, and a sparse image cannot be read from an \
+             offset inside the file",
+            write.path.display()
+        ));
+    }
+
+    // A sparse image is a list of runs, each addressed by number, so a chunked
+    // image needs a start the host can count from.
+    if prepared.is_sparse() && start.expression().is_some() {
+        return Err(format!(
+            "{} is a sparse image, and its runs cannot be placed from the \
+             expression `{}` — the phone's own length is not known",
+            write.path.display(),
+            start.expression().unwrap_or_default()
+        ));
+    }
+
+    let sector_size = u64::from(write.sector_size);
+    let sectors = match capacity {
+        Some(_) => write.sectors,
+        None => prepared.length().div_ceil(sector_size),
+    };
+    let region = write.region_with(start, sectors);
 
     session.line(format!(
-        "writing {} to {} (lun {}, sectors {})",
+        "writing {} to {} (lun {}, sectors {}){}",
         write.path.display(),
         region.name,
         region.lun,
-        region.describe_sectors()
+        region.describe_sectors(),
+        match &prepared {
+            Prepared::Sparse(layout) => format!(
+                ", {} bytes once expanded, sent as {} command(s)",
+                layout.length,
+                layout.runs.len()
+            ),
+            Prepared::Raw { .. } => String::new(),
+        }
     ));
 
-    // A sparse image is a list of chunks, so it is not streamed as one run of
-    // bytes: every chunk that carries data gets a `<program>` of its own. Each
-    // chunk is addressed by number, so a chunked image needs a start the host
-    // can count from.
-    let mut magic = [0_u8; 4];
-    if file.read_exact(&mut magic).is_ok() && magic == SPARSE_MAGIC {
-        let Some(start_sector) = start.expression().is_none().then(|| start.lba()) else {
-            return Err(format!(
-                "{} is a sparse image, and its chunks cannot be placed from the \
-                 expression `{}` — the phone's own length is not known",
-                write.path.display(),
-                start.expression().unwrap_or_default()
-            ));
-        };
-
-        return write_sparse_image(
-            session,
-            write,
-            &mut file,
-            start_sector,
-            before,
-            overall_total,
-            on_progress,
-        );
-    }
-
-    let offset = write
+    let skip = write
         .file_sector_offset
         .saturating_mul(u64::from(write.sector_size));
-    if offset > 0 {
-        file.seek(std::io::SeekFrom::Start(offset))
-            .map_err(|error| format!("could not read {}: {error}", write.path.display()))?;
-    }
 
-    program_image(
+    write_prepared(
         session,
         &region,
-        &mut Image::File {
-            file: &mut file,
-            path: &write.path,
-            length: write.bytes(),
-        },
+        &write.path,
+        &prepared,
+        skip,
         before,
         overall_total,
         on_progress,
@@ -2588,23 +2581,147 @@ fn read_sparse_chunk(
     Ok(SparseChunk { kind, blocks })
 }
 
-/// Checks a sparse image from end to end before anything is written: its
-/// header, every chunk in it, and how far the chunks reach.
-fn check_sparse_image(path: &Path, expect: u64) -> Result<(), String> {
+/// One stretch of a file: where it starts and how long it is.
+///
+/// A chunk of a sparse image carries its blocks right behind its own header, so
+/// the blocks of two chunks that touch in the image are a header apart in the
+/// file — a run of them is a list of pieces, not one read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Piece {
+    offset: u64,
+    length: u64,
+}
+
+/// One stretch of an image that goes down in a single `<program>`.
+///
+/// A raw image is one run. A sparse image is a handful: the chunks that sit next
+/// to each other in the image are one unbroken stretch, so they are merged — the
+/// `system.img` of a Nokia's package holds five thousand one-block chunks that
+/// make up fourteen runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Run {
+    /// Bytes the file itself carries, in the order they go down.
+    Data {
+        at: u64,
+        length: u64,
+        pieces: Vec<Piece>,
+    },
+    /// A four-byte pattern repeated over `length` bytes, which is what a `FILL`
+    /// chunk stands for.
+    Fill {
+        at: u64,
+        pattern: [u8; 4],
+        length: u64,
+    },
+    /// Bytes the image does not store, which are left as they are.
+    Skip { at: u64, length: u64 },
+}
+
+impl Run {
+    /// Where in the image the run starts.
+    fn at(&self) -> u64 {
+        match self {
+            Run::Data { at, .. } | Run::Fill { at, .. } | Run::Skip { at, .. } => *at,
+        }
+    }
+
+    /// How many bytes of the image the run covers.
+    fn length(&self) -> u64 {
+        match self {
+            Run::Data { length, .. } | Run::Fill { length, .. } | Run::Skip { length, .. } => *length,
+        }
+    }
+}
+
+/// A sparse image read from end to end: how long it is once expanded, and the
+/// runs it is made of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SparseLayout {
+    length: u64,
+    runs: Vec<Run>,
+}
+
+impl SparseLayout {
+    /// Adds a run, joining it to the one before it when the two are one
+    /// unbroken stretch of the image.
+    fn push(&mut self, run: Run) {
+        if run.length() == 0 {
+            return;
+        }
+
+        if let Some(last) = self.runs.last_mut() {
+            if extend(last, &run) {
+                return;
+            }
+        }
+
+        self.runs.push(run);
+    }
+}
+
+/// Joins `run` onto `last` when the two are one unbroken stretch of the image —
+/// the same bytes right where `last` ends, or the same pattern.
+fn extend(last: &mut Run, run: &Run) -> bool {
+    let contiguous = last.at().saturating_add(last.length()) == run.at();
+
+    match (last, run) {
+        (
+            Run::Data {
+                length, pieces, ..
+            },
+            Run::Data {
+                length: extra,
+                pieces: next,
+                ..
+            },
+        ) if contiguous => {
+            pieces.extend_from_slice(next);
+            *length = length.saturating_add(*extra);
+            true
+        }
+        (
+            Run::Fill {
+                pattern, length, ..
+            },
+            Run::Fill {
+                pattern: next,
+                length: extra,
+                ..
+            },
+        ) if contiguous && *pattern == *next => {
+            *length = length.saturating_add(*extra);
+            true
+        }
+        (Run::Skip { length, .. }, Run::Skip { length: extra, .. }) if contiguous => {
+            *length = length.saturating_add(*extra);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Reads a sparse image from end to end before a single sector is written: its
+/// header, every chunk in it, and how far the chunks reach. What comes back is
+/// the plan the writer follows.
+fn read_sparse_layout(path: &Path) -> Result<SparseLayout, String> {
     let mut file =
         File::open(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let header = SparseHeader::read(&mut file, path)?;
+    let mut layout = SparseLayout {
+        length: 0,
+        runs: Vec::new(),
+    };
 
-    let mut covered = 0_u64;
     for index in 0..header.chunks {
         let chunk = read_sparse_chunk(&mut file, path, &header)?;
-        let bytes = chunk.bytes(header.block_size);
+        let length = chunk.bytes(header.block_size);
+        let at = layout.length;
 
         match chunk.kind {
             ChunkKind::Data { payload } => {
                 // The blocks a chunk covers are exactly the bytes it carries;
                 // anything else is a file that cannot be written as it stands.
-                if payload != bytes {
+                if payload != length {
                     return Err(format!(
                         "{} holds {payload} bytes in chunk {index} for {} blocks of \
                          {} bytes",
@@ -2614,133 +2731,233 @@ fn check_sparse_image(path: &Path, expect: u64) -> Result<(), String> {
                     ));
                 }
 
-                file.seek(std::io::SeekFrom::Current(payload as i64))
+                // The bytes travel right behind the chunk header.
+                let file_offset = file
+                    .stream_position()
                     .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                file.seek(std::io::SeekFrom::Current(length as i64))
+                    .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+
+                layout.push(Run::Data {
+                    at,
+                    length,
+                    pieces: vec![Piece {
+                        offset: file_offset,
+                        length,
+                    }],
+                });
             }
+            ChunkKind::Fill { pattern } => layout.push(Run::Fill { at, pattern, length }),
             ChunkKind::Skip { payload } => {
-                file.seek(std::io::SeekFrom::Current(payload as i64))
-                    .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                if payload > 0 {
+                    file.seek(std::io::SeekFrom::Current(payload as i64))
+                        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                }
+
+                layout.push(Run::Skip { at, length });
             }
-            ChunkKind::Fill { .. } => {}
         }
 
-        covered = covered.saturating_add(bytes);
+        layout.length = at.saturating_add(length);
     }
 
     let described = header.blocks.saturating_mul(header.block_size);
-    if covered != described {
+    if layout.length != described {
         return Err(format!(
-            "{} expands to {covered} bytes, but its header says {described}",
-            path.display()
-        ));
-    }
-    if covered > expect {
-        return Err(format!(
-            "{} expands to {covered} bytes, which is more than the {expect} the \
-             package gives the partition",
-            path.display()
+            "{} expands to {} bytes, but its header says {described}",
+            path.display(),
+            layout.length
         ));
     }
 
-    Ok(())
+    Ok(layout)
 }
 
-/// Writes a `<program>` whose file is an Android sparse image.
+/// An image, read and checked against the room it is written into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Prepared {
+    /// The bytes of the file itself.
+    Raw { length: u64 },
+    /// A container of chunks, expanded as it is written.
+    Sparse(SparseLayout),
+}
+
+impl Prepared {
+    /// How many bytes of the storage the image covers. A sparse image covers
+    /// what its chunks expand to, not what its container weighs.
+    fn length(&self) -> u64 {
+        match self {
+            Prepared::Raw { length } => *length,
+            Prepared::Sparse(layout) => layout.length,
+        }
+    }
+
+    /// Whether the image has to be expanded as it is written.
+    fn is_sparse(&self) -> bool {
+        matches!(self, Prepared::Sparse(_))
+    }
+}
+
+/// Reads an image and checks how much of the storage it covers.
 ///
-/// Each chunk that carries data becomes one `<program>` at the sector its place
-/// in the expanded image falls on: `RAW` chunks stream their bytes, `FILL`
-/// chunks send their pattern, and the blocks a chunk does not store are left as
-/// they are — which is what the image means by not storing them.
-fn write_sparse_image(
+/// An image may be shorter than its target — a partial backup is restored as far
+/// as it goes — but one byte longer is refused: the extra sectors would spill
+/// into whatever the phone keeps after it. `capacity` is what the target can
+/// take, or `None` when the package gives no length at all
+/// (`num_partition_sectors="0"`, which is how a sparse image that carries its
+/// own length is written), and then the image says how long it is.
+fn prepare_image(path: &Path, capacity: Option<u64>, what: &str) -> Result<Prepared, String> {
+    let mut file =
+        File::open(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let size = file
+        .metadata()
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?
+        .len();
+    if size == 0 {
+        return Err(format!("{} is empty", path.display()));
+    }
+
+    let mut magic = [0_u8; 4];
+    let sparse = file.read_exact(&mut magic).is_ok() && magic == SPARSE_MAGIC;
+    drop(file);
+
+    let prepared = if sparse {
+        Prepared::Sparse(read_sparse_layout(path)?)
+    } else {
+        Prepared::Raw { length: size }
+    };
+
+    if let Some(capacity) = capacity {
+        let length = prepared.length();
+        if length > capacity {
+            return Err(match &prepared {
+                Prepared::Raw { .. } => format!(
+                    "{} holds {length} bytes, but {what} only has {capacity} bytes",
+                    path.display()
+                ),
+                Prepared::Sparse(_) => format!(
+                    "{} expands to {length} bytes, but {what} only has {capacity} bytes",
+                    path.display()
+                ),
+            });
+        }
+    }
+
+    Ok(prepared)
+}
+
+/// Writes `prepared` into `region`.
+///
+/// A raw image is one `<program>` with its bytes behind it; a sparse image is
+/// one `<program>` per run, each at the sector its place in the expanded image
+/// falls on, and the stretches it does not store are left as they are — which is
+/// what the image means by not storing them.
+///
+/// `skip` is how many bytes at the start of the file the image does not include
+/// (`file_sector_offset`); a sparse image has none.
+fn write_prepared(
     session: &mut Session<'_>,
-    write: &RangeWrite,
-    file: &mut File,
-    start_sector: u64,
+    region: &Region,
+    path: &Path,
+    prepared: &Prepared,
+    skip: u64,
     before: u64,
     overall_total: u64,
     on_progress: &dyn Fn(Progress),
 ) -> Result<(), String> {
-    file.seek(std::io::SeekFrom::Start(0))
-        .map_err(|error| format!("could not read {}: {error}", write.path.display()))?;
+    let mut file =
+        File::open(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
 
-    let header = SparseHeader::read(file, &write.path)?;
-    let sector_size = u64::from(write.sector_size);
-    let mut cursor = 0_u64;
+    let Prepared::Sparse(layout) = prepared else {
+        // A plain image is one piece of the file, read from wherever the
+        // package says its first byte is.
+        let pieces = [Piece {
+            offset: skip,
+            length: prepared.length(),
+        }];
 
-    for index in 0..header.chunks {
-        let chunk = read_sparse_chunk(file, &write.path, &header)?;
-        let bytes = chunk.bytes(header.block_size);
+        return program_image(
+            session,
+            region,
+            &mut Image::File {
+                file: &mut file,
+                path,
+                pieces: &pieces,
+                length: prepared.length(),
+            },
+            before,
+            overall_total,
+            on_progress,
+        );
+    };
 
-        if matches!(chunk.kind, ChunkKind::Data { .. } | ChunkKind::Fill { .. })
-            && bytes % sector_size != 0
-        {
+    let sector_size = u64::from(region.sector_size);
+
+    for run in &layout.runs {
+        let at = run.at();
+        if at % sector_size != 0 || run.length() % sector_size != 0 {
             return Err(format!(
-                "chunk {index} of {} covers {bytes} bytes, which is not a whole \
-                 {} sector",
-                write.path.display(),
-                write.sector_size
+                "{} holds {} bytes at {at}, which is not a whole {} sector",
+                path.display(),
+                run.length(),
+                region.sector_size
             ));
         }
 
-        match chunk.kind {
-            ChunkKind::Data { payload } => {
-                let region = chunk_region(write, start_sector, cursor, bytes, sector_size);
-                program_image(
-                    session,
-                    &region,
-                    &mut Image::File {
-                        file,
-                        path: &write.path,
-                        length: payload,
-                    },
-                    before.saturating_add(cursor),
-                    overall_total,
-                    on_progress,
-                )?;
-            }
-            ChunkKind::Fill { pattern } => {
-                let region = chunk_region(write, start_sector, cursor, bytes, sector_size);
-                program_image(
-                    session,
-                    &region,
-                    &mut Image::Fill {
-                        pattern,
-                        length: bytes,
-                    },
-                    before.saturating_add(cursor),
-                    overall_total,
-                    on_progress,
-                )?;
-            }
-            ChunkKind::Skip { payload } => {
-                file.seek(std::io::SeekFrom::Current(payload as i64))
-                    .map_err(|error| format!("could not read {}: {error}", write.path.display()))?;
-            }
-        }
+        // Where the run lands in the storage, and how far into the image the
+        // progress has come by the time it is down.
+        let moved = moved_region(region, at / sector_size, run.length() / sector_size);
+        let offset = before.saturating_add(at);
 
-        cursor = cursor.saturating_add(bytes);
+        match run {
+            Run::Data {
+                length, pieces: parts, ..
+            } => {
+                program_image(
+                    session,
+                    &moved,
+                    &mut Image::File {
+                        file: &mut file,
+                        path,
+                        pieces: parts,
+                        length: *length,
+                    },
+                    offset,
+                    overall_total,
+                    on_progress,
+                )?;
+            }
+            Run::Fill { pattern, length, .. } => {
+                program_image(
+                    session,
+                    &moved,
+                    &mut Image::Fill {
+                        pattern: *pattern,
+                        length: *length,
+                    },
+                    offset,
+                    overall_total,
+                    on_progress,
+                )?;
+            }
+            Run::Skip { .. } => {}
+        }
     }
 
     Ok(())
 }
 
-/// The range one chunk of a sparse image lands on.
-fn chunk_region(
-    write: &RangeWrite,
-    start_sector: u64,
-    cursor: u64,
-    bytes: u64,
-    sector_size: u64,
-) -> Region {
-    let at = start_sector.saturating_add(cursor / sector_size);
-    let sectors = bytes / sector_size;
+/// The range one run of an image covers: the same LUN and sector size, moved to
+/// where the run starts.
+fn moved_region(region: &Region, sectors: u64, count: u64) -> Region {
+    let start = region.start_lba.saturating_add(sectors);
 
     Region {
-        name: write.label.clone(),
-        lun: write.lun,
-        start_lba: at,
-        end_lba: at.saturating_add(sectors).saturating_sub(1),
-        sector_size: write.sector_size,
+        name: region.name.clone(),
+        lun: region.lun,
+        start_lba: start,
+        end_lba: start.saturating_add(count).saturating_sub(1),
+        sector_size: region.sector_size,
         start_expression: None,
     }
 }
@@ -2978,12 +3195,12 @@ fn flash_partitions_session(
     // Every image is checked against its partition before the port is opened.
     let mut checked = Vec::with_capacity(images.len());
     for image in images {
-        let length = image_length(
+        let prepared = prepare_image(
             &image.path,
-            image.region.bytes(),
+            Some(image.region.bytes()),
             &format!("partition {}", image.region.name),
         )?;
-        checked.push(length);
+        checked.push(prepared);
     }
 
     let mut session = Session {
@@ -2995,36 +3212,38 @@ fn flash_partitions_session(
     let overall_total = images
         .iter()
         .zip(&checked)
-        .map(|(image, length)| padded(*length, image.region.sector_size))
+        .map(|(image, prepared)| padded(prepared.length(), image.region.sector_size))
         .fold(0_u64, u64::saturating_add);
     let mut before = 0_u64;
 
-    for (image, length) in images.iter().zip(&checked) {
-        let mut file = File::open(&image.path)
-            .map_err(|error| format!("could not read {}: {error}", image.path.display()))?;
-
+    for (image, prepared) in images.iter().zip(&checked) {
         session.line(format!(
-            "writing {} ({length} bytes) to lun {} {} (sectors {}..{})",
+            "writing {} ({}{} bytes) to lun {} {} (sectors {}..{})",
             image.path.display(),
+            prepared.length(),
+            if prepared.is_sparse() {
+                " once expanded, "
+            } else {
+                ""
+            },
             image.region.lun,
             image.region.name,
             image.region.start_lba,
             image.region.end_lba
         ));
-        program_image(
+
+        write_prepared(
             &mut session,
             &image.region,
-            &mut Image::File {
-                file: &mut file,
-                path: &image.path,
-                length: *length,
-            },
+            &image.path,
+            prepared,
+            0,
             before,
             overall_total,
             on_progress,
         )?;
 
-        before = before.saturating_add(padded(*length, image.region.sector_size));
+        before = before.saturating_add(padded(prepared.length(), image.region.sector_size));
     }
 
     Ok(images.len())
@@ -3113,23 +3332,11 @@ fn write_session(
     log: &mut FlashLog,
     on_progress: &dyn Fn(Progress),
 ) -> Result<(), String> {
-    let size = std::fs::metadata(image)
-        .map_err(|error| format!("could not read {}: {error}", image.display()))?
-        .len();
-    if size == 0 {
-        return Err(format!("{} is empty", image.display()));
-    }
-    if size > region.bytes() {
-        return Err(format!(
-            "{} holds {size} bytes, but {} only has {} bytes",
-            image.display(),
-            region.name,
-            region.bytes()
-        ));
-    }
-
-    let mut file = File::open(image)
-        .map_err(|error| format!("could not read {}: {error}", image.display()))?;
+    let prepared = prepare_image(
+        image,
+        Some(region.bytes()),
+        &format!("partition {}", region.name),
+    )?;
 
     let mut session = Session {
         transport: Transport::open(port)?,
@@ -3137,11 +3344,13 @@ fn write_session(
     };
     session.set_read_timeout(FIREHOSE_TIMEOUT)?;
 
-    let total = padded(size, region.sector_size);
-    program_image(
+    let total = padded(prepared.length(), region.sector_size);
+    write_prepared(
         &mut session,
         region,
-        &mut Image::File { file: &mut file, path: image, length: size },
+        image,
+        &prepared,
+        0,
         0,
         total,
         on_progress,
@@ -3151,10 +3360,12 @@ fn write_session(
 /// Where one `<program>` takes its bytes from.
 enum Image<'a> {
     /// An image on disk, read as it is sent, so a large one never has to fit in
-    /// memory.
+    /// memory. A plain image is one piece; a run merged across the chunk
+    /// headers of a sparse image is one piece per chunk.
     File {
         file: &'a mut File,
         path: &'a Path,
+        pieces: &'a [Piece],
         length: u64,
     },
     /// An image held in memory.
@@ -3186,16 +3397,45 @@ impl Image<'_> {
         buffer: &mut [u8],
     ) -> Result<(), String> {
         match self {
-            Image::File { file, path, .. } => {
-                let mut filled = 0_usize;
-                while filled < buffer.len() {
-                    let read = file
-                        .read(&mut buffer[filled..])
-                        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-                    if read == 0 {
+            Image::File {
+                file,
+                path,
+                pieces,
+                ..
+            } => {
+                // The pieces are read in the order they are named, which is the
+                // order the blocks go down in.
+                let mut filled = 0_u64;
+                let mut piece_at = 0_u64;
+
+                for piece in pieces.iter() {
+                    if filled == buffer.len() as u64 {
                         break;
                     }
-                    filled += read;
+
+                    let wanted = offset.saturating_add(filled);
+                    if wanted >= piece_at.saturating_add(piece.length) {
+                        piece_at = piece_at.saturating_add(piece.length);
+                        continue;
+                    }
+
+                    // Where in this piece the buffer starts, and how much of it
+                    // the buffer still has room for.
+                    let into = wanted.saturating_sub(piece_at);
+                    let room = buffer.len() as u64 - filled;
+                    let take = (piece.length - into).min(room) as usize;
+
+                    file.seek(std::io::SeekFrom::Start(piece.offset.saturating_add(into)))
+                        .map_err(|error| {
+                            format!("could not read {}: {error}", path.display())
+                        })?;
+                    file.read_exact(&mut buffer[filled as usize..filled as usize + take])
+                        .map_err(|error| {
+                            format!("could not read {}: {error}", path.display())
+                        })?;
+
+                    filled += take as u64;
+                    piece_at = piece_at.saturating_add(piece.length);
                 }
 
                 Ok(())
@@ -6161,9 +6401,12 @@ mod tests {
 
         // Exactly the size of the LUN, and shorter: both are written.
         let full = write("lun4.img", 8192);
-        assert_eq!(checked_image(&full, &luns).expect("it fits").1, 8192);
+        assert_eq!(checked_image(&full, &luns).expect("it fits").1.length(), 8192);
         let partial = write("lun4-partial.img", 4096);
-        assert_eq!(checked_image(&partial, &luns).expect("it fits").1, 4096);
+        assert_eq!(
+            checked_image(&partial, &luns).expect("it fits").1.length(),
+            4096
+        );
 
         // One sector more is refused.
         let oversized = write("lun4-too-big.img", 12_288);
@@ -6214,26 +6457,36 @@ mod tests {
 
         // Exactly the size of the partition, and shorter: both are written.
         assert_eq!(
-            image_length(&write("boot_a.img", 8192, boot.clone()).path, boot.bytes(), "partition boot_a")
-                .expect("it fits"),
+            prepare_image(
+                &write("boot_a.img", 8192, boot.clone()).path,
+                Some(boot.bytes()),
+                "partition boot_a"
+            )
+            .expect("it fits")
+            .length(),
             8192
         );
         assert_eq!(
-            image_length(&write("boot_a-partial.img", 4096, boot.clone()).path, boot.bytes(), "partition boot_a")
-                .expect("it fits"),
+            prepare_image(
+                &write("boot_a-partial.img", 4096, boot.clone()).path,
+                Some(boot.bytes()),
+                "partition boot_a"
+            )
+            .expect("it fits")
+            .length(),
             4096
         );
 
         // One sector more is refused, and named.
         let oversized = write("boot_a-too-big.img", 12_288, boot.clone());
-        let error = image_length(&oversized.path, boot.bytes(), "partition boot_a")
+        let error = prepare_image(&oversized.path, Some(boot.bytes()), "partition boot_a")
             .expect_err("it does not fit");
         assert!(error.contains("partition boot_a"), "{error}");
         assert!(error.contains("only has 8192 bytes"), "{error}");
 
         // An empty file is not an image.
         let empty = write("boot_a-empty.img", 0, boot.clone());
-        assert!(image_length(&empty.path, boot.bytes(), "partition boot_a").is_err());
+        assert!(prepare_image(&empty.path, Some(boot.bytes()), "partition boot_a").is_err());
 
         // The write path repeats the check before it opens the port, so a
         // refusal here never reaches the phone — the port below is not a
@@ -6579,15 +6832,279 @@ mod tests {
         assert_eq!(skipped.kind, ChunkKind::Skip { payload: 0 });
         assert_eq!(skipped.bytes(header.block_size), 8192);
 
-        // The walk a flash does before it writes anything agrees with it.
-        assert!(check_sparse_image(&path, 24576).is_ok());
+        // The walk a flash does before it writes anything agrees with it, and
+        // says where each run lands and where its bytes are in the file.
+        let layout = read_sparse_layout(&path).expect("a layout");
+        assert_eq!(layout.length, 24576);
+        assert_eq!(
+            layout.runs,
+            vec![
+                Run::Data {
+                    at: 0,
+                    length: 8192,
+                    pieces: vec![Piece {
+                        offset: 40,
+                        length: 8192,
+                    }],
+                },
+                Run::Fill {
+                    at: 8192,
+                    pattern: [0xab; 4],
+                    length: 8192,
+                },
+                Run::Skip {
+                    at: 16384,
+                    length: 8192,
+                },
+            ]
+        );
 
         std::fs::remove_dir_all(&directory).expect("clean up");
     }
 
+    /// A sparse image of a package is a long list of one-block chunks, most of
+    /// them right behind each other: they are one run, so they go down in one
+    /// `<program>` rather than a thousand. A chunk header sits between the
+    /// blocks they carry, so the run is a piece per chunk.
+    #[test]
+    fn the_chunks_that_touch_are_written_as_one_run() {
+        let directory = scratch("sparse-runs");
+        let path = directory.join("system.img");
+
+        // Four one-block chunks in a row, then a hole, then two more.
+        sparse_file(
+            &path,
+            4096,
+            7,
+            &[
+                (0xcac1, 1, vec![0x11; 4096]),
+                (0xcac1, 1, vec![0x22; 4096]),
+                (0xcac1, 1, vec![0x33; 4096]),
+                (0xcac3, 1, Vec::new()),
+                (0xcac1, 1, vec![0x44; 4096]),
+                (0xcac1, 1, vec![0x55; 4096]),
+                (0xcac1, 1, vec![0x66; 4096]),
+            ],
+        );
+
+        let layout = read_sparse_layout(&path).expect("a layout");
+        assert_eq!(layout.length, 7 * 4096);
+        assert_eq!(
+            layout.runs,
+            vec![
+                Run::Data {
+                    at: 0,
+                    length: 3 * 4096,
+                    // Header (28), then a chunk header and a block, three
+                    // times.
+                    pieces: vec![
+                        Piece {
+                            offset: 40,
+                            length: 4096,
+                        },
+                        Piece {
+                            offset: 4148,
+                            length: 4096,
+                        },
+                        Piece {
+                            offset: 8256,
+                            length: 4096,
+                        },
+                    ],
+                },
+                Run::Skip {
+                    at: 3 * 4096,
+                    length: 4096,
+                },
+                Run::Data {
+                    at: 4 * 4096,
+                    length: 3 * 4096,
+                    pieces: vec![
+                        Piece {
+                            offset: 12376,
+                            length: 4096,
+                        },
+                        Piece {
+                            offset: 16484,
+                            length: 4096,
+                        },
+                        Piece {
+                            offset: 20592,
+                            length: 4096,
+                        },
+                    ],
+                },
+            ]
+        );
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// What the chunks of a sparse image add up to, read straight out of the
+    /// file and written out in order — the same answer a `dd` of the expanded
+    /// image would give.
+    fn expand_sparse(path: &Path) -> Vec<u8> {
+        let data = std::fs::read(path).expect("the image");
+        let block_size =
+            u32::from_le_bytes(data[12..16].try_into().expect("a block size")) as usize;
+        let chunks = u32::from_le_bytes(data[20..24].try_into().expect("a chunk count"));
+
+        let mut at = 28_usize;
+        let mut out = Vec::new();
+
+        for _ in 0..chunks {
+            let kind = u16::from_le_bytes([data[at], data[at + 1]]);
+            let blocks =
+                u32::from_le_bytes(data[at + 4..at + 8].try_into().expect("a block count"))
+                    as usize;
+            let total =
+                u32::from_le_bytes(data[at + 8..at + 12].try_into().expect("a length")) as usize;
+            let payload = &data[at + 12..at + total];
+
+            match kind {
+                0xcac1 => out.extend_from_slice(payload),
+                0xcac2 => {
+                    for index in 0..blocks * block_size {
+                        out.push(payload[index % 4]);
+                    }
+                }
+                0xcac3 => out.extend(std::iter::repeat_n(0_u8, blocks * block_size)),
+                other => panic!("a chunk of type {other:#06x}"),
+            }
+
+            at += total;
+        }
+
+        out
+    }
+
+    /// A run merged across the chunk headers of a sparse image sends exactly the
+    /// bytes the image expands to — the pieces are read in the order the blocks
+    /// go down in, and the headers between them never reach the phone.
+    #[test]
+    fn a_run_sends_the_bytes_the_image_expands_to() {
+        let directory = scratch("sparse-stream");
+        let path = directory.join("system.img");
+
+        // Stored blocks, a pattern, a hole, and stored blocks again.
+        sparse_file(
+            &path,
+            4096,
+            8,
+            &[
+                (0xcac1, 1, vec![0x11; 4096]),
+                (0xcac1, 1, vec![0x22; 4096]),
+                (0xcac1, 1, vec![0x33; 4096]),
+                (0xcac2, 2, vec![0xde, 0xad, 0xbe, 0xef]),
+                (0xcac3, 1, Vec::new()),
+                (0xcac1, 1, vec![0x44; 4096]),
+                (0xcac1, 1, vec![0x55; 4096]),
+            ],
+        );
+
+        let expected = expand_sparse(&path);
+        let layout = read_sparse_layout(&path).expect("a layout");
+        assert_eq!(expected.len() as u64, layout.length);
+
+        let region = |length: u64| Region {
+            name: "system".to_owned(),
+            lun: 0,
+            start_lba: 0,
+            end_lba: length.div_ceil(512).saturating_sub(1),
+            sector_size: 512,
+            start_expression: None,
+        };
+
+        let mut file = File::open(&path).expect("the image");
+
+        // Two runs: the three blocks, then the two at the end. The pattern and
+        // the hole are runs of their own.
+        assert_eq!(layout.runs.len(), 4);
+
+        for run in &layout.runs {
+            let at = run.at() as usize;
+
+            match run {
+                Run::Data {
+                    length, pieces, ..
+                } => {
+                    let mut image = Image::File {
+                        file: &mut file,
+                        path: &path,
+                        pieces,
+                        length: *length,
+                    };
+
+                    // Buffers that are not a whole piece, so a read has to carry
+                    // on into the piece that follows the header.
+                    let mut got = vec![0_u8; *length as usize];
+                    let mut offset = 0_usize;
+                    while offset < got.len() {
+                        let take = (got.len() - offset).min(1000);
+                        image
+                            .fill(&region(*length), offset as u64, &mut got[offset..offset + take])
+                            .expect("a fill");
+                        offset += take;
+                    }
+
+                    assert_eq!(got, expected[at..at + got.len()], "the run at {at}");
+                }
+                Run::Fill { pattern, length, .. } => {
+                    let mut image = Image::Fill {
+                        pattern: *pattern,
+                        length: *length,
+                    };
+                    let mut got = vec![0_u8; *length as usize];
+                    image
+                        .fill(&region(*length), 0, &mut got)
+                        .expect("a fill");
+
+                    assert_eq!(got, expected[at..at + got.len()], "the pattern at {at}");
+                }
+                Run::Skip { .. } => {}
+            }
+        }
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// A package's own sparse image expands to the whole partition it is
+    /// written to, and the thousands of one-block chunks it is made of come out
+    /// as a handful of runs — the commands a flash actually sends.
+    #[test]
+    fn a_packages_sparse_image_expands_to_its_partition() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("reference/kaiosxml");
+        let program = folder.join("rawprogram0.xml");
+
+        let Ok(plan) = qfil::flat(&[program]) else {
+            return;
+        };
+        let Some(entry) = plan.entries.iter().find(|entry| entry.label == "system") else {
+            return;
+        };
+        if !entry.sparse || !entry.exists {
+            return;
+        }
+
+        let capacity = entry.sectors * u64::from(entry.sector_size);
+        let prepared = prepare_image(
+            &entry.path,
+            Some(capacity),
+            "the system partition",
+        )
+        .expect("the image fits its partition");
+        assert_eq!(prepared.length(), capacity);
+
+        let Prepared::Sparse(layout) = &prepared else {
+            panic!("{} is a sparse image", entry.path.display());
+        };
+        let runs = layout.runs.len();
+        assert!(runs <= 40, "{} chunks came out as {runs} runs", layout.runs.len());
+    }
+
     /// An image that lies about its own size is refused before a sector is
-    /// written: its chunks, its header and the room the package gives it are
-    /// all checked.
+    /// written: its chunks, its header and the room it is written into are all
+    /// checked.
     #[test]
     fn a_sparse_image_that_does_not_add_up_is_refused() {
         let directory = scratch("sparse-broken");
@@ -6595,23 +7112,65 @@ mod tests {
 
         // A stored chunk whose payload is shorter than the blocks it covers.
         sparse_file(&path, 4096, 2, &[(0xcac1, 2, vec![0x11; 4096])]);
-        let error = check_sparse_image(&path, 8192).expect_err("a short payload");
+        let error = read_sparse_layout(&path).expect_err("a short payload");
         assert!(error.contains("in chunk 0"), "{error}");
 
         // A chunk type nothing here writes.
         sparse_file(&path, 4096, 1, &[(0x9999, 1, Vec::new())]);
-        let error = check_sparse_image(&path, 4096).expect_err("an unknown chunk");
+        let error = read_sparse_layout(&path).expect_err("an unknown chunk");
         assert!(error.contains("0x9999"), "{error}");
 
-        // An image that expands past the room the package gives it.
+        // An image that expands past the room it is written into. What counts
+        // is the size once expanded, not the size of the container.
         sparse_file(&path, 4096, 2, &[(0xcac3, 2, Vec::new())]);
-        let error = check_sparse_image(&path, 4096).expect_err("too large");
-        assert!(error.contains("more than the 4096"), "{error}");
+        let error =
+            prepare_image(&path, Some(4096), "partition system").expect_err("too large");
+        assert!(error.contains("expands to 8192 bytes"), "{error}");
+        assert!(error.contains("only has 4096 bytes"), "{error}");
 
         // A chunk that does not cover the whole image its header describes.
         sparse_file(&path, 4096, 4, &[(0xcac3, 2, Vec::new())]);
-        let error = check_sparse_image(&path, 16384).expect_err("a short image");
+        let error = read_sparse_layout(&path).expect_err("a short image");
         assert!(error.contains("expands to 8192"), "{error}");
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// A sparse image is an image the write-back path takes as well: it is
+    /// measured by what it expands to, and a package that leaves the sector
+    /// count at zero is written at the length its own header gives.
+    #[test]
+    fn a_sparse_image_is_what_a_write_back_measures() {
+        let directory = scratch("sparse-write-back");
+        let path = directory.join("system.img");
+
+        // Two blocks of 4096 expand to 8192 bytes out of a 4 KB container.
+        sparse_file(
+            &path,
+            4096,
+            2,
+            &[(0xcac1, 1, vec![0x11; 4096]), (0xcac3, 1, Vec::new())],
+        );
+
+        let prepared = prepare_image(&path, Some(8192), "partition system")
+            .expect("it fits its partition");
+        assert!(prepared.is_sparse());
+        assert_eq!(prepared.length(), 8192);
+
+        // Without a capacity — `num_partition_sectors="0"` — the image says
+        // how long it is, which is how a Nokia's package writes `userdata`.
+        let prepared = prepare_image(&path, None, "the userdata partition")
+            .expect("the image says how long it is");
+        assert_eq!(prepared.length(), 8192);
+
+        // A plain image is measured by its own bytes, and a sparse one is not
+        // mistaken for it.
+        let plain = directory.join("boot.img");
+        std::fs::write(&plain, vec![0x5A_u8; 4096]).expect("the image");
+        let prepared = prepare_image(&plain, Some(4096), "partition boot")
+            .expect("it fits its partition");
+        assert!(!prepared.is_sparse());
+        assert_eq!(prepared.length(), 4096);
 
         std::fs::remove_dir_all(&directory).expect("clean up");
     }
@@ -6632,7 +7191,8 @@ mod tests {
 
         // Two 4096-byte blocks into a 512-byte sector storage: eight sectors
         // in, sixteen sectors long.
-        let region = chunk_region(&write, 479_232, 4096, 8192, 512);
+        let base = write.region_with(&Place::At(479_232), write.sectors);
+        let region = moved_region(&base, 8, 16);
         assert_eq!((region.start_lba, region.end_lba), (479_240, 479_255));
         assert_eq!(region.sector_size, 512);
 
