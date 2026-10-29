@@ -271,6 +271,11 @@ pub struct Region {
     pub start_lba: u64,
     pub end_lba: u64,
     pub sector_size: u32,
+    /// The start as the package spelled it, when only the phone can work it
+    /// out: `NUM_DISK_SECTORS-33.` names the last sectors of a storage, and a
+    /// programmer that refuses to be read leaves no way to count them here.
+    /// The command then carries the expression instead of [`Self::start_lba`].
+    pub start_expression: Option<String>,
 }
 
 impl Region {
@@ -282,6 +287,26 @@ impl Region {
             start_lba: partition.start_lba,
             end_lba: partition.end_lba,
             sector_size: partition.sector_size,
+            start_expression: None,
+        }
+    }
+
+    /// What a command puts in its `start_sector`: the sector itself, or the
+    /// expression the phone works out.
+    fn start_xml(&self) -> String {
+        match &self.start_expression {
+            Some(expression) => expression.clone(),
+            None => self.start_lba.to_string(),
+        }
+    }
+
+    /// The sectors the region covers, for the session log: `0..5` when they are
+    /// numbers, `NUM_DISK_SECTORS-33. + 33` when only the phone knows where
+    /// they are.
+    fn describe_sectors(&self) -> String {
+        match &self.start_expression {
+            Some(expression) => format!("{expression} + {}", self.sectors()),
+            None => format!("{}..{}", self.start_lba, self.end_lba),
         }
     }
 
@@ -419,6 +444,7 @@ impl Lun {
             start_lba: 0,
             end_lba: self.sectors.saturating_sub(1),
             sector_size: self.sector_size,
+            start_expression: None,
         }
     }
 
@@ -1743,15 +1769,14 @@ impl RangeWrite {
     }
 
     /// The range as the page's own region type, once the start is known.
-    fn region(&self, start_sector: u64) -> Region {
+    fn region(&self, start: &Place) -> Region {
         Region {
             name: self.label.clone(),
             lun: self.lun,
-            start_lba: start_sector,
-            end_lba: start_sector
-                .saturating_add(self.sectors)
-                .saturating_sub(1),
+            start_lba: start.lba(),
+            end_lba: start.lba().saturating_add(self.sectors).saturating_sub(1),
             sector_size: self.sector_size,
+            start_expression: start.expression().map(str::to_owned),
         }
     }
 }
@@ -1771,15 +1796,14 @@ pub struct RangeErase {
 }
 
 impl RangeErase {
-    fn region(&self, start_sector: u64) -> Region {
+    fn region(&self, start: &Place) -> Region {
         Region {
             name: self.label.clone(),
             lun: self.lun,
-            start_lba: start_sector,
-            end_lba: start_sector
-                .saturating_add(self.sectors)
-                .saturating_sub(1),
+            start_lba: start.lba(),
+            end_lba: start.lba().saturating_add(self.sectors).saturating_sub(1),
             sector_size: self.sector_size,
+            start_expression: start.expression().map(str::to_owned),
         }
     }
 }
@@ -1962,7 +1986,7 @@ fn flash_package_session(
     // Every LUN whose length the package asks for is asked before the first
     // sector goes down: the flash overwrites the very partition tables it may
     // have to read the length out of.
-    let geometry = resolve_geometry(&mut session, steps, patches)?;
+    let geometry = resolve_geometry(&mut session, steps, patches);
 
     for step in steps {
         match step {
@@ -1972,7 +1996,7 @@ fn flash_package_session(
                 write_image(
                     &mut session,
                     write,
-                    start,
+                    &start,
                     before,
                     overall_total,
                     on_progress,
@@ -1982,7 +2006,7 @@ fn flash_package_session(
             }
             PackageStep::Erase(erase) => {
                 let start = resolve_sector(&erase.start_sector, erase.lun, &geometry)?;
-                let region = erase.region(start);
+                let region = erase.region(&start);
                 let bytes = erase
                     .sectors
                     .saturating_mul(u64::from(erase.sector_size));
@@ -1991,8 +2015,10 @@ fn flash_package_session(
                     // `<zeroout>`: the range is written with zeroes, which is
                     // what a stale `misc` or a stale table must not survive.
                     session.line(format!(
-                        "zeroing {} (lun {}, sectors {}..{})",
-                        region.name, region.lun, region.start_lba, region.end_lba
+                        "zeroing {} (lun {}, sectors {})",
+                        region.name,
+                        region.lun,
+                        region.describe_sectors()
                     ));
 
                     program_image(
@@ -2005,8 +2031,10 @@ fn flash_package_session(
                     )?;
                 } else {
                     session.line(format!(
-                        "erasing {} (lun {}, sectors {}..{})",
-                        region.name, region.lun, region.start_lba, region.end_lba
+                        "erasing {} (lun {}, sectors {})",
+                        region.name,
+                        region.lun,
+                        region.describe_sectors()
                     ));
 
                     let response = request(&mut session, &erase_xml(&region))?;
@@ -2037,7 +2065,11 @@ fn flash_package_session(
     // whether that worked — the images are already down, so a table that does
     // not check out is reported and nothing more.
     for (lun, sector_size) in awaits_geometry(steps, patches) {
-        let sectors = geometry_of(&geometry, lun)?;
+        let Ok(sectors) = geometry_of(&geometry, lun) else {
+            // The phone keeps its table to itself, so there is nothing to read
+            // back: it resolved the expressions itself.
+            continue;
+        };
 
         match check_table(&mut session, lun, sectors, sector_size) {
             Ok(summary) => session.line(format!("note: lun {lun}: {summary}")),
@@ -2148,19 +2180,44 @@ fn table_check(header: &[u8], array: &[u8], sectors: u64) -> Result<String, Stri
 /// its sector `NUM_DISK_SECTORS-5.` instead of numbering it — and those steps
 /// are not necessarily the first ones. Every LUN that needs its length is asked
 /// here, while the table it carries is still its own.
+///
+/// A LUN whose length cannot be had is simply left out: some programmers answer
+/// `<getstorageinfo>` with "Ignoring unrecognized tag", and refuse to read
+/// their storage at all (Nokia's KaiOS phones do both), which leaves the
+/// package's own expressions as the only way to name those sectors — and the
+/// phone resolves them itself when a command carries one.
 fn resolve_geometry(
     session: &mut Session<'_>,
     steps: &[PackageStep],
     patches: &[RangePatch],
-) -> Result<Vec<(u8, u64)>, String> {
+) -> Vec<(u8, u64)> {
     let mut geometry: Vec<(u8, u64)> = Vec::new();
+    let mut silent = false;
 
     for (lun, sector_size) in awaits_geometry(steps, patches) {
-        let sectors = ask_disk_sectors(session, lun, sector_size)?;
-        geometry.push((lun, sectors));
+        if silent {
+            session.line(format!(
+                "note: LUN {lun}: the phone keeps its length to itself too; the package's \
+                 sector expressions are sent as they are"
+            ));
+            continue;
+        }
+
+        match ask_disk_sectors(session, lun, sector_size) {
+            Ok(sectors) => geometry.push((lun, sectors)),
+            Err(error) => {
+                // One refusal is enough: the storage is the same everywhere
+                // below it, and asking again costs a timeout per LUN.
+                session.line(format!(
+                    "note: {error}; the package's sector expressions are sent as they are, \
+                     and the phone works them out"
+                ));
+                silent = true;
+            }
+        }
     }
 
-    Ok(geometry)
+    geometry
 }
 
 /// The LUNs whose length a flash needs, each with a sector size to ask with.
@@ -2272,21 +2329,61 @@ fn geometry_of(geometry: &[(u8, u64)], lun: u8) -> Result<u64, String> {
         .ok_or_else(|| format!("the length of LUN {lun} is not known"))
 }
 
+/// Where a package step starts.
+///
+/// A package names a backup partition table as `NUM_DISK_SECTORS-33.` because
+/// the last sectors of a storage are only known once its length is. When the
+/// length could be worked out here the sector is spelled out; when it could
+/// not — a loaders that refuses to be read and does not answer
+/// `<getstorageinfo>`, which is how the KaiOS phones behave — the expression
+/// goes to the phone as it is, which is what the reference tools send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Place {
+    At(u64),
+    Expression(String),
+}
+
+impl Place {
+    /// The sector, as far as it is known here.
+    fn lba(&self) -> u64 {
+        match self {
+            Place::At(sector) => *sector,
+            // Only the numbers are used for names, ranges and progress; the
+            // command itself carries the expression.
+            Place::Expression(_) => 0,
+        }
+    }
+
+    /// The expression to send instead of a number, when there is one.
+    fn expression(&self) -> Option<&str> {
+        match self {
+            Place::At(_) => None,
+            Place::Expression(text) => Some(text),
+        }
+    }
+}
+
 /// The sector a step starts at, worked out when the package spelled it against
 /// the LUN's own length.
+///
+/// When that length is not known the expression is handed back as it stands:
+/// the phone resolves `NUM_DISK_SECTORS` against the storage it is writing to.
 fn resolve_sector(
     sector: &qfil::Sector,
     lun: u8,
     geometry: &[(u8, u64)],
-) -> Result<u64, String> {
+) -> Result<Place, String> {
     if !sector.needs_geometry() {
-        return sector.at(0);
+        return sector.at(0).map(Place::At);
     }
 
-    let sectors = geometry_of(geometry, lun)?;
+    let Ok(sectors) = geometry_of(geometry, lun) else {
+        return Ok(Place::Expression(sector.to_string()));
+    };
 
     sector
         .at(sectors)
+        .map(Place::At)
         .map_err(|error| format!("{error} (LUN {lun} has {sectors} sectors)"))
 }
 
@@ -2294,28 +2391,38 @@ fn resolve_sector(
 fn write_image(
     session: &mut Session<'_>,
     write: &RangeWrite,
-    start_sector: u64,
+    start: &Place,
     before: u64,
     overall_total: u64,
     on_progress: &dyn Fn(Progress),
 ) -> Result<(), String> {
-    let region = write.region(start_sector);
+    let region = write.region(start);
     let mut file = File::open(&write.path)
         .map_err(|error| format!("could not read {}: {error}", write.path.display()))?;
 
     session.line(format!(
-        "writing {} to {} (lun {}, sectors {}..{})",
+        "writing {} to {} (lun {}, sectors {})",
         write.path.display(),
         region.name,
         region.lun,
-        region.start_lba,
-        region.end_lba
+        region.describe_sectors()
     ));
 
     // A sparse image is a list of chunks, so it is not streamed as one run of
-    // bytes: every chunk that carries data gets a `<program>` of its own.
+    // bytes: every chunk that carries data gets a `<program>` of its own. Each
+    // chunk is addressed by number, so a chunked image needs a start the host
+    // can count from.
     let mut magic = [0_u8; 4];
     if file.read_exact(&mut magic).is_ok() && magic == SPARSE_MAGIC {
+        let Some(start_sector) = start.expression().is_none().then(|| start.lba()) else {
+            return Err(format!(
+                "{} is a sparse image, and its chunks cannot be placed from the \
+                 expression `{}` — the phone's own length is not known",
+                write.path.display(),
+                start.expression().unwrap_or_default()
+            ));
+        };
+
         return write_sparse_image(
             session,
             write,
@@ -2634,11 +2741,18 @@ fn chunk_region(
         start_lba: at,
         end_lba: at.saturating_add(sectors).saturating_sub(1),
         sector_size: write.sector_size,
+        start_expression: None,
     }
 }
 
 /// Applies one `<patch>`: the sector it lands in is read, edited and written
 /// back, so everything around the few bytes is left as it was.
+///
+/// A patch of a LUN whose length is not known takes the other road: its sector
+/// may be spelled `NUM_DISK_SECTORS-26.`, its value may be
+/// `NUM_DISK_SECTORS-34.`, and a checksum is over storage the host may not
+/// read — so the whole patch goes to the phone, which is what the reference
+/// tools send for a package's patch file.
 fn apply_patch(
     session: &mut Session<'_>,
     patch: &RangePatch,
@@ -2650,6 +2764,23 @@ fn apply_patch(
     let sector_size = patch.sector_size;
     let sectors = patch.size.div_ceil(u64::from(sector_size)).max(1);
     let first = resolve_sector(&patch.start_sector, patch.lun, geometry)?;
+    let length_known = geometry_of(geometry, patch.lun).is_ok();
+
+    if !length_known || first.expression().is_some() {
+        session.line(format!(
+            "patching {} (lun {}, sector {}, byte {}): {} — the phone applies it",
+            patch.label, patch.lun, patch.start_sector, patch.byte_offset, patch.what
+        ));
+
+        let response = request(session, &patch_xml(patch))?;
+        if !response.is_ack() {
+            return Err(refusal(&response, "patch the partition table"));
+        }
+
+        return Ok(());
+    }
+
+    let first = first.lba();
 
     let (value, checksummed) = patch_value_of(patch, geometry, &mut |at, count| {
         read_sectors(session, patch.lun, sector_size, at, count)
@@ -2679,6 +2810,7 @@ fn apply_patch(
         start_lba: first,
         end_lba: first.saturating_add(sectors).saturating_sub(1),
         sector_size,
+        start_expression: None,
     };
 
     session.line(format!(
@@ -2693,6 +2825,21 @@ fn apply_patch(
         before,
         overall_total,
         on_progress,
+    )
+}
+
+/// One `<patch>` for the phone to apply itself.
+///
+/// The value is sent as the package spells it: `NUM_DISK_SECTORS-34.` is the
+/// phone's own length, and `CRC32(2,4096)` is the checksum of storage the host
+/// is not allowed to read. This is the command the reference tools send for a
+/// package's patch file, and the only one that works on a loaders that refuses
+/// to be read.
+fn patch_xml(patch: &RangePatch) -> String {
+    format!(
+        "<data><patch SECTOR_SIZE_IN_BYTES=\"{}\" byte_offset=\"{}\" filename=\"DISK\" \
+physical_partition_number=\"{}\" size_in_bytes=\"{}\" start_sector=\"{}\" value=\"{}\" /></data>",
+        patch.sector_size, patch.byte_offset, patch.lun, patch.size, patch.start_sector, patch.value
     )
 }
 
@@ -3112,12 +3259,7 @@ fn program_image(
 
     let sector_size = region.sector_size;
     let sectors = length.div_ceil(u64::from(sector_size));
-    let xml = format!(
-        "<data><program SECTOR_SIZE_IN_BYTES=\"{sector_size}\" \
-num_partition_sectors=\"{sectors}\" slot=\"0\" physical_partition_number=\"{}\" \
-start_sector=\"{}\" read_back_verify=\"0\" /></data>",
-        region.lun, region.start_lba
-    );
+    let xml = program_xml(region, sectors);
 
     let response = request(session, &xml)?;
     if !response.is_ack() {
@@ -3160,6 +3302,18 @@ start_sector=\"{}\" read_back_verify=\"0\" /></data>",
     Ok(())
 }
 
+/// The `<program>` that starts a write to `region`.
+fn program_xml(region: &Region, sectors: u64) -> String {
+    format!(
+        "<data><program SECTOR_SIZE_IN_BYTES=\"{}\" num_partition_sectors=\"{sectors}\" \
+slot=\"0\" physical_partition_number=\"{}\" start_sector=\"{}\" \
+read_back_verify=\"0\" /></data>",
+        region.sector_size,
+        region.lun,
+        region.start_xml()
+    )
+}
+
 /// One `<erase>` for a whole partition.
 ///
 /// Firehose erases a sector range, so the command is the one `<read>` and
@@ -3171,7 +3325,7 @@ physical_partition_number=\"{}\" start_sector=\"{}\" /></data>",
         region.sector_size,
         region.sectors(),
         region.lun,
-        region.start_lba
+        region.start_xml()
     )
 }
 
@@ -4595,7 +4749,7 @@ impl Transport {
                 if error.kind() == std::io::ErrorKind::TimedOut {
                     format!(
                         "the phone did not answer within {} seconds",
-                        TIMEOUT.as_secs()
+                        self.timeout.as_secs()
                     )
                 } else {
                     format!("could not read from the phone: {error}")
@@ -5092,7 +5246,8 @@ mod tests {
             let mut backup = storage[backup_at as usize..].to_vec();
 
             for patch in &patches {
-                let first = resolve_sector(&patch.start_sector, lun, &geometry).expect("a sector");
+                let start = resolve_sector(&patch.start_sector, lun, &geometry).expect("a sector");
+                let first = start.lba();
                 let image = if first * sector_size < backup_at {
                     &mut main
                 } else {
@@ -5109,7 +5264,8 @@ mod tests {
 
             // Then every patch, read, edited and written back one sector at a time.
             for patch in &patches {
-                let first = resolve_sector(&patch.start_sector, lun, &geometry).expect("a sector");
+                let start = resolve_sector(&patch.start_sector, lun, &geometry).expect("a sector");
+                let first = start.lba();
 
                 let (value, _) = patch_value_of(patch, &geometry, &mut |at, count| {
                     let start = (at * sector_size) as usize;
@@ -5381,6 +5537,7 @@ mod tests {
                 start_lba: index as u64 * 4096,
                 end_lba: index as u64 * 4096 + 4095,
                 sector_size: 4096,
+                start_expression: None,
             })
             .collect();
 
@@ -5446,6 +5603,7 @@ mod tests {
                 start_lba: 0,
                 end_lba: 8191,
                 sector_size,
+                start_expression: None,
             };
             let chunk = (MAX_PAYLOAD_BYTES / region.sector_size as usize).max(1) as u64;
 
@@ -5459,6 +5617,71 @@ mod tests {
         }
     }
 
+    /// A loader that refuses to be read (Nokia's KaiOS phones answer
+    /// `<getstorageinfo>` with "Ignoring unrecognized tag" and never send the
+    /// bytes of a `<read>`) leaves the package's own `NUM_DISK_SECTORS`
+    /// expressions as the only way to name the sectors a backup partition table
+    /// sits in. They go to the phone as they were written — the commands the
+    /// reference tools send — instead of stopping the flash.
+    #[test]
+    fn a_step_the_host_cannot_place_keeps_the_packages_own_wording() {
+        let backup = qfil::Sector::Relative("NUM_DISK_SECTORS-33.".to_owned());
+
+        // No length known: the expression stands.
+        let start = resolve_sector(&backup, 0, &[]).expect("a place");
+        assert_eq!(start, Place::Expression("NUM_DISK_SECTORS-33.".to_owned()));
+
+        // Known: the sector is spelled out, exactly like before.
+        let start = resolve_sector(&backup, 0, &[(0, 1024)]).expect("a place");
+        assert_eq!(start, Place::At(991));
+
+        // A plain number needs no length at all, so a numeric step still lands
+        // where it says even when nothing could be asked.
+        let plain = qfil::Sector::At(35892);
+        assert_eq!(
+            resolve_sector(&plain, 0, &[]).expect("a place"),
+            Place::At(35892)
+        );
+
+        // The commands carry it.
+        let region = Region {
+            name: "BackupGPT".to_owned(),
+            lun: 0,
+            start_lba: 0,
+            end_lba: 32,
+            sector_size: 512,
+            start_expression: Some("NUM_DISK_SECTORS-33.".to_owned()),
+        };
+        assert!(erase_xml(&region).contains("start_sector=\"NUM_DISK_SECTORS-33.\""));
+
+        let xml = program_xml(&region, 33);
+        assert!(xml.contains("start_sector=\"NUM_DISK_SECTORS-33.\""), "{xml}");
+        assert!(xml.contains("num_partition_sectors=\"33\""), "{xml}");
+
+        // And a patch the host cannot work out — the value is the phone's own
+        // length, the sector is the second-to-last, and the checksum is over
+        // storage the host may not read — is handed over whole.
+        let patch = RangePatch {
+            label: "DISK".to_owned(),
+            lun: 0,
+            sector_size: 512,
+            start_sector: qfil::Sector::Relative("NUM_DISK_SECTORS-1.".to_owned()),
+            byte_offset: 16,
+            size: 4,
+            value: "CRC32(NUM_DISK_SECTORS-1.,92)".to_owned(),
+            what: "Update Backup Header with CRC of Backup Header.".to_owned(),
+        };
+
+        let xml = patch_xml(&patch);
+        assert!(xml.starts_with("<data><patch "), "{xml}");
+        assert!(xml.contains("filename=\"DISK\""), "{xml}");
+        assert!(xml.contains("start_sector=\"NUM_DISK_SECTORS-1.\""), "{xml}");
+        assert!(xml.contains("value=\"CRC32(NUM_DISK_SECTORS-1.,92)\""), "{xml}");
+        assert!(xml.contains("byte_offset=\"16\""), "{xml}");
+        assert!(xml.contains("size_in_bytes=\"4\""), "{xml}");
+        assert!(xml.contains("physical_partition_number=\"0\""), "{xml}");
+    }
+
     /// An erase names the whole partition, and the sectors around it stay as
     /// they are: the range comes from the table, not from the storage's size.
     #[test]
@@ -5469,6 +5692,7 @@ mod tests {
             start_lba: 0x4000,
             end_lba: 0x4000 + 2047,
             sector_size: 4096,
+            start_expression: None,
         };
 
         let xml = erase_xml(&region);
@@ -5492,6 +5716,7 @@ mod tests {
                 start_lba: 0,
                 end_lba: 127,
                 sector_size: 4096,
+                start_expression: None,
             },
             Region {
                 name: "system".to_owned(),
@@ -5499,6 +5724,7 @@ mod tests {
                 start_lba: 128,
                 end_lba: 128 + 1023,
                 sector_size: 4096,
+                start_expression: None,
             },
         ];
 
@@ -5973,6 +6199,7 @@ mod tests {
             start_lba,
             end_lba,
             sector_size: 4096,
+            start_expression: None,
         };
 
         // Two sectors: 8192 bytes, which is what the partition holds.
