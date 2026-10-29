@@ -837,4 +837,28 @@ qc-dump-storage-folder-title = Velg mappe for LUN-avbildene
 qc-storage-dump-done = Dumpet { $count } LUN-avbild(er) til { $path }.
 qc-storage-dump-failed = Kunne ikke dumpe lageret: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = Injiser FDL
+uc-flash-pac = Flash PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU-forhåndsvalg
+uc-cpu-custom = Egendefinert
+uc-fdl1-address = FDL1-adresse
+uc-fdl2-address = FDL2-adresse
+uc-select-file = Velg fil
+uc-fdl-filter = Nedlastingsagent
+uc-bypass-verification = Omgå verifisering av kjøring
+uc-exec-address = Adresse
+uc-payload-hex = Nyttelast (hex)
+uc-inject = Injiser
+uc-load-from-pac = Last inn fra PAC
+uc-inject-not-implemented = FDL-injeksjonen er ikke implementert ennå.
+uc-pac-loaded = Lastet begge nedlastingsagentene fra { $pac }.
+uc-pac-missing = Pakken inneholder ingen { $id }, så den kan ikke brukes.
+uc-reading-pac = Leser pakken…
+uc-hex-invalid = Skriv inn et heksadesimalt tall.
+uc-payload-invalid = Nyttelasten må være heksadesimale sifre, et jevnt antall av dem.
+
 partition-flash-no-avb = Det valgte imaget inneholder ingen vbmeta-struktur, så disse to valgene gjelder ikke.

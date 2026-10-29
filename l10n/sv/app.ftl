@@ -837,4 +837,28 @@ qc-dump-storage-folder-title = Välj mapp för LUN-avbilderna
 qc-storage-dump-done = Dumpade { $count } LUN-avbild(er) till { $path }.
 qc-storage-dump-failed = Lagringen kunde inte dumpas: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = Injicera FDL
+uc-flash-pac = Flasha PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU-förval
+uc-cpu-custom = Anpassad
+uc-fdl1-address = FDL1-adress
+uc-fdl2-address = FDL2-adress
+uc-select-file = Välj fil
+uc-fdl-filter = Nedladdningsagent
+uc-bypass-verification = Kringgå verifiering av körning
+uc-exec-address = Adress
+uc-payload-hex = Nyttolast (hex)
+uc-inject = Injicera
+uc-load-from-pac = Läs in från PAC
+uc-inject-not-implemented = FDL-injektionen är inte implementerad än.
+uc-pac-loaded = Båda nedladdningsagenterna lästes in från { $pac }.
+uc-pac-missing = Paketet innehåller ingen { $id }, så det kan inte användas.
+uc-reading-pac = Läser paketet…
+uc-hex-invalid = Ange ett hexadecimalt tal.
+uc-payload-invalid = Nyttolasten måste vara hexadecimala siffror, ett jämnt antal av dem.
+
 partition-flash-no-avb = Den valda imagen innehåller ingen vbmeta-struktur, så de här två alternativen gäller inte.

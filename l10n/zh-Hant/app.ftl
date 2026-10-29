@@ -836,4 +836,28 @@ qc-dump-storage-folder-title = 選擇 LUN 映像的資料夾
 qc-storage-dump-done = 已將 { $count } 個 LUN 映像匯出至 { $path }。
 qc-storage-dump-failed = 無法匯出儲存空間：{ $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = 注入 FDL
+uc-flash-pac = 刷寫 PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU 預設
+uc-cpu-custom = 自訂
+uc-fdl1-address = FDL1 位址
+uc-fdl2-address = FDL2 位址
+uc-select-file = 選擇檔案
+uc-fdl-filter = 下載代理
+uc-bypass-verification = 略過執行驗證
+uc-exec-address = 位址
+uc-payload-hex = 載荷（十六進位）
+uc-inject = 注入
+uc-load-from-pac = 從 PAC 載入
+uc-inject-not-implemented = FDL 注入尚未實作。
+uc-pac-loaded = 已從 { $pac } 載入兩個下載代理。
+uc-pac-missing = 此套件沒有 { $id }，因此無法使用。
+uc-reading-pac = 正在讀取套件…
+uc-hex-invalid = 請輸入十六進位數字。
+uc-payload-invalid = 載荷必須是偶數位的十六進位數字。
+
 partition-flash-no-avb = 所選鏡像不含 vbmeta 結構，因此這兩項不適用。

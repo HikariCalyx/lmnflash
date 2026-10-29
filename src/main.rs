@@ -59,6 +59,7 @@ mod tablet_bootloader;
 mod tablet_unlock;
 mod telemetry;
 mod unpack;
+mod unisoc;
 mod webview;
 mod wireless;
 mod wireless_dialog;
@@ -1016,6 +1017,238 @@ struct QualcommState {
     injection: Option<InjectionWait>,
 }
 
+/// State of the "Partition Manager" page (Mode 2), in its Unisoc form.
+///
+/// The page is the Qualcomm workspace's placeholder for Unisoc phones (see
+/// [`crate::unisoc`]): it shows the table, the search box and the rows of
+/// controls a Unisoc phone will be worked on with, of which only the "Inject
+/// FDL" card exists so far. Nothing that talks to a phone is kept here yet —
+/// not a partition table, not a port — because nothing can ask for one.
+#[derive(Default)]
+struct UnisocState {
+    /// Whether the page is shown instead of the feature grid.
+    open: bool,
+    /// What the partition search box contains. It only filters what the table
+    /// shows.
+    filter: String,
+    /// The port the download agent will be injected through, once the
+    /// dropdown offers the ones an FDL download mode enumerates as.
+    port: Option<String>,
+    /// The ports a Unisoc phone in download mode offers right now. The list
+    /// stays empty until the page scans for one, which it cannot do yet: the
+    /// scan has to match the download mode's own USB ids — `1782:4D00`, where
+    /// Qualcomm's slots match `05C6:9008` — so it cannot go through
+    /// [`crate::qualcomm_ports`] as it stands.
+    ports: Vec<String>,
+    /// The storage the session will talk to; the default lets the phone
+    /// report it.
+    storage: StorageType,
+    /// The "Inject FDL" card, and what it was last set up with. Its settings
+    /// outlive the card being closed: they are what the phone is connected for
+    /// afterwards.
+    fdl: FdlDialog,
+}
+
+/// The "Inject FDL" card's state.
+///
+/// Unlike the Qualcomm page, nothing is picked before the agents are sent: the
+/// command is set up and started first, and only then is a phone plugged in and
+/// caught by the boot ROM. The card is therefore all setup — the two agents and
+/// the addresses their SoC loads them at, and optionally the payload that runs
+/// before them — and no port.
+#[derive(Default)]
+struct FdlDialog {
+    /// Whether the card is up.
+    open: bool,
+    /// The CPU the addresses below were filled in for, or
+    /// [`FdlPreset::Custom`] once they were typed by hand.
+    preset: FdlPreset,
+    /// The addresses the two download agents are loaded at, as typed.
+    fdl1_address: String,
+    fdl2_address: String,
+    /// The two download agents.
+    fdl1: Option<FdlImage>,
+    fdl2: Option<FdlImage>,
+    /// Whether the payload that runs before the agents is sent at all.
+    bypass: bool,
+    /// The address that payload runs at, as typed.
+    exec_address: String,
+    /// The payload itself, as typed: hexadecimal digits.
+    payload: String,
+    /// Whether a package is being read into the card.
+    reading_package: bool,
+    /// What the card says under its buttons.
+    notice: Option<FdlNotice>,
+}
+
+/// Which of the two download agents a control of the card is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FdlSlot {
+    One,
+    Two,
+}
+
+impl FdlSlot {
+    /// The field of the card it stands for.
+    fn addresses(self, fdl: &mut FdlDialog) -> &mut String {
+        match self {
+            Self::One => &mut fdl.fdl1_address,
+            Self::Two => &mut fdl.fdl2_address,
+        }
+    }
+
+    /// The agent it stands for.
+    fn agent(self, fdl: &mut FdlDialog) -> &mut Option<FdlImage> {
+        match self {
+            Self::One => &mut fdl.fdl1,
+            Self::Two => &mut fdl.fdl2,
+        }
+    }
+}
+
+/// A download agent the card was given.
+///
+/// A package keeps its agents inside itself, so a package-sourced agent is
+/// named rather than copied: it is read when it is sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FdlImage {
+    /// A file the user picked.
+    File(std::path::PathBuf),
+    /// A record of a package.
+    Package {
+        /// The package it sits in.
+        package: std::path::PathBuf,
+        /// The record's file name inside it.
+        name: String,
+    },
+}
+
+impl FdlImage {
+    /// What the card shows for it: the file, or where in which package it is.
+    fn label(&self) -> String {
+        match self {
+            Self::File(path) => path.display().to_string(),
+            Self::Package { package, name } => {
+                let file = package
+                    .file_name()
+                    .map(|file| file.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| package.display().to_string());
+
+                format!("{name} ({file})")
+            }
+        }
+    }
+}
+
+/// The CPUs the card can fill the download agents' addresses in for.
+///
+/// The addresses are the ones each SoC's boot ROM loads the two agents at. They
+/// are the table `TomKing062/CVE-2022-38694_unlock_bootloader` keeps for the
+/// models it supports (its wiki page "AddSupportToModel"), which is also where
+/// the payload for [`FdlDialog::payload`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FdlPreset {
+    /// No preset: the addresses stay whatever was typed.
+    #[default]
+    Custom,
+    Sc9820e,
+    Sc9832e,
+    Sc9863a,
+    Ud710,
+    Udx710,
+    Ums312,
+    Ums512,
+    Ums9230,
+    Ums9620,
+    Ums9621,
+    Ums9360,
+    Ums9632,
+}
+
+impl FdlPreset {
+    /// The presets the dropdown offers, in order.
+    const ALL: [Self; 13] = [
+        Self::Custom,
+        Self::Sc9820e,
+        Self::Sc9832e,
+        Self::Sc9863a,
+        Self::Ud710,
+        Self::Udx710,
+        Self::Ums312,
+        Self::Ums512,
+        Self::Ums9230,
+        Self::Ums9620,
+        Self::Ums9621,
+        Self::Ums9360,
+        Self::Ums9632,
+    ];
+
+    /// How the dropdown names it: the SoC code name with the public names it
+    /// ships under. The code names are proper nouns, so only the entry for
+    /// addresses typed by hand is translated.
+    fn label(self, l10n: &l10n::Bundle) -> String {
+        match self {
+            Self::Custom => l10n.tr("uc-cpu-custom"),
+            Self::Sc9820e => "sc9820e (SL8521E)".to_owned(),
+            Self::Sc9832e => "sc9832e (SL8541E)".to_owned(),
+            Self::Sc9863a => "sc9863a (A8581)".to_owned(),
+            Self::Ud710 => "ud710 (T710/T740/T7510)".to_owned(),
+            Self::Udx710 => "udx710 (V510)".to_owned(),
+            Self::Ums312 => "ums312 (T310)".to_owned(),
+            Self::Ums512 => "ums512 (T610/T618/T700/A7862)".to_owned(),
+            Self::Ums9230 => "ums9230 (T606/T612/T616/T72xx)".to_owned(),
+            Self::Ums9620 => {
+                "ums9620 (T760/T770/T820/S8000/A7870/T8100/T9100)".to_owned()
+            }
+            Self::Ums9621 => "ums9621 (T750/T765/T8200)".to_owned(),
+            Self::Ums9360 => "ums9360 (T7300)".to_owned(),
+            Self::Ums9632 => "ums9632 (T8300/T9300)".to_owned(),
+        }
+    }
+
+    /// The addresses the boot ROM loads the two agents at, or `None` for
+    /// [`Self::Custom`], which leaves the fields alone.
+    fn addresses(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Custom => None,
+            // The three entry-level SoCs share one boot ROM.
+            Self::Sc9820e | Self::Sc9832e | Self::Sc9863a => {
+                Some(("0x5000", "0x9EFFFE00"))
+            }
+            Self::Ud710 | Self::Ums312 | Self::Ums512 => {
+                Some(("0x5500", "0x9EFFFE00"))
+            }
+            Self::Udx710 => Some(("0x28007000", "0x9EFFFE00")),
+            Self::Ums9230 => Some(("0x65000800", "0x9EFFFE00")),
+            Self::Ums9620 => Some(("0x65000800", "0xB4FFFE00")),
+            Self::Ums9621 => Some(("0x65000800", "0xBEFFFE00")),
+            Self::Ums9360 | Self::Ums9632 => Some(("0x65008000", "0xBDFFFE00")),
+        }
+    }
+}
+
+/// A package the card read its download agents from.
+#[derive(Debug, Clone)]
+struct FdlPackage {
+    /// The package file.
+    path: std::path::PathBuf,
+    /// What it holds.
+    package: pac::Package,
+}
+
+/// What the "Inject FDL" card says under its buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FdlNotice {
+    /// "Inject" was pressed: the download mode itself is not implemented yet.
+    NotImplemented,
+    /// The package's agents were taken; the text is the package's file name.
+    PackageLoaded(String),
+    /// The package could not be read; the error says why.
+    PackageFailed(pac::PacError),
+    /// The package carries no record with that id.
+    PackageMissing(String),
+}
+
 /// An injection stopped between reading the phone's identity and uploading the
 /// programmer.
 ///
@@ -1658,6 +1891,7 @@ struct SmartphoneFlashState {
     captive_portal: CaptivePortalState,
     multi_flash: MultiFlashState,
     qualcomm: QualcommState,
+    unisoc: UnisocState,
 }
 
 /// State of the "Unpack Image" feature (Mode 3, firmware-file tools).
@@ -3224,6 +3458,51 @@ enum Message {
     /// partitions of a phone read through Firehose, which takes the place of
     /// the Mode 2 feature grid.
     QualcommManagerSelected,
+    /// Unisoc Partition Manager: open the workspace that will list the
+    /// partitions of a phone read through its download mode, which takes the
+    /// place of the Mode 2 feature grid.
+    UnisocManagerSelected,
+    /// Unisoc Partition Manager: leave the workspace.
+    UnisocExit,
+    /// Unisoc Partition Manager: the partition search box was edited.
+    UnisocFilterChanged(String),
+    /// Unisoc Partition Manager: a port of the dropdown was picked.
+    UnisocPortSelected(String),
+    /// Unisoc Partition Manager: a storage type was picked.
+    UnisocStorageTypeSelected(StorageType),
+    /// Unisoc Partition Manager: "Inject FDL" was pressed — open the card the
+    /// download agents are set up in.
+    UnisocFdlOpened,
+    /// Unisoc Partition Manager: the card's Cancel was pressed.
+    UnisocFdlClosed,
+    /// Unisoc Partition Manager: a click on the card's empty space (swallowed,
+    /// so it neither dismisses the card nor reaches the page underneath).
+    UnisocFdlBackdropPressed,
+    /// Unisoc Partition Manager: the CPU preset was picked.
+    UnisocFdlPresetSelected(FdlPreset),
+    /// Unisoc Partition Manager: one of the two addresses was edited.
+    UnisocFdlAddressChanged(FdlSlot, String),
+    /// Unisoc Partition Manager: the file picker of a download agent is asked
+    /// for.
+    UnisocFdlPickFile(FdlSlot),
+    /// Unisoc Partition Manager: the agent's picker came back.
+    UnisocFdlFilePicked(FdlSlot, Option<std::path::PathBuf>),
+    /// Unisoc Partition Manager: the bypass-payload switch was flipped.
+    UnisocFdlBypassToggled(bool),
+    /// Unisoc Partition Manager: the address the bypass payload runs at was
+    /// edited.
+    UnisocFdlExecAddressChanged(String),
+    /// Unisoc Partition Manager: the bypass payload was edited.
+    UnisocFdlPayloadChanged(String),
+    /// Unisoc Partition Manager: the card's "Inject" was pressed.
+    UnisocFdlInject,
+    /// Unisoc Partition Manager: the card's "Load from PAC" was pressed — ask
+    /// for a package.
+    UnisocFdlPickPackage,
+    /// Unisoc Partition Manager: the package picker came back.
+    UnisocFdlPackagePicked(Option<std::path::PathBuf>),
+    /// Unisoc Partition Manager: the package was read (or could not be).
+    UnisocFdlPackageLoaded(Result<FdlPackage, pac::PacError>),
     /// Qualcomm Partition Manager: leave the workspace.
     QualcommExit,
     /// Qualcomm Partition Manager: the partition search box was edited.
@@ -3883,7 +4162,9 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || matches!(state.decrypt.status, DecryptStatus::Working)
         // Injecting a programmer — and resetting the phone afterwards — keep
         // the status line's spinner turning.
-        || state.flash.qualcomm.busy;
+        || state.flash.qualcomm.busy
+        // Reading a package's download agents spins in the same way.
+        || state.flash.unisoc.fdl.reading_package;
     let ticks = if animating {
         iced::time::every(std::time::Duration::from_millis(64)).map(|_| Message::AnimTick)
     } else {
@@ -4160,6 +4441,8 @@ const OVERLAY_QUALCOMM_BACKUP: u8 = 0x1B;
 const OVERLAY_QUALCOMM_INJECT_CHECK: u8 = 0x1C;
 /// The Partition Manager's "Flash XML" card.
 const OVERLAY_QUALCOMM_XML_FLASH: u8 = 0x1D;
+/// The Unisoc Partition Manager's "Inject FDL" card.
+const OVERLAY_UNISOC_FDL: u8 = 0x1F;
 /// The "Clear all storage" dialog, with the warning that counts down.
 const OVERLAY_QUALCOMM_CLEAR_STORAGE: u8 = 0x1E;
 /// The dialog cards, keyed by the dialog they belong to and the step they show.
@@ -4226,6 +4509,12 @@ const OVERLAY_MULTI_FLASH_PRESET_OPTIONS: u8 = 0xF2;
 /// while a dialog stays on screen (flashing log lines, progress, a spinner)
 /// has to leave its key alone.
 fn overlay_key(state: &State) -> u8 {
+    // The Unisoc Partition Manager's card belongs to a workspace that is only
+    // reachable with every other dialog closed.
+    if unisoc::inject_open(state) {
+        return OVERLAY_UNISOC_FDL;
+    }
+
     // The Partition Manager's own prompts are the last thing on screen; its
     // workspace is only reachable with every other dialog closed.
     if qualcomm::close_prompt_open(state) {
@@ -5248,6 +5537,236 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             // The chrome comes back with the grid, fading in over the same
             // pose as the content around it.
             state.content_transition_covers_chrome = true;
+            Task::none()
+        }
+        // The Unisoc page is a placeholder: it lists nothing, and of its
+        // controls only "Inject FDL" and "Exit" do anything, so its messages
+        // carry what the page and its card show.
+        Message::UnisocManagerSelected => start_unisoc_page(state),
+        Message::UnisocExit => {
+            state.flash.unisoc.open = false;
+            // The card belongs to the page: it is never left open behind it.
+            state.flash.unisoc.fdl.open = false;
+            // Leaving plays the same slide the other way round, so the
+            // feature grid comes back the way the page went in.
+            state.content_transition = Some(anim::Transition::settle(
+                anim::content_start(false),
+                anim::content_rest(),
+            ));
+            state.content_transition_covers_chrome = true;
+            Task::none()
+        }
+        Message::UnisocFilterChanged(value) => {
+            state.flash.unisoc.filter = value;
+            Task::none()
+        }
+        Message::UnisocPortSelected(port) => {
+            state.flash.unisoc.port = Some(port);
+            Task::none()
+        }
+        Message::UnisocStorageTypeSelected(storage) => {
+            state.flash.unisoc.storage = storage;
+            Task::none()
+        }
+        Message::UnisocFdlOpened => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.open = true;
+            // A result of the last time the card was up says nothing about
+            // this one; what it was set up with is kept.
+            fdl.notice = None;
+            Task::none()
+        }
+        Message::UnisocFdlClosed => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.open = false;
+            fdl.notice = None;
+            Task::none()
+        }
+        // A click beside the card is swallowed: the settings it holds are not
+        // cheap to type in again.
+        Message::UnisocFdlBackdropPressed => Task::none(),
+        Message::UnisocFdlPresetSelected(preset) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.preset = preset;
+
+            // A preset is nothing but its two addresses; "Custom" fills
+            // nothing and leaves the fields alone.
+            if let Some((fdl1, fdl2)) = preset.addresses() {
+                fdl.fdl1_address = fdl1.to_owned();
+                fdl.fdl2_address = fdl2.to_owned();
+            }
+
+            fdl.notice = None;
+            Task::none()
+        }
+        Message::UnisocFdlAddressChanged(slot, value) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            *slot.addresses(fdl) = value;
+            // An address typed by hand is no preset's any more.
+            fdl.preset = FdlPreset::Custom;
+            fdl.notice = None;
+            Task::none()
+        }
+        Message::UnisocFdlPickFile(slot) => {
+            if state.flash.unisoc.fdl.reading_package {
+                return Task::none();
+            }
+
+            let title = match slot {
+                FdlSlot::One => state.l10n.tr("uc-fdl1-address"),
+                FdlSlot::Two => state.l10n.tr("uc-fdl2-address"),
+            };
+            let filter = state.l10n.tr("uc-fdl-filter");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter(&filter, &["bin"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                move |path| Message::UnisocFdlFilePicked(slot, path),
+            )
+        }
+        Message::UnisocFdlFilePicked(slot, path) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            *slot.agent(fdl) = path.map(FdlImage::File);
+            fdl.notice = None;
+            Task::none()
+        }
+        Message::UnisocFdlBypassToggled(checked) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.bypass = checked;
+            fdl.notice = None;
+            Task::none()
+        }
+        Message::UnisocFdlExecAddressChanged(value) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.exec_address = value;
+            fdl.notice = None;
+            Task::none()
+        }
+        Message::UnisocFdlPayloadChanged(value) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.payload = value;
+            fdl.notice = None;
+            Task::none()
+        }
+        // The download mode itself is not implemented: the card says so
+        // rather than pretending to wait for a phone.
+        Message::UnisocFdlInject => {
+            state.flash.unisoc.fdl.notice = Some(FdlNotice::NotImplemented);
+            Task::none()
+        }
+        Message::UnisocFdlPickPackage => {
+            if state.flash.unisoc.fdl.reading_package {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("uc-load-from-pac");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new()
+                            .set_title(&title)
+                            .add_filter("PAC", &["pac"])
+                            .pick_file()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::UnisocFdlPackagePicked,
+            )
+        }
+        Message::UnisocFdlPackagePicked(path) => {
+            let Some(path) = path else {
+                return Task::none();
+            };
+
+            let fdl = &mut state.flash.unisoc.fdl;
+            if fdl.reading_package {
+                return Task::none();
+            }
+
+            fdl.reading_package = true;
+            fdl.notice = None;
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        let package = pac::list(&path)?;
+
+                        Ok(FdlPackage { path, package })
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(pac::PacError::Read(error.to_string())))
+                },
+                Message::UnisocFdlPackageLoaded,
+            )
+        }
+        Message::UnisocFdlPackageLoaded(result) => {
+            let fdl = &mut state.flash.unisoc.fdl;
+            fdl.reading_package = false;
+
+            let package = match result {
+                Ok(package) => package,
+                Err(error) => {
+                    fdl.notice = Some(FdlNotice::PackageFailed(error));
+                    return Task::none();
+                }
+            };
+
+            let name = package
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| package.path.display().to_string());
+
+            // The package's own table names the address each agent is loaded
+            // at, and the file that carries it. A package missing either is not
+            // one the card can be set up from, and nothing of it is applied.
+            let mut agents = Vec::new();
+
+            for (id, slot) in [("FDL", FdlSlot::One), ("FDL2", FdlSlot::Two)] {
+                let record = package
+                    .package
+                    .records
+                    .iter()
+                    .find(|record| record.id.eq_ignore_ascii_case(id));
+                let entry = package
+                    .package
+                    .files
+                    .iter()
+                    .find(|entry| entry.id.eq_ignore_ascii_case(id));
+
+                let (Some(record), Some(entry)) = (record, entry) else {
+                    fdl.notice = Some(FdlNotice::PackageMissing(id.to_owned()));
+                    return Task::none();
+                };
+
+                agents.push((slot, record.addresses.first().copied(), &entry.name));
+            }
+
+            for (slot, address, entry) in agents {
+                if let Some(address) = address {
+                    *slot.addresses(fdl) = format!("0x{address:X}");
+                }
+
+                *slot.agent(fdl) = Some(FdlImage::Package {
+                    package: package.path.clone(),
+                    name: entry.clone(),
+                });
+            }
+
+            // The addresses came from the package, not from a preset.
+            fdl.preset = FdlPreset::Custom;
+            fdl.notice = Some(FdlNotice::PackageLoaded(name));
+
             Task::none()
         }
         Message::QualcommManagerSelected => start_qualcomm_page(state),
@@ -10540,6 +11059,26 @@ fn start_qualcomm_page(state: &mut State) -> Task<Message> {
     start_qualcomm_port_scan()
 }
 
+/// Opens the Unisoc Partition Manager: the page takes the place of the Mode 2
+/// feature grid, so the whole window is its own.
+///
+/// Only the workspace itself slides in; the "Inject FDL" card is opened from
+/// its own button, the way the page's other cards are.
+fn start_unisoc_page(state: &mut State) -> Task<Message> {
+    state.flash.unisoc.open = true;
+
+    // The workspace slides in the way a tab does, and the whole window is
+    // animated: the tab bar and the language selector disappear together with
+    // the grid instead of popping while the page fades in.
+    state.content_transition = Some(anim::Transition::settle(
+        anim::content_start(true),
+        anim::content_rest(),
+    ));
+    state.content_transition_covers_chrome = true;
+
+    Task::none()
+}
+
 /// Asks for the Firehose programmer that "Inject Firehose" uploads.
 ///
 /// The picker takes `mbn`, `elf` and `melf` files — a plain programmer or the
@@ -14115,6 +14654,7 @@ fn view(state: &State) -> Element<'_, Message> {
         Mode::Mode2 if state.flash.multi_flash.open => multi_flash::view(state),
         // The Partition Manager is a workspace of its own as well.
         Mode::Mode2 if qualcomm::is_open(state) => qualcomm::view(state),
+        Mode::Mode2 if unisoc::is_open(state) => unisoc::view(state),
         Mode::Mode2 => smartphone::smartphone_flash_view(state),
         Mode::Mode3 => decrypt_mode::view(state),
     };
@@ -14204,11 +14744,15 @@ fn view(state: &State) -> Element<'_, Message> {
     // through its own Exit button.
     let qualcomm_page = qualcomm::is_open(state);
 
+    // Its Unisoc counterpart owns the whole window the same way.
+    let unisoc_page = unisoc::is_open(state);
+
     // The Repack Package dialog is a full-window card as well, so the language
     // selector would show through while that card animates in and out: it is
     // left out while the dialog is open.
     let full_window = multi_flashing
         || qualcomm_page
+        || unisoc_page
         || pac_repack::is_open(state)
         || pac_unpack::is_open(state);
 
@@ -14255,13 +14799,14 @@ fn view(state: &State) -> Element<'_, Message> {
     .width(Fill);
 
     // The mode tabs are left out of the full-window pages entirely (see
-    // `multi_flashing` and `qualcomm_page` above), so no tab is ever
-    // clickable while one of them is open.
-    let base: Element<'_, Message> = if multi_flashing || qualcomm_page {
-        content_area.into()
-    } else {
-        column![content_area, horizontal_rule(1), tab_bar].into()
-    };
+    // `multi_flashing`, `qualcomm_page` and `unisoc_page` above), so no tab
+    // is ever clickable while one of them is open.
+    let base: Element<'_, Message> =
+        if multi_flashing || qualcomm_page || unisoc_page {
+            content_area.into()
+        } else {
+            column![content_area, horizontal_rule(1), tab_bar].into()
+        };
 
     // Entering or leaving the Multi Flashing page is a full-screen change:
     // the language selector and the mode tabs come and go with the content, so
@@ -14279,6 +14824,12 @@ fn view(state: &State) -> Element<'_, Message> {
         }
         _ => base,
     };
+
+    // The "Inject FDL" card of the Unisoc Partition Manager, drawn over the
+    // page (which replaced the tab bar) while it is up.
+    if let Some(overlay) = unisoc::inject_overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
 
     // The Partition Manager's own prompts are the last thing on screen.
     if let Some(overlay) = qualcomm::close_prompt_overlay(state) {
@@ -15107,6 +15658,210 @@ mod tests {
         // The search box keeps what was typed, so opening the page again finds
         // the same filter.
         assert_eq!(state.flash.qualcomm.filter, "boot");
+    }
+
+    /// The Unisoc tile opens the placeholder page: the workspace takes over
+    /// the window, keeps what its controls carry, and its Exit button gives the
+    /// feature grid back.
+    #[test]
+    fn the_unisoc_tile_opens_the_partition_manager_placeholder() {
+        let mut state = State::default();
+
+        let _ = update(&mut state, Message::UnisocManagerSelected);
+        assert!(unisoc::is_open(&state));
+        // The page hides the tab bar and the language selector, so the whole
+        // window travels with it.
+        assert!(state.content_transition_covers_chrome);
+        // Nothing was read, and nothing can be: the table starts empty.
+        assert!(state.flash.unisoc.ports.is_empty());
+
+        let _ = update(&mut state, Message::UnisocFilterChanged("boot".into()));
+        assert_eq!(state.flash.unisoc.filter, "boot");
+
+        let _ = update(
+            &mut state,
+            Message::UnisocStorageTypeSelected(StorageType::Ufs),
+        );
+        assert_eq!(state.flash.unisoc.storage, StorageType::Ufs);
+
+        let _ = update(&mut state, Message::UnisocExit);
+        assert!(!unisoc::is_open(&state));
+        // The page keeps what was set while it was open, so opening it again
+        // finds the same filter and storage.
+        assert_eq!(state.flash.unisoc.filter, "boot");
+        assert_eq!(state.flash.unisoc.storage, StorageType::Ufs);
+    }
+
+    /// The "Inject FDL" card is set up before any phone is connected: the SoC
+    /// preset fills the two addresses in, and an address typed by hand is no
+    /// preset's any more.
+    #[test]
+    fn the_inject_fdl_card_fills_the_addresses_of_the_picked_cpu() {
+        let mut state = State::default();
+        let _ = update(&mut state, Message::UnisocManagerSelected);
+        let _ = update(&mut state, Message::UnisocFdlOpened);
+
+        assert!(unisoc::inject_open(&state));
+        assert_eq!(overlay_key(&state), OVERLAY_UNISOC_FDL);
+
+        let _ = update(
+            &mut state,
+            Message::UnisocFdlPresetSelected(FdlPreset::Ums9620),
+        );
+        assert_eq!(state.flash.unisoc.fdl.fdl1_address, "0x65000800");
+        assert_eq!(state.flash.unisoc.fdl.fdl2_address, "0xB4FFFE00");
+
+        // An address typed by hand stops being the preset's, and leaves the
+        // other one where the preset put it.
+        let _ = update(
+            &mut state,
+            Message::UnisocFdlAddressChanged(FdlSlot::Two, "0x9EFFFE00".into()),
+        );
+        assert_eq!(state.flash.unisoc.fdl.preset, FdlPreset::Custom);
+        assert_eq!(state.flash.unisoc.fdl.fdl1_address, "0x65000800");
+        assert_eq!(state.flash.unisoc.fdl.fdl2_address, "0x9EFFFE00");
+
+        // Closing the card keeps what it was set up with: it is set up once
+        // and used for every phone after that.
+        let _ = update(&mut state, Message::UnisocFdlClosed);
+        assert!(!unisoc::inject_open(&state));
+        assert_eq!(overlay_key(&state), OVERLAY_NONE);
+        assert_eq!(state.flash.unisoc.fdl.fdl2_address, "0x9EFFFE00");
+    }
+
+    /// "Load from PAC" takes both download agents, and the addresses the
+    /// package loads them at, out of the package's own table.
+    #[test]
+    fn the_card_takes_its_agents_from_a_package() {
+        let mut state = State::default();
+        let _ = update(&mut state, Message::UnisocManagerSelected);
+        let _ = update(&mut state, Message::UnisocFdlOpened);
+
+        let _ = update(
+            &mut state,
+            Message::UnisocFdlPackageLoaded(Ok(FdlPackage {
+                path: std::path::PathBuf::from("firmware.pac"),
+                package: fdl_package(&["FDL", "FDL2"]),
+            })),
+        );
+
+        let fdl = &state.flash.unisoc.fdl;
+        assert_eq!(fdl.fdl1_address, "0x5500");
+        assert_eq!(fdl.fdl2_address, "0x9EFFFE00");
+        assert_eq!(
+            fdl.fdl1,
+            Some(FdlImage::Package {
+                package: std::path::PathBuf::from("firmware.pac"),
+                name: "fdl1-sign.bin".into(),
+            })
+        );
+        assert_eq!(
+            fdl.fdl2,
+            Some(FdlImage::Package {
+                package: std::path::PathBuf::from("firmware.pac"),
+                name: "fdl2-sign.bin".into(),
+            })
+        );
+        // The addresses are the package's, not a preset's.
+        assert_eq!(fdl.preset, FdlPreset::Custom);
+        assert_eq!(
+            fdl.notice,
+            Some(FdlNotice::PackageLoaded("firmware.pac".into()))
+        );
+    }
+
+    /// A package without one of the two agents cannot be flashed, so nothing of
+    /// it is taken — not even the agent it does carry.
+    #[test]
+    fn the_card_refuses_a_package_without_both_agents() {
+        let mut state = State::default();
+        let _ = update(&mut state, Message::UnisocManagerSelected);
+        let _ = update(&mut state, Message::UnisocFdlOpened);
+
+        let _ = update(
+            &mut state,
+            Message::UnisocFdlPackageLoaded(Ok(FdlPackage {
+                path: std::path::PathBuf::from("firmware.pac"),
+                package: fdl_package(&["FDL"]),
+            })),
+        );
+
+        let fdl = &state.flash.unisoc.fdl;
+        assert_eq!(fdl.fdl1, None);
+        assert_eq!(fdl.fdl2, None);
+        assert_eq!(fdl.fdl1_address, "");
+        assert_eq!(fdl.notice, Some(FdlNotice::PackageMissing("FDL2".into())));
+    }
+
+    /// The download mode itself does not exist yet, so "Inject" says so instead
+    /// of pretending to wait for a phone.
+    #[test]
+    fn injecting_says_it_is_not_implemented_yet() {
+        let mut state = State::default();
+        let _ = update(&mut state, Message::UnisocManagerSelected);
+        let _ = update(&mut state, Message::UnisocFdlOpened);
+
+        let _ = update(&mut state, Message::UnisocFdlInject);
+
+        assert_eq!(
+            state.flash.unisoc.fdl.notice,
+            Some(FdlNotice::NotImplemented)
+        );
+    }
+
+    /// A package whose table carries the two download agents — or only the ones
+    /// the test asks for.
+    fn fdl_package(agents: &[&str]) -> pac::Package {
+        let agent =
+            |id: &str| -> (pac::Entry, pac::Record) {
+                let (name, address) = match id {
+                    "FDL" => ("fdl1-sign.bin", 0x5500),
+                    _ => ("fdl2-sign.bin", 0x9EFFFE00),
+                };
+
+                (
+                    pac::Entry {
+                        id: id.to_owned(),
+                        name: name.to_owned(),
+                        size: 4,
+                        offset: 0,
+                        complete: true,
+                    },
+                    pac::Record {
+                        id: id.to_owned(),
+                        name: name.to_owned(),
+                        flag: 1,
+                        kind: 1,
+                        omit: 0,
+                        addresses: vec![address],
+                    },
+                )
+            };
+
+        let pairs: Vec<(pac::Entry, pac::Record)> =
+            agents.iter().map(|id| agent(id)).collect();
+
+        pac::Package {
+            header: pac::Header {
+                version: "BP_R2.0.1".to_owned(),
+                product_name: "test".to_owned(),
+                product_version: "1".to_owned(),
+                product_alias: "test".to_owned(),
+                mode: 0,
+                flash_type: 0,
+                nand_strategy: 0,
+                nand_page_type: 0,
+                nv_backup: 0,
+                oma_dm_product_flag: 0,
+                oma_dm: 0,
+                is_preload: 0,
+            },
+            files: pairs.iter().map(|(entry, _)| entry.clone()).collect(),
+            records: pairs.iter().map(|(_, record)| record.clone()).collect(),
+            expected_size: 8,
+            actual_size: 8,
+            complete: true,
+        }
     }
 
     /// A loaded programmer runs inside the phone, so the page is not left while

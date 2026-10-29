@@ -837,4 +837,28 @@ qc-dump-storage-folder-title = Selecione a pasta das imagens das LUNs
 qc-storage-dump-done = { $count } imagem(ns) de LUN despejada(s) em { $path }.
 qc-storage-dump-failed = Não foi possível despejar o armazenamento: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = Injetar FDL
+uc-flash-pac = Gravar PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = Predefinição de CPU
+uc-cpu-custom = Personalizado
+uc-fdl1-address = Endereço do FDL1
+uc-fdl2-address = Endereço do FDL2
+uc-select-file = Selecionar arquivo
+uc-fdl-filter = Agente de download
+uc-bypass-verification = Ignorar a verificação de execução
+uc-exec-address = Endereço
+uc-payload-hex = Payload (hex)
+uc-inject = Injetar
+uc-load-from-pac = Carregar do PAC
+uc-inject-not-implemented = A injeção do FDL ainda não foi implementada.
+uc-pac-loaded = Os dois agentes de download foram carregados de { $pac }.
+uc-pac-missing = O pacote não contém { $id }, então não pode ser usado.
+uc-reading-pac = Lendo o pacote…
+uc-hex-invalid = Informe um número hexadecimal.
+uc-payload-invalid = O payload deve ser dígitos hexadecimais, em número par.
+
 partition-flash-no-avb = A imagem selecionada não contém uma estrutura vbmeta, então estas duas opções não se aplicam.

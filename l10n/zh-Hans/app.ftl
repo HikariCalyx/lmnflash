@@ -836,4 +836,28 @@ qc-dump-storage-folder-title = 选择 LUN 镜像的保存文件夹
 qc-storage-dump-done = 已将 { $count } 个 LUN 镜像导出到 { $path }。
 qc-storage-dump-failed = 无法导出存储：{ $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = 注入 FDL
+uc-flash-pac = 刷写 PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU 预设
+uc-cpu-custom = 自定义
+uc-fdl1-address = FDL1 地址
+uc-fdl2-address = FDL2 地址
+uc-select-file = 选择文件
+uc-fdl-filter = 下载代理
+uc-bypass-verification = 绕过执行校验
+uc-exec-address = 地址
+uc-payload-hex = 载荷（十六进制）
+uc-inject = 注入
+uc-load-from-pac = 从 PAC 载入
+uc-inject-not-implemented = FDL 注入尚未实现。
+uc-pac-loaded = 已从 { $pac } 载入两个下载代理。
+uc-pac-missing = 该包中没有 { $id }，因此无法使用。
+uc-reading-pac = 正在读取包…
+uc-hex-invalid = 请输入十六进制数字。
+uc-payload-invalid = 载荷必须是偶数位的十六进制数字。
+
 partition-flash-no-avb = 所选镜像不含 vbmeta 结构，因此这两项不适用。

@@ -837,4 +837,28 @@ qc-dump-storage-folder-title = LUN イメージのフォルダーを選択
 qc-storage-dump-done = { $count } 個の LUN イメージを { $path } にダンプしました。
 qc-storage-dump-failed = ストレージをダンプできませんでした: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = FDL を読み込む
+uc-flash-pac = PAC を書き込む
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU プリセット
+uc-cpu-custom = カスタム
+uc-fdl1-address = FDL1 アドレス
+uc-fdl2-address = FDL2 アドレス
+uc-select-file = ファイルを選択
+uc-fdl-filter = ダウンロードエージェント
+uc-bypass-verification = 実行検証をバイパス
+uc-exec-address = アドレス
+uc-payload-hex = ペイロード (16 進)
+uc-inject = 注入
+uc-load-from-pac = PAC から読み込む
+uc-inject-not-implemented = FDL の注入はまだ実装されていません。
+uc-pac-loaded = { $pac } から 2 つのダウンロードエージェントを読み込みました。
+uc-pac-missing = パッケージに { $id } が含まれていないため、使用できません。
+uc-reading-pac = パッケージを読み込み中…
+uc-hex-invalid = 16 進数を入力してください。
+uc-payload-invalid = ペイロードは 16 進数の偶数桁で入力してください。
+
 partition-flash-no-avb = 選択したイメージに vbmeta 構造体がないため、この 2 項目は使用できません。

@@ -82,33 +82,34 @@ const FLASH_INFO_SCROLL_ID: &str = "qualcomm-flash-info";
 /// a dumped file name (`lun4 (2).img`).
 const STORAGE_FLASH_MENU_WIDTH: f32 = 190.0;
 
-/// The width of the table's "Partition Name" column, in logical pixels.
-const COLUMN_PARTITION: f32 = 220.0;
+/// The width of the table's "Partition Name" column, in logical pixels. The
+/// Unisoc page draws the same table, so its columns are this wide as well.
+pub(crate) const COLUMN_PARTITION: f32 = 220.0;
 /// The width of its "LUN" column.
-const COLUMN_LUN: f32 = 60.0;
+pub(crate) const COLUMN_LUN: f32 = 60.0;
 /// The width of its "Begin Offset" column.
-const COLUMN_BEGIN: f32 = 130.0;
+pub(crate) const COLUMN_BEGIN: f32 = 130.0;
 /// The width of its "End Offset" column.
-const COLUMN_END: f32 = 130.0;
+pub(crate) const COLUMN_END: f32 = 130.0;
 /// The width of its "Size" column.
-const COLUMN_SIZE: f32 = 110.0;
+pub(crate) const COLUMN_SIZE: f32 = 110.0;
 
 /// The room a table cell keeps around its content, so the columns stay apart.
 const CELL_PADDING: [f32; 2] = [3.0, 6.0];
 
 /// The refresh control shows the conventional icon instead of its word.
-const REFRESH_ICON: &str = "↻";
+pub(crate) const REFRESH_ICON: &str = "↻";
 
 /// The height of the job's progress bar under the table.
 const BAR_HEIGHT: f32 = 6.0;
 
 /// The narrowest the port dropdown gets: wide enough for the longest name a
 /// COM port can have (`COM255`), so picking one never makes it smaller.
-const PORT_MENU_WIDTH: f32 = 130.0;
+pub(crate) const PORT_MENU_WIDTH: f32 = 130.0;
 
 /// The width of the storage dropdown: wide enough for its longest entry
 /// ("SPI NOR Flash").
-const STORAGE_MENU_WIDTH: f32 = 150.0;
+pub(crate) const STORAGE_MENU_WIDTH: f32 = 150.0;
 
 /// Whether the Qualcomm Partition Manager takes the place of the Mode 2
 /// feature grid.
@@ -442,7 +443,10 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     ];
 
     if cfg!(windows) {
-        tools.push(device_manager_button(l10n));
+        tools.push(device_manager_button(
+            l10n,
+            Some(Message::QualcommOpenDeviceManager),
+        ));
     }
 
     // [View Log] is live once a session wrote its file: it shows the log in
@@ -2241,7 +2245,9 @@ fn selected_row_style(theme: &crate::fluent::Theme, selected: bool) -> container
 /// corner. A `Space` with [`Fill`] width inside the row would not do: a row
 /// gives a fluid child only the room the rest of the row leaves, which is
 /// nothing once the fixed-width controls are placed.
-fn split_row<'a>(
+///
+/// The Unisoc page lays its rows out the same way.
+pub(crate) fn split_row<'a>(
     start: Vec<Element<'a, Message>>,
     end: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
@@ -2293,13 +2299,20 @@ pub(crate) fn reboot_ready(qualcomm: &crate::QualcommState) -> bool {
 /// Opens Windows' Device Manager, where the phone shows up as a serial port.
 ///
 /// The button carries only the monitor icon, so a tooltip names what it does.
-fn device_manager_button<'a>(l10n: &'a crate::l10n::Bundle) -> Element<'a, Message> {
-    let icon = button(
-        canvas::Canvas::new(DeviceManagerIcon)
-            .width(18)
-            .height(18),
-    )
-    .on_press(Message::QualcommOpenDeviceManager);
+/// `action` is what pressing it sends; `None` draws the same button greyed
+/// out, which is how the Unisoc page carries it until its download mode
+/// exists.
+pub(crate) fn device_manager_button<'a>(
+    l10n: &'a crate::l10n::Bundle,
+    action: Option<Message>,
+) -> Element<'a, Message> {
+    let icon = canvas::Canvas::new(DeviceManagerIcon)
+        .width(18)
+        .height(18);
+    let icon = match action {
+        Some(message) => button(icon).on_press(message),
+        None => button(icon),
+    };
 
     let hint = container(text(l10n.tr("qc-device-manager-tooltip")).size(12.0))
         .padding([3.0, 6.0])
@@ -2368,7 +2381,7 @@ impl canvas::Program<Message, crate::fluent::Theme> for DeviceManagerIcon {
 ///
 /// A label that carries a CJK character is counted as twice as wide as a Latin
 /// one, which is enough to keep the longest translation readable.
-fn menu_width(labels: &[String]) -> f32 {
+pub(crate) fn menu_width(labels: &[String]) -> f32 {
     let widest = labels
         .iter()
         .map(|label| {
@@ -2386,7 +2399,7 @@ fn menu_width(labels: &[String]) -> f32 {
 
 /// A table entry: the data lines up in columns, so it is written in the
 /// platform's monospace font.
-fn value<'a>(
+pub(crate) fn value<'a>(
     value: impl iced::widget::text::IntoFragment<'a>,
     width: impl Into<iced::Length>,
 ) -> Element<'a, Message> {

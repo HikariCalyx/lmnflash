@@ -842,4 +842,28 @@ qc-dump-storage-folder-title = LUN 이미지를 저장할 폴더 선택
 qc-storage-dump-done = LUN 이미지 { $count }개를 { $path }에 덤프했습니다.
 qc-storage-dump-failed = 저장소를 덤프할 수 없습니다: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = FDL 주입
+uc-flash-pac = PAC 쓰기
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU 프리셋
+uc-cpu-custom = 사용자 지정
+uc-fdl1-address = FDL1 주소
+uc-fdl2-address = FDL2 주소
+uc-select-file = 파일 선택
+uc-fdl-filter = 다운로드 에이전트
+uc-bypass-verification = 실행 검증 우회
+uc-exec-address = 주소
+uc-payload-hex = 페이로드 (16진수)
+uc-inject = 주입
+uc-load-from-pac = PAC에서 불러오기
+uc-inject-not-implemented = FDL 주입은 아직 구현되지 않았습니다.
+uc-pac-loaded = { $pac }에서 다운로드 에이전트 두 개를 불러왔습니다.
+uc-pac-missing = 패키지에 { $id }이(가) 없어 사용할 수 없습니다.
+uc-reading-pac = 패키지를 읽는 중…
+uc-hex-invalid = 16진수를 입력하세요.
+uc-payload-invalid = 페이로드는 짝수 자리의 16진수여야 합니다.
+
 partition-flash-no-avb = 선택한 이미지에 vbmeta 구조체가 없어 이 두 옵션은 적용되지 않습니다.

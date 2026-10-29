@@ -837,4 +837,28 @@ qc-dump-storage-folder-title = Valitse kansio LUN-levykuville
 qc-storage-dump-done = Varmuuskopioitiin { $count } LUN-levykuvaa kohteeseen { $path }.
 qc-storage-dump-failed = Tallennustilaa ei voitu varmuuskopioida: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = Syötä FDL
+uc-flash-pac = Flashaa PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = CPU-esiasetus
+uc-cpu-custom = Mukautettu
+uc-fdl1-address = FDL1-osoite
+uc-fdl2-address = FDL2-osoite
+uc-select-file = Valitse tiedosto
+uc-fdl-filter = Latausagentti
+uc-bypass-verification = Ohita suorituksen varmennus
+uc-exec-address = Osoite
+uc-payload-hex = Hyötykuorma (hex)
+uc-inject = Syötä
+uc-load-from-pac = Lataa PAC-tiedostosta
+uc-inject-not-implemented = FDL-syöttöä ei ole vielä toteutettu.
+uc-pac-loaded = Molemmat latausagentit ladattu tiedostosta { $pac }.
+uc-pac-missing = Paketti ei sisällä kohdetta { $id }, joten sitä ei voi käyttää.
+uc-reading-pac = Luetaan pakettia…
+uc-hex-invalid = Anna heksadesimaaliluku.
+uc-payload-invalid = Hyötykuorman on oltava heksadesimaalinumeroita, parillinen määrä.
+
 partition-flash-no-avb = Valitussa imagessa ei ole vbmeta-rakennetta, joten nämä kaksi valintaa eivät ole käytettävissä.

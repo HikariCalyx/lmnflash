@@ -124,16 +124,19 @@ impl SmartphoneFeature {
             )],
             // The partition manager is a workspace of its own as well: it reads
             // the partition table of a phone through its vendor's download mode
-            // and writes to the ranges in it. Only the Qualcomm side exists so
-            // far; the other vendors' buttons are drawn disabled until their
-            // flow is implemented.
+            // and writes to the ranges in it. The Unisoc page is a placeholder
+            // that carries only its "Inject FDL" card so far; MediaTek's button
+            // is drawn disabled until its flow is implemented.
             Self::PartitionManager => vec![
                 (
                     "flash-partition-manager-qualcomm-button",
                     Some(Message::QualcommManagerSelected),
                 ),
                 ("flash-partition-manager-mediatek-button", None),
-                ("flash-partition-manager-unisoc-button", None),
+                (
+                    "flash-partition-manager-unisoc-button",
+                    Some(Message::UnisocManagerSelected),
+                ),
             ],
             // Windows installs a driver per device type: phones take
             // Motorola's Mobile Drivers, tablets are flashed with Lenovo's

@@ -837,4 +837,28 @@ qc-dump-storage-folder-title = Выберите папку для образов
 qc-storage-dump-done = Сохранено образов LUN: { $count } в { $path }.
 qc-storage-dump-failed = Не удалось сохранить хранилище: { $error }
 
+# "Partition Manager" page (Mode 2), Unisoc form. The controls it shares
+# with the Qualcomm form keep their qc- ids.
+uc-inject-fdl = Внедрить FDL
+uc-flash-pac = Прошить PAC
+
+# "Inject FDL" card (Mode 2, Unisoc Partition Manager).
+uc-cpu-preset = Профиль ЦП
+uc-cpu-custom = Свой
+uc-fdl1-address = Адрес FDL1
+uc-fdl2-address = Адрес FDL2
+uc-select-file = Выбрать файл
+uc-fdl-filter = Агент загрузки
+uc-bypass-verification = Обойти проверку выполнения
+uc-exec-address = Адрес
+uc-payload-hex = Данные (hex)
+uc-inject = Внедрить
+uc-load-from-pac = Загрузить из PAC
+uc-inject-not-implemented = Внедрение FDL ещё не реализовано.
+uc-pac-loaded = Оба агента загрузки загружены из { $pac }.
+uc-pac-missing = Пакет не содержит { $id }, поэтому его нельзя использовать.
+uc-reading-pac = Чтение пакета…
+uc-hex-invalid = Введите шестнадцатеричное число.
+uc-payload-invalid = Данные должны быть шестнадцатеричными цифрами в чётном количестве.
+
 partition-flash-no-avb = В выбранном образе нет структуры vbmeta, поэтому эти два параметра не применяются.
