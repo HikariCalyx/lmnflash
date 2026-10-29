@@ -2032,7 +2032,113 @@ fn flash_package_session(
         )?;
     }
 
+    // A package carries its own partition tables, and the patches are what make
+    // them pass the two checksums a boot ROM looks at. Reading them back says
+    // whether that worked — the images are already down, so a table that does
+    // not check out is reported and nothing more.
+    for (lun, sector_size) in awaits_geometry(steps, patches) {
+        let sectors = geometry_of(&geometry, lun)?;
+
+        match check_table(&mut session, lun, sectors, sector_size) {
+            Ok(summary) => session.line(format!("note: lun {lun}: {summary}")),
+            Err(error) => session.line(format!(
+                "!! lun {lun}: the partition table does not check out: {error}"
+            )),
+        }
+    }
+
     Ok(written)
+}
+
+/// Reads a LUN's primary table back and checks what a reader would check.
+fn check_table(
+    session: &mut Session<'_>,
+    lun: u8,
+    sectors: u64,
+    sector_size: u32,
+) -> Result<String, String> {
+    let header = read_sectors(session, lun, sector_size, 1, 1)?;
+
+    if header.len() < 92 || &header[..8] != b"EFI PART" {
+        return Err("sector 1 holds no table header".to_owned());
+    }
+
+    let entries_lba = u64::from_le_bytes(header[72..80].try_into().unwrap());
+    let count = u32::from_le_bytes(header[80..84].try_into().unwrap());
+    let entry_size = u32::from_le_bytes(header[84..88].try_into().unwrap());
+    let bytes = u64::from(count) * u64::from(entry_size);
+
+    if count == 0 || entry_size < 128 || bytes == 0 || bytes > MAX_PAYLOAD_BYTES as u64 {
+        return Err("the header does not describe a usable table".to_owned());
+    }
+
+    let array = read_sectors(
+        session,
+        lun,
+        sector_size,
+        entries_lba,
+        bytes.div_ceil(u64::from(sector_size)),
+    )?;
+
+    table_check(&header, &array[..(bytes as usize).min(array.len())], sectors)
+}
+
+/// What is wrong with a partition table, or what it holds when nothing is.
+///
+/// A table proves itself with two checksums — one over the header, one over the
+/// array of entries — and names its backup copy in the LUN's last sector. Any
+/// of the three being off is a table a reader refuses, which shows up as a
+/// storage with no partitions at all.
+fn table_check(header: &[u8], array: &[u8], sectors: u64) -> Result<String, String> {
+    const HEADER: usize = 92;
+
+    if header.len() < HEADER || &header[..8] != b"EFI PART" {
+        return Err("sector 1 holds no table header".to_owned());
+    }
+
+    let stored = u32::from_le_bytes(header[16..20].try_into().unwrap());
+    let mut without_checksum = header[..HEADER].to_vec();
+    without_checksum[16..20].fill(0);
+
+    let computed = crc32(&without_checksum);
+    if stored != computed {
+        return Err(format!(
+            "the header checksum is {stored:#010x}, the header itself sums to {computed:#010x}"
+        ));
+    }
+
+    let alternate = u64::from_le_bytes(header[32..40].try_into().unwrap());
+    let last = sectors.saturating_sub(1);
+    if alternate != last {
+        return Err(format!(
+            "its backup copy is named at sector {alternate}, but the LUN ends at {last}"
+        ));
+    }
+
+    let count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as usize;
+    let entry_size = u32::from_le_bytes(header[84..88].try_into().unwrap()) as usize;
+    let array_bytes = count.saturating_mul(entry_size);
+
+    if entry_size < 128 || array_bytes == 0 || array.len() < array_bytes {
+        return Err("the header does not describe a usable table".to_owned());
+    }
+
+    let stored = u32::from_le_bytes(header[88..92].try_into().unwrap());
+    let computed = crc32(&array[..array_bytes]);
+    if stored != computed {
+        return Err(format!(
+            "the entries checksum is {stored:#010x}, the entries sum to {computed:#010x}"
+        ));
+    }
+
+    let used = array[..array_bytes]
+        .chunks_exact(entry_size)
+        .filter(|entry| entry[..16].iter().any(|byte| *byte != 0))
+        .count();
+
+    Ok(format!(
+        "the table checks out ({count} entries, {used} in use)"
+    ))
 }
 
 /// The lengths the package works its sector numbers out from, asked of the
@@ -2051,7 +2157,6 @@ fn resolve_geometry(
 
     for (lun, sector_size) in awaits_geometry(steps, patches) {
         let sectors = ask_disk_sectors(session, lun, sector_size)?;
-        session.line(format!("note: LUN {lun} has {sectors} sectors"));
         geometry.push((lun, sectors));
     }
 
@@ -2094,33 +2199,68 @@ fn awaits_geometry(steps: &[PackageStep], patches: &[RangePatch]) -> Vec<(u8, u3
 
 /// How many sectors a LUN has.
 ///
-/// The phone is asked first. Not every programmer answers `<getstorageinfo>`
-/// with a size — the one in an MSM8998 acknowledges the command and says
-/// nothing more — so the partition table the LUN carries is asked next: its
-/// primary header points at the backup copy, which sits in the last sector.
+/// The phone is asked first, and its answer is the one the package's
+/// `NUM_DISK_SECTORS` means: the programmer knows how long the LUN is, while
+/// the table on it may be stale — a header left behind by an earlier flash can
+/// name a backup copy that is not where the LUN ends, and a package patched
+/// against that number writes a table that does not describe the storage.
+///
+/// Not every programmer answers `<getstorageinfo>` at all — the one in an
+/// MSM8998 acknowledges the command and says nothing more — so the partition
+/// table the LUN carries is asked next: its primary header points at the backup
+/// copy, which sits in the last sector.
 fn ask_disk_sectors(
     session: &mut Session<'_>,
     lun: u8,
     sector_size: u32,
 ) -> Result<u64, String> {
     match storage_info(session, lun, sector_size) {
-        Ok(sectors) => Ok(sectors),
+        Ok(sectors) => {
+            session.line(format!(
+                "note: the phone says LUN {lun} has {sectors} sectors"
+            ));
+
+            // A table left behind by an earlier flash can name a backup copy
+            // that is not where the LUN ends. The phone's number is the one
+            // used either way, but a disagreement is worth saying out loud.
+            if let Some(from_table) = table_length(session, lun, sector_size) {
+                if from_table != sectors {
+                    session.line(format!(
+                        "note: the table on LUN {lun} says it is {from_table} sectors long; \
+                         the phone's {sectors} is the one used"
+                    ));
+                }
+            }
+
+            Ok(sectors)
+        }
         Err(error) => {
             session.line(format!(
                 "note: {error}; the partition table of the LUN is asked instead"
             ));
 
-            let header = read_sectors(session, lun, sector_size, 1, 1)?;
-            let last = gpt_last_sector(&header).ok_or_else(|| {
+            let sectors = table_length(session, lun, sector_size).ok_or_else(|| {
                 format!(
                     "the phone did not say how large LUN {lun} is, and its \
                      partition table does not say either"
                 )
             })?;
 
-            Ok(last.saturating_add(1))
+            session.line(format!(
+                "note: the partition table of LUN {lun} is {sectors} sectors long"
+            ));
+
+            Ok(sectors)
         }
     }
+}
+
+/// How long a LUN is according to the partition table on it, when it has one
+/// that names the backup copy — which sits in the last sector of the LUN.
+fn table_length(session: &mut Session<'_>, lun: u8, sector_size: u32) -> Option<u64> {
+    let header = read_sectors(session, lun, sector_size, 1, 1).ok()?;
+
+    gpt_last_sector(&header).map(|last| last.saturating_add(1))
 }
 
 /// The length of a LUN, as it was asked for before the flash started.
@@ -2511,34 +2651,16 @@ fn apply_patch(
     let sectors = patch.size.div_ceil(u64::from(sector_size)).max(1);
     let first = resolve_sector(&patch.start_sector, patch.lun, geometry)?;
 
-    // The value is a number, an expression over the phone's geometry, or the
-    // checksum of a range of the storage — which is how a partition table
-    // proves itself to the boot ROM.
-    let value = match crc32_spec(&patch.value) {
-        Some((from, length)) => {
-            let length = qfil::expression_value(length, 0)
-                .map_err(|error| format!("`{}`: {error}", patch.value))?;
-            let from = match qfil::number_of(from) {
-                Some(sector) => sector,
-                None => {
-                    let disk = geometry_of(geometry, patch.lun)?;
-                    qfil::expression_value(from, disk)
-                        .map_err(|error| format!("`{}`: {error}", patch.value))?
-                }
-            };
+    let (value, checksummed) = patch_value_of(patch, geometry, &mut |at, count| {
+        read_sectors(session, patch.lun, sector_size, at, count)
+    })?;
 
-            crc32_of(session, patch.lun, sector_size, from, length)?
-        }
-        None => {
-            let disk = if patch.value.contains("NUM_DISK_SECTORS") {
-                geometry_of(geometry, patch.lun)?
-            } else {
-                0
-            };
-
-            patch_value(&patch.value, disk, patch.size)?
-        }
-    };
+    if let Some((from, length)) = checksummed {
+        session.line(format!(
+            "  checksumming {length} bytes at sector {from} of LUN {}",
+            patch.lun
+        ));
+    }
 
     let mut data = read_sectors(session, patch.lun, sector_size, first, sectors)?;
     let at = patch.byte_offset as usize;
@@ -2583,26 +2705,46 @@ fn crc32_spec(value: &str) -> Option<(&str, &str)> {
     Some((start.trim(), length.trim()))
 }
 
-/// The four little-endian bytes of the CRC-32 of a range of the storage.
+/// The bytes one patch writes, and the range it checksummed when the value is a
+/// checksum.
 ///
-/// This is the checksum a GPT header carries for the partition array it
-/// points at and for itself, so a table is only valid once these are right.
-fn crc32_of(
-    session: &mut Session<'_>,
-    lun: u8,
-    sector_size: u32,
-    first: u64,
-    length: u64,
-) -> Result<Vec<u8>, String> {
+/// The value is a number, an expression over the phone's geometry, or the
+/// checksum of a range of the storage — which is how a partition table proves
+/// itself to the boot ROM. `read` fetches sectors of the storage the patch is
+/// for, so the same code runs against a phone and against a dump of one.
+fn patch_value_of(
+    patch: &RangePatch,
+    geometry: &[(u8, u64)],
+    read: &mut dyn FnMut(u64, u64) -> Result<Vec<u8>, String>,
+) -> Result<(Vec<u8>, Option<(u64, u64)>), String> {
+    let sector_size = patch.sector_size;
+
+    let Some((from, length)) = crc32_spec(&patch.value) else {
+        let disk = if patch.value.contains("NUM_DISK_SECTORS") {
+            geometry_of(geometry, patch.lun)?
+        } else {
+            0
+        };
+
+        return Ok((patch_value(&patch.value, disk, patch.size)?, None));
+    };
+
+    let length = qfil::expression_value(length, 0)
+        .map_err(|error| format!("`{}`: {error}", patch.value))?;
+    let from = match qfil::number_of(from) {
+        Some(sector) => sector,
+        None => {
+            let disk = geometry_of(geometry, patch.lun)?;
+            qfil::expression_value(from, disk)
+                .map_err(|error| format!("`{}`: {error}", patch.value))?
+        }
+    };
+
     let sectors = length.div_ceil(u64::from(sector_size)).max(1);
-    let data = read_sectors(session, lun, sector_size, first, sectors)?;
+    let data = read(from, sectors)?;
     let data = &data[..(length as usize).min(data.len())];
 
-    session.line(format!(
-        "  checksumming {length} bytes at sector {first} of LUN {lun}"
-    ));
-
-    Ok(crc32(data).to_le_bytes().to_vec())
+    Ok((crc32(data).to_le_bytes().to_vec(), Some((from, length))))
 }
 
 /// The CRC-32 the partition tables use (IEEE 802.3: reflected, polynomial
@@ -3887,9 +4029,14 @@ fn storage_info(session: &mut Session<'_>, lun: u8, sector_size: u32) -> Result<
 
 /// How many sectors a `<getstorageinfo>` reply says one LUN has.
 ///
-/// Programmers spell the attribute differently (`TOTAL_SECTORS` and
-/// `total_sectors` are both in use), and a few answer in kilobytes instead of
-/// sectors, so both are read.
+/// There are three ways a programmer answers. It can name the size as an
+/// attribute (`TOTAL_SECTORS`, `total_sectors`, `SizeInKbytes`), and it can
+/// put it in the JSON blob it logs before the ACK — which is how the reference
+/// tools read it:
+///
+/// ```text
+/// <log value="INFO: storage_info: {"storage_info":[{"total_blocks":14024704,"block_size":4096}]}" />
+/// ```
 fn reported_sectors(response: &Response, sector_size: u32) -> Option<u64> {
     if let Some(sectors) = response
         .attribute("TOTAL_SECTORS")
@@ -3898,10 +4045,52 @@ fn reported_sectors(response: &Response, sector_size: u32) -> Option<u64> {
         return Some(sectors);
     }
 
-    response
+    if let Some(kilobytes) = response
         .attribute("SIZE_IN_KBYTES")
         .and_then(|text| text.trim().parse::<u64>().ok())
-        .map(|kilobytes| kilobytes.saturating_mul(1024) / u64::from(sector_size))
+    {
+        return Some(kilobytes.saturating_mul(1024) / u64::from(sector_size));
+    }
+
+    // The logged blob. `total_blocks` blocks of `block_size` bytes each is the
+    // LUN's length; the block size is usually the sector size, but a LUN whose
+    // blocks are smaller has to be converted.
+    let log = response.log_text();
+    let blocks = number_logged(&log, "total_blocks")?;
+    let block_size = number_logged(&log, "block_size").unwrap_or(u64::from(sector_size));
+    if block_size == 0 || sector_size == 0 {
+        return None;
+    }
+
+    Some(blocks.saturating_mul(block_size) / u64::from(sector_size))
+}
+
+/// The number written after `"<key>":` in the JSON a programmer logs.
+///
+/// The blob is not parsed as JSON: only the numbers asked for are looked up,
+/// and a truncated or oddly spelled blob simply leaves them out. Programmers
+/// write the numbers with and without quotes, so both are read.
+fn number_logged(text: &str, key: &str) -> Option<u64> {
+    let quoted = format!("\"{key}\"");
+    let mut rest = text;
+
+    while let Some(found) = rest.find(&quoted) {
+        let after = &rest[found + quoted.len()..];
+        let value = after.trim_start().strip_prefix(':').map(str::trim_start);
+
+        if let Some(value) = value {
+            let digits = value.trim_start_matches('"');
+            let digits: String = digits.chars().take_while(char::is_ascii_digit).collect();
+
+            if !digits.is_empty() {
+                return digits.parse().ok();
+            }
+        }
+
+        rest = after;
+    }
+
+    None
 }
 
 /// The sector the primary header of a partition table points its backup copy
@@ -4156,9 +4345,43 @@ fn complete_response(bytes: &[u8]) -> Option<Response> {
         value: attributes(batch, "response", "value")
             .pop()
             .unwrap_or_default(),
-        logs: attributes(batch, "log", "value"),
+        // The whole answer, not just the `<data>` that carries the ACK: a
+        // programmer logs one `<data>` per line, and the storage geometry it
+        // reports for `<getstorageinfo>` arrives in one of those before the
+        // ACK — dropping it is how a LUN's own length never got read.
+        logs: log_values(&text),
         attributes: element_attributes(&element[..tag_end]),
     })
+}
+
+/// Every `<log value="…" />` of a reply, unescaped.
+///
+/// The value runs to the `/>` that closes the element, not to the first `"`:
+/// programmers log JSON blobs, and stopping at the first quote would cut the
+/// blob off before its first key — it is the storage geometry that arrives
+/// that way.
+fn log_values(text: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut rest = text;
+
+    while let Some(found) = rest.find("<log") {
+        let element = &rest[found..];
+        let Some(end) = element.find("/>") else {
+            break;
+        };
+        let element = &element[..end];
+
+        if let Some(at) = element.find("value=\"") {
+            let value = element[at + "value=\"".len()..].trim_end();
+            let value = value.strip_suffix('"').unwrap_or(value);
+
+            values.push(unescape(value));
+        }
+
+        rest = &rest[found + end + 2..];
+    }
+
+    values
 }
 
 /// Every `name="value"` attribute of one element.
@@ -4799,6 +5022,164 @@ mod tests {
         entry
     }
 
+    /// A table the way a package leaves one behind: entries in a table of four,
+    /// with the entries checksum and the header checksum filled in.
+    fn patched_gpt_table(alternate: u64) -> (Vec<u8>, Vec<u8>) {
+        let mut array = gpt_entry("boot_a", 6, 2053);
+        array.extend(gpt_entry("userdata", 2054, 99));
+        array.resize(4 * 128, 0);
+
+        let mut header = gpt_header(alternate, 2, 4, 128);
+        header[88..92].copy_from_slice(&crc32(&array).to_le_bytes());
+        header[16..20].fill(0);
+        let checksum = crc32(&header[..92]);
+        header[16..20].copy_from_slice(&checksum.to_le_bytes());
+
+        (header, array)
+    }
+
+    /// Replays the flash on the LUN dumps of a real phone (`reference/debugxml`
+    /// holds `sdb`..`sdf` for LUN 1..5 and the package's `patch1`..`patch5`).
+    ///
+    /// Each dump is a LUN that came out of a working flash, so it is the
+    /// expected result: the package's own images are put down at the sectors the
+    /// `rawprogram` files name, every `<patch>` of its `patch` file is applied
+    /// the way `apply_patch` applies it, and the storage has to come back
+    /// identical — which pins the patch sectors, the `NUM_DISK_SECTORS`
+    /// arithmetic and the checksums against real data.
+    #[test]
+    fn the_patches_of_a_package_rebuild_the_tables_of_its_luns() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("reference/debugxml");
+        let sector_size = 4096_u64;
+
+        for (lun, dump_name) in [(1_u8, "sdb"), (2, "sdc"), (3, "sdd"), (4, "sde"), (5, "sdf")] {
+            let dump_path = folder.join(dump_name);
+            let program_path = folder.join(format!("rawprogram{lun}.xml"));
+            let patch_path = folder.join(format!("patch{lun}.xml"));
+
+            if !dump_path.is_file() || !program_path.is_file() || !patch_path.is_file() {
+                continue;
+            }
+
+            let dump = std::fs::read(&dump_path).expect("the LUN dump");
+            let sectors = dump.len() as u64 / sector_size;
+            let geometry = [(lun, sectors)];
+
+            let plan = qfil::flat(&[program_path, patch_path]).expect("the package files");
+            let patches: Vec<RangePatch> = plan
+                .patches
+                .iter()
+                .map(|patch| RangePatch {
+                    label: patch.label.clone(),
+                    lun: patch.lun,
+                    sector_size: patch.sector_size,
+                    start_sector: patch.start_sector.clone(),
+                    byte_offset: patch.byte_offset,
+                    size: patch.size,
+                    value: patch.value.clone(),
+                    what: patch.what.clone(),
+                })
+                .collect();
+            assert!(!patches.is_empty(), "{dump_name}");
+
+            // The package's gpt_main and gpt_backup images: the table the LUN
+            // ends up with, with every byte a patch writes blanked out.
+            let sector = sector_size as usize;
+            let main_sectors = 6 * sector;
+            let backup_at = (sectors - 5) * sector_size;
+            let mut storage = dump.clone();
+            let mut main = storage[..main_sectors].to_vec();
+            let mut backup = storage[backup_at as usize..].to_vec();
+
+            for patch in &patches {
+                let first = resolve_sector(&patch.start_sector, lun, &geometry).expect("a sector");
+                let image = if first * sector_size < backup_at {
+                    &mut main
+                } else {
+                    &mut backup
+                };
+                let at = (first * sector_size - if first * sector_size < backup_at { 0 } else { backup_at })
+                    as usize
+                    + patch.byte_offset as usize;
+                image[at..at + patch.size as usize].fill(0);
+            }
+
+            storage[..main_sectors].copy_from_slice(&main);
+            storage[backup_at as usize..].copy_from_slice(&backup);
+
+            // Then every patch, read, edited and written back one sector at a time.
+            for patch in &patches {
+                let first = resolve_sector(&patch.start_sector, lun, &geometry).expect("a sector");
+
+                let (value, _) = patch_value_of(patch, &geometry, &mut |at, count| {
+                    let start = (at * sector_size) as usize;
+                    let end = start + (count * sector_size) as usize;
+
+                    Ok(storage
+                        .get(start..end)
+                        .ok_or_else(|| format!("sector {at} is past the end"))?
+                        .to_vec())
+                })
+                .expect("a value");
+
+                let at = (first * sector_size) as usize;
+                let offset = at + patch.byte_offset as usize;
+                storage[offset..offset + value.len()].copy_from_slice(&value);
+            }
+
+            assert!(
+                storage == dump,
+                "LUN {lun}: the flash does not rebuild the table the dump holds"
+            );
+
+            // And the table it built has to pass the check a reader would run.
+            let header = &storage[sector..sector + 92];
+            let entries_lba = u64::from_le_bytes(header[72..80].try_into().unwrap());
+            let count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as usize;
+            let entry_size = u32::from_le_bytes(header[84..88].try_into().unwrap()) as usize;
+            let array = &storage
+                [(entries_lba * sector_size) as usize..][..count * entry_size];
+
+            let summary = table_check(header, array, sectors).expect("a table that checks out");
+            assert!(summary.contains("checks out"), "LUN {lun}: {summary}");
+        }
+    }
+
+    /// The check the flash runs over the tables it patched: both checksums have
+    /// to be right, and the backup copy has to be named in the LUN's last
+    /// sector — which is where a `NUM_DISK_SECTORS` worked out from something
+    /// other than the phone's own length puts it.
+    #[test]
+    fn a_patched_table_is_checked_the_way_a_reader_checks_it() {
+        let (header, array) = patched_gpt_table(99);
+
+        let summary = table_check(&header, &array, 100).expect("a whole table");
+        assert!(summary.contains("4 entries"), "{summary}");
+        assert!(summary.contains("2 in use"), "{summary}");
+
+        // A geometry that is not the LUN's own length is exactly what a table
+        // patched against a stale one says.
+        let error = table_check(&header, &array, 200).expect_err("the wrong length");
+        assert!(error.contains("the LUN ends at 199"), "{error}");
+
+        // An entry that does not sum to the checksum in the header is a table
+        // no reader accepts.
+        let mut damaged = array.clone();
+        damaged[40] ^= 0xff;
+        let error = table_check(&header, &damaged, 100).expect_err("a damaged array");
+        assert!(error.contains("entries checksum"), "{error}");
+
+        // So is a header whose own checksum was not recomputed.
+        let mut damaged = header.clone();
+        damaged[56] ^= 0xff;
+        let error = table_check(&damaged, &array, 100).expect_err("a damaged header");
+        assert!(error.contains("header checksum"), "{error}");
+
+        // A LUN with no table at all is reported, not read as a table.
+        let error = table_check(&vec![0_u8; 512], &array, 100).expect_err("no table");
+        assert!(error.contains("no table header"), "{error}");
+    }
+
     #[test]
     fn the_partition_table_is_read_in_bytes() {
         let header = parse_gpt_header(&gpt_header(30_535_679, 2, 3, 128)).unwrap();
@@ -5341,6 +5722,29 @@ mod tests {
         let response =
             complete_response(br#"<data><response value="ACK" /></data>"#).expect("a reply");
         assert_eq!(reported_sectors(&response, 4096), None);
+
+        // The size the reference tools use is the one in the logged JSON blob,
+        // which arrives before a bare ACK — the reply an MSM8998 programmer
+        // gives, and the one a Nokia UFS phone gives for every LUN.
+        for reply in [
+            r#"<data><log value="INFO: storage_info: {"storage_info":[{"total_blocks":14024704,"block_size":4096,"mem_type":"ufs"}]}" /><response value="ACK" /></data>"#,
+            r#"<data><log value="INFO: {"storage_info":[{"total_blocks":"14024704","block_size":"4096"}]}" /><response value="ACK" /></data>"#,
+            r#"<data><log value="INFO: {&quot;storage_info&quot;:[{&quot;total_blocks&quot;:14024704,&quot;block_size&quot;:4096}]}" /><response value="ACK" /></data>"#,
+            // The blob is logged in a `<data>` element of its own, which the
+            // ACK follows in the next one.
+            r#"<data><log value="INFO: {"total_blocks":14024704,"block_size":4096}" /></data><data><response value="ACK" /></data>"#,
+        ] {
+            let response = complete_response(reply.as_bytes()).expect(reply);
+            assert_eq!(reported_sectors(&response, 4096), Some(14_024_704), "{reply}");
+        }
+
+        // Blocks of another size are converted to the sectors the package
+        // counts in.
+        let response = complete_response(
+            br#"<data><log value="INFO: {"storage_info":[{"total_blocks":2000,"block_size":512}]}" /><response value="ACK" /></data>"#,
+        )
+        .expect("a reply");
+        assert_eq!(reported_sectors(&response, 4096), Some(250));
 
         // The reply is still one reply when the sector data of a read follows
         // it, and that data is not part of what was parsed.
