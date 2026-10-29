@@ -50,6 +50,7 @@ mod preset_file;
 mod protocol;
 mod qualcomm;
 mod qualcomm_ports;
+mod qboot;
 mod qfil;
 mod scatter;
 mod smartphone;
@@ -5907,7 +5908,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
                 qfil::Build::Meta => "qc-xml-filter",
                 qfil::Build::Flat => "qc-xml-filter-flat",
             });
-            let everything = state.l10n.tr("qc-xml-filter-all");
+            let everything = state.l10n.tr("qc-filter-all-files");
 
             Task::perform(
                 async move {
@@ -6393,13 +6394,17 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
 
             let title = state.l10n.tr("qc-write-file-title");
             let filter = state.l10n.tr("qc-image-filter");
+            let everything = state.l10n.tr("qc-filter-all-files");
 
             Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
+                        // A partition takes whatever the image is called, so
+                        // every file is offered alongside the usual images.
                         rfd::FileDialog::new()
                             .set_title(&title)
                             .add_filter(&filter, &["img", "bin"])
+                            .add_filter(&everything, &["*"])
                             .pick_file()
                     })
                     .await
@@ -7460,13 +7465,18 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             }
 
             let title = state.l10n.tr("partition-flash-select");
+            let filter = state.l10n.tr("qc-image-filter");
+            let everything = state.l10n.tr("qc-filter-all-files");
 
             Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
+                        // A partition takes whatever the image is called, and a
+                        // dropped file was never held to the image extensions.
                         rfd::FileDialog::new()
                             .set_title(&title)
-                            .add_filter("Image", &PARTITION_IMAGE_EXTENSIONS)
+                            .add_filter(&filter, &PARTITION_IMAGE_EXTENSIONS)
+                            .add_filter(&everything, &["*"])
                             .pick_file()
                             // Whether the image can take the AVB flags is read
                             // once, here, rather than per frame or per flash.

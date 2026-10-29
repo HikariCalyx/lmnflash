@@ -56,7 +56,7 @@ const MODE_SWITCH_WAIT: Duration = Duration::from_secs(3);
 
 /// The file types the programmer picker offers: a plain MBN, a single-image
 /// ELF, and the CPIO archive newer platforms use.
-pub(crate) const PROGRAMMER_EXTENSIONS: [&str; 3] = ["mbn", "elf", "melf"];
+pub(crate) const PROGRAMMER_EXTENSIONS: [&str; 4] = ["mbn", "elf", "melf", "bin"];
 
 /// The baud rate a USB CDC serial port is opened with. The phone ignores it
 /// (the link is USB, not UART); 115200 is what the reference tools use.
@@ -490,13 +490,19 @@ pub enum InjectAnswer {
 struct Programmer {
     path: PathBuf,
     images: Vec<Option<Vec<u8>>>,
+    /// The name of the file inside a Motorola single image the programmer was
+    /// taken from, when it came out of one.
+    inner: Option<String>,
 }
 
 impl Programmer {
     fn open(path: &Path) -> Result<Self, String> {
+        let (images, inner) = programmer_images(path)?;
+
         Ok(Self {
             path: path.to_path_buf(),
-            images: programmer_images(path)?,
+            images,
+            inner,
         })
     }
 
@@ -505,9 +511,13 @@ impl Programmer {
         let count = self.images.iter().filter(|image| image.is_some()).count();
         let bytes: usize = self.images.iter().flatten().map(Vec::len).sum();
 
+        let source = match &self.inner {
+            Some(inner) => format!("{} → {inner}", self.path.display()),
+            None => self.path.display().to_string(),
+        };
+
         format!(
-            "programmer: {} ({}, {count} image(s))",
-            self.path.display(),
+            "programmer: {source} ({}, {count} image(s))",
             crate::firmware::human_size(bytes as u64)
         )
     }
@@ -3165,14 +3175,28 @@ fn unique_path(directory: &Path, name: &str) -> PathBuf {
 ///
 /// A plain MBN/ELF is one image; a *melf* is a CPIO `newc` archive of several
 /// images, whose entry names carry the image id (`13:prog_firehose_ddr.elf`).
-fn programmer_images(path: &Path) -> Result<Vec<Option<Vec<u8>>>, String> {
+/// A Motorola blankflash `singleimage.bin` is the whole package in one file:
+/// the programmer it carries is what is uploaded. The second value is the entry
+/// a single image was read from, so the log can say which file it took.
+fn programmer_images(path: &Path) -> Result<(Vec<Option<Vec<u8>>>, Option<String>), String> {
     let blob = std::fs::read(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
 
+    if crate::qboot::is_container(&blob) {
+        let (programmer, name) = crate::qboot::programmer(&blob)?;
+
+        return Ok((decode_programmer(programmer)?, Some(name)));
+    }
+
+    Ok((decode_programmer(&blob)?, None))
+}
+
+/// Splits one programmer file into the Sahara images it holds.
+fn decode_programmer(blob: &[u8]) -> Result<Vec<Option<Vec<u8>>>, String> {
     if blob.len() >= CPIO_MAGIC.len() && &blob[..CPIO_MAGIC.len()] == CPIO_MAGIC {
-        decode_archive(&blob)
+        decode_archive(blob)
     } else {
-        Ok(vec![Some(blob)])
+        Ok(vec![Some(blob.to_vec())])
     }
 }
 
@@ -4643,8 +4667,43 @@ mod tests {
         let file = std::env::temp_dir().join(format!("lmnflash-fh-{}", std::process::id()));
         std::fs::write(&file, b"programmer bytes").unwrap();
 
-        let images = programmer_images(&file).unwrap();
+        let (images, inner) = programmer_images(&file).unwrap();
         assert_eq!(images, vec![Some(b"programmer bytes".to_vec())]);
+        assert_eq!(inner, None);
+
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    /// A Motorola `singleimage.bin` is the whole blankflash package in one file,
+    /// so the programmer is one of the files inside it.
+    #[test]
+    fn a_single_image_programmer_comes_out_of_the_container() {
+        let entries = [
+            (
+                "pkg.xml",
+                br#"<package><programmer filename="programmer.elf"/></package>"#.to_vec(),
+            ),
+            ("programmer.elf", b"programmer bytes".to_vec()),
+        ];
+
+        let mut container = Vec::new();
+        container.extend_from_slice(crate::qboot::MAGIC);
+        container.resize(256, 0);
+        for (name, body) in &entries {
+            let mut slot = vec![0_u8; 256];
+            slot[..name.len()].copy_from_slice(name.as_bytes());
+            slot[248..256].copy_from_slice(&(body.len() as u64).to_le_bytes());
+            container.extend_from_slice(&slot);
+            container.extend_from_slice(body);
+            container.resize(container.len() + (4096 - body.len()), 0);
+        }
+
+        let file = std::env::temp_dir().join(format!("lmnflash-si-{}", std::process::id()));
+        std::fs::write(&file, &container).unwrap();
+
+        let (images, inner) = programmer_images(&file).unwrap();
+        assert_eq!(images, vec![Some(b"programmer bytes".to_vec())]);
+        assert_eq!(inner.as_deref(), Some("programmer.elf"));
 
         std::fs::remove_file(&file).unwrap();
     }

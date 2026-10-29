@@ -1319,7 +1319,7 @@ mod tests {
                 "qc-xml-pick-flat",
                 "qc-xml-filter",
                 "qc-xml-filter-flat",
-                "qc-xml-filter-all",
+                "qc-filter-all-files",
                 "qc-xml-hint",
                 "qc-xml-sparse",
                 "qc-xml-after",
