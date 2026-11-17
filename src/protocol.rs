@@ -13,10 +13,12 @@
 //!   touched. The per-user command that a takeover shadows is remembered (see
 //!   [`crate::config`]) so switching back can restore it; a machine-wide
 //!   handler needs no backup, because deleting our key reveals it again.
-//! * **Linux** — a desktop entry under `~/.local/share/applications` plus
-//!   `xdg-mime default … x-scheme-handler/softwarefix`. The entry runs the
-//!   executable with the URL as an argument, which
-//!   [`callback_arg`] picks up.
+//! * **Linux** — a hidden per-user desktop entry under
+//!   `~/.local/share/applications` plus
+//!   `xdg-mime default … x-scheme-handler/softwarefix`. The entry has an id of
+//!   its own, so it cannot shadow the packaged `lmnflash.desktop` in the
+//!   application menu. It runs the executable with the URL as an argument,
+//!   which [`callback_arg`] picks up.
 //! * **macOS** — a LaunchServices registration
 //!   (`LSSetDefaultHandlerForURLScheme`) for the scheme the bundle declares in
 //!   its `Info.plist` (`CFBundleURLTypes`, see `macos/Info.plist.mako`), so the
@@ -117,18 +119,35 @@ pub fn command_program(command: &str) -> String {
         .to_string()
 }
 
-/// The file name of the Linux desktop entry that registers the scheme.
+/// The id of the Linux desktop entry that registers the scheme.
+///
+/// It has to differ from the packaged `lmnflash.desktop`: two entries with one
+/// id are one entry, so the per-user copy would override the launcher — and
+/// since it is `NoDisplay=true`, LMN Flash would disappear from the
+/// application menu.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const DESKTOP_ID: &str = "lmnflash.desktop";
+const DESKTOP_ID: &str = "lmnflash-softwarefix.desktop";
+
+/// The id earlier builds gave that entry: the packaged entry's own id, which is
+/// what made it shadow the launcher. A copy left behind is removed when the
+/// scheme is registered or restored.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const LEGACY_DESKTOP_ID: &str = "lmnflash.desktop";
+
+/// The `~/.local/share/applications` path of a desktop entry id.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn desktop_entry_path_of(id: &str) -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.data_dir().join("applications"))
+        .unwrap_or_default()
+        .join(id)
+}
 
 /// The `~/.local/share/applications` desktop entry that registers LMN Flash
 /// as the `softwarefix://` handler.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn desktop_entry_path() -> std::path::PathBuf {
-    directories::BaseDirs::new()
-        .map(|dirs| dirs.data_dir().join("applications"))
-        .unwrap_or_default()
-        .join(DESKTOP_ID)
+    desktop_entry_path_of(DESKTOP_ID)
 }
 
 /// Quotes a path for a desktop-entry `Exec` value (the spec requires
@@ -155,6 +174,10 @@ fn entry_exec(contents: &str) -> Option<&str> {
 }
 
 /// The desktop entry that declares LMN Flash as the `softwarefix://` handler.
+///
+/// It is `NoDisplay=true` — it exists to run the executable with the callback
+/// URL, not to be launched — which is why it must not share its id with the
+/// launcher entry the packages install.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn desktop_entry(exe: &std::path::Path) -> String {
     format!(
@@ -162,6 +185,7 @@ fn desktop_entry(exe: &std::path::Path) -> String {
          Type=Application\n\
          Name=LMN Flash\n\
          Comment=Firmware lookup and flashing utility\n\
+         Icon=lmnflash\n\
          Exec={} %u\n\
          Terminal=false\n\
          NoDisplay=true\n\
@@ -333,10 +357,14 @@ mod platform {
 ///
 /// The entry runs the executable with the clicked URL as an argument
 /// (`Exec=… %u`), which [`callback_arg`] picks up — unlike macOS, no event
-/// plumbing is needed.
+/// plumbing is needed. It is hidden from the menu and has an id of its own
+/// (see [`DESKTOP_ID`]), so it never replaces the launcher entry.
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::{DESKTOP_ID, Handler, SCHEME, desktop_entry, desktop_entry_path, entry_exec, exec_path};
+    use super::{
+        DESKTOP_ID, Handler, LEGACY_DESKTOP_ID, SCHEME, command_program, desktop_entry,
+        desktop_entry_path, desktop_entry_path_of, entry_exec, exec_path,
+    };
     use std::process::Command;
 
     /// The MIME type that names a URL scheme handler.
@@ -400,6 +428,47 @@ mod platform {
             .is_some_and(|value| value.trim_start().starts_with(&exec_path(&exe)))
     }
 
+    /// True when the entry at `path` runs an executable of our name.
+    ///
+    /// The program name is compared rather than the whole path: an entry left
+    /// behind by a copy that has since moved is still ours, and is rewritten
+    /// (or removed) in place.
+    pub(super) fn entry_runs_our_program(path: &std::path::Path) -> bool {
+        let Ok(contents) = std::fs::read_to_string(path) else {
+            return false;
+        };
+
+        let Ok(exe) = std::env::current_exe() else {
+            return false;
+        };
+
+        let Some(exec) = entry_exec(&contents) else {
+            return false;
+        };
+
+        let program = command_program(exec);
+
+        std::path::Path::new(&program)
+            .file_name()
+            .is_some_and(|name| Some(name) == exe.file_name())
+    }
+
+    /// An entry earlier builds left under the packaged entry's id, if any.
+    fn legacy_entry_is_ours() -> bool {
+        entry_runs_our_program(&desktop_entry_path_of(LEGACY_DESKTOP_ID))
+    }
+
+    /// Removes the handler entry earlier builds wrote.
+    ///
+    /// It used the packaged entry's id, so the per-user copy shadowed
+    /// `/usr/share/applications/lmnflash.desktop` — and, being
+    /// `NoDisplay=true`, it took LMN Flash out of the application menu.
+    fn remove_legacy_entry() {
+        if legacy_entry_is_ours() {
+            let _ = std::fs::remove_file(desktop_entry_path_of(LEGACY_DESKTOP_ID));
+        }
+    }
+
     pub(super) fn current() -> Handler {
         match query_default() {
             Some(id) if id == DESKTOP_ID => {
@@ -413,6 +482,10 @@ mod platform {
                     Handler::None
                 }
             }
+            // The entry earlier builds wrote: unregistered, so that it is
+            // replaced by the one above — which also brings back the launcher
+            // entry it was hiding.
+            Some(id) if id == LEGACY_DESKTOP_ID && legacy_entry_is_ours() => Handler::None,
             Some(id) => Handler::Other(id),
             None => Handler::None,
         }
@@ -439,6 +512,9 @@ mod platform {
         std::fs::write(&path, desktop_entry(&exe))
             .map_err(|e| format!("could not write {}: {e}", path.display()))?;
 
+        // The scheme now points at the entry above, so a copy earlier builds
+        // left behind can go: it was the one hiding the launcher.
+        remove_legacy_entry();
         update_database();
         set_default(DESKTOP_ID)
     }
@@ -449,6 +525,7 @@ mod platform {
         }
 
         let _ = std::fs::remove_file(desktop_entry_path());
+        remove_legacy_entry();
         update_database();
 
         crate::config::clear_protocol_backup()
@@ -943,6 +1020,51 @@ mod tests {
         assert!(entry.starts_with("[Desktop Entry]\n"));
         assert!(entry.contains("MimeType=x-scheme-handler/softwarefix;"));
         assert!(entry.contains("Exec=\"/home/u/LMN Flash/lmnflash\" %u"));
+        // Only the launcher entry may be visible: this one runs the
+        // executable with a callback URL and nothing else.
+        assert!(entry.contains("NoDisplay=true"));
+    }
+
+    /// The entry that registers the scheme must have an id of its own. With the
+    /// launcher's id the two are one entry, so the hidden per-user copy would
+    /// take LMN Flash out of the application menu — which is what the packages
+    /// did before this was split in two.
+    #[test]
+    fn the_handler_entry_does_not_shadow_the_packaged_launcher() {
+        let launcher = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("linux")
+            .join("lmnflash.desktop");
+
+        assert_eq!(
+            launcher.file_name().and_then(|name| name.to_str()),
+            Some(LEGACY_DESKTOP_ID)
+        );
+        assert_ne!(DESKTOP_ID, LEGACY_DESKTOP_ID);
+    }
+
+    /// The cleanup of an earlier build's entry only removes a copy that runs
+    /// LMN Flash: a per-user entry some other program wrote is left alone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recognizes_an_entry_that_runs_our_program() {
+        let exe = std::env::current_exe().expect("no current executable");
+        let path = std::env::temp_dir().join(format!(
+            "lmnflash-protocol-{}.desktop",
+            std::process::id()
+        ));
+
+        std::fs::write(&path, desktop_entry(&exe)).expect("could not write the entry");
+        assert!(platform::entry_runs_our_program(&path));
+
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nExec=/usr/bin/other %u\n",
+        )
+        .expect("could not write the entry");
+        assert!(!platform::entry_runs_our_program(&path));
+
+        let _ = std::fs::remove_file(&path);
+        assert!(!platform::entry_runs_our_program(&path));
     }
 
     #[test]

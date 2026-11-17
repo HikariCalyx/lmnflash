@@ -182,13 +182,27 @@ pub fn main() -> ::iced::Result {
     .title(|state: &State| state.l10n.tr("app-title"))
     .default_font(system_ui_font())
     .theme(app_theme)
-    .window(iced::window::Settings {
-        icon,
-        // The app answers close requests itself (see
-        // `Message::WindowCloseRequested`), so a Multi Flashing run can
-        // refuse to be cut short.
-        exit_on_close_request: false,
-        ..iced::window::Settings::default()
+    .window({
+        #[allow(unused_mut)]
+        let mut settings = iced::window::Settings {
+            icon,
+            // The app answers close requests itself (see
+            // `Message::WindowCloseRequested`), so a Multi Flashing run can
+            // refuse to be cut short.
+            exit_on_close_request: false,
+            ..iced::window::Settings::default()
+        };
+
+        // The window's application id has to be the launcher entry's name
+        // (`linux/lmnflash.desktop`), or the desktop environment cannot match
+        // the window to it — the task bar then shows a separate, generic icon.
+        // iced leaves the id empty, which matches nothing.
+        #[cfg(target_os = "linux")]
+        {
+            settings.platform_specific.application_id = String::from("lmnflash");
+        }
+
+        settings
     })
     .window_size(Size::new(720.0, 720.0))
     .centered()

@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Desktop entries are read by Linux desktops and shipped in the .deb/.rpm, so
+# they keep LF endings whatever platform the checkout happens on.
+*.desktop text eol=lf

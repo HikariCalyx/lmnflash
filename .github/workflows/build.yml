@@ -226,6 +226,18 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "Package version: $version"
 
+      - name: Validate the launcher entry
+        run: |
+          set -euo pipefail
+          # A launcher entry the desktop environment rejects is silently left
+          # out of the menu, so it is checked here instead. The RPM job ships
+          # this same file.
+          if ! command -v desktop-file-validate >/dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y desktop-file-utils
+          fi
+          desktop-file-validate linux/lmnflash.desktop
+
       - name: Assemble the package tree
         run: |
           set -euo pipefail
@@ -249,8 +261,10 @@ jobs:
           # uses), so the application appears in the menu once the package is
           # installed. Package and icon are named `lmnflash`, which is what
           # makes `Icon=lmnflash` resolve; `MimeType` declares the
-          # `softwarefix://` scheme the app can take over (it also writes a
-          # per-user entry when it is asked to become the handler).
+          # `softwarefix://` scheme the app can take over. The per-user entry it
+          # writes to become that handler has an id of its own
+          # (`lmnflash-softwarefix.desktop`), so it never replaces this file —
+          # it is hidden from the menu, and would take the launcher with it.
           install -D -m644 linux/lmnflash.desktop \
             "$root/usr/share/applications/lmnflash.desktop"
 

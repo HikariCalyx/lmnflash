@@ -245,9 +245,13 @@ LMN Flash registers the same scheme so that link can be handed straight to it:
   and a per-user handler that is replaced is remembered so switching back
   restores it; a machine-wide handler needs no backup, because deleting the
   per-user key reveals it again.
-* **Linux** — a desktop entry (`~/.local/share/applications/lmnflash.desktop`)
+* **Linux** — a hidden desktop entry of its own
+  (`~/.local/share/applications/lmnflash-softwarefix.desktop`, `NoDisplay=true`)
   plus `xdg-mime default`, which needs `xdg-mime` on `PATH`. The entry runs the
-  executable with the URL as an argument, so the callback arrives directly.
+  executable with the URL as an argument, so the callback arrives directly. It
+  deliberately does not use the launcher's id (`lmnflash.desktop`): a per-user
+  entry replaces the packaged one, so the hidden copy would take LMN Flash out
+  of the application menu.
 * **macOS** — a LaunchServices registration
   (`LSSetDefaultHandlerForURLScheme`) for the scheme the bundle declares in its
   `Info.plist` (`CFBundleURLTypes`), so the application has to be run from
@@ -259,7 +263,9 @@ LMN Flash registers the same scheme so that link can be handed straight to it:
 The Windows and Linux registrations name the executable by its full path, so
 moving the application is detected on the next launch and the entry is rewritten
 in place; macOS registers the bundle identifier instead, which survives a move.
-A handler that was previously replaced stays remembered for switching back.
+A handler that was previously replaced stays remembered for switching back. An
+entry that an earlier build wrote under the launcher's id — which hid LMN Flash
+from the application menu — is removed the next time the scheme is registered.
 
 ### Browser login
 
