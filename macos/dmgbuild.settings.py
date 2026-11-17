@@ -1,4 +1,7 @@
-format = "UDBZ"
+# zlib-compressed UDIF, which every macOS version can mount. It has to be
+# spelled out: dmgbuild's own default is UDBZ (bzip2), and `hdiutil` on macOS 26
+# rejects it, accepting only UDRO, UDZO, ULFO, ULMO, UDSB, RAW and ASIF.
+format = "UDZO"
 files = ["LMNFlash.app"]
 
 badge_icon = "LMNFlash.app/Contents/Resources/lmnflash.icns"
