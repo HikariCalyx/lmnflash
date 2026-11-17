@@ -509,6 +509,10 @@ struct BulkInput {
     queue: Vec<String>,
     /// Index of the next [`BulkInput::queue`] entry to look up.
     index: usize,
+    /// How many requests have been sent to the server in this batch; the
+    /// lookups after the first are spaced out to stay below the API's
+    /// rate limit.
+    sent: usize,
     /// The report rows collected so far (parallel to the processed lines).
     rows: Vec<BulkRow>,
     status: BulkStatus,

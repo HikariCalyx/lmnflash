@@ -6,6 +6,8 @@
 //! turns the box's lines into a report. One IMEI is looked up per task so the
 //! UI can show real progress.
 
+use std::time::Duration;
+
 use iced::widget::text_editor;
 use iced::Task;
 
@@ -17,6 +19,13 @@ use crate::{
 /// The header of the bulk-IMEI lookup CSV report.
 const BULK_CSV_HEADER: &str =
     "imei,status,xtCode,carrier,build_fingerprint,download_link,lolinet_filename,assumed_directory";
+
+/// The pause before every lookup after the first one in a batch.
+///
+/// The lookup API throttles a batch after 12 requests (the 13th and later are
+/// answered with HTTP 501 until a minute has passed), so spacing the queries
+/// keeps a batch below that limit.
+const BULK_QUERY_DELAY: Duration = Duration::from_secs(8);
 
 /// The non-empty, trimmed lines of the bulk IMEI box.
 pub(crate) fn bulk_lines(content: &text_editor::Content) -> Vec<String> {
@@ -76,6 +85,7 @@ pub(crate) fn start_bulk_lookup(state: &mut State) -> Task<Message> {
         let bulk = &mut state.lookup.bulk;
         bulk.queue = lines;
         bulk.index = 0;
+        bulk.sent = 0;
         bulk.rows.clear();
         bulk.save_note = None;
         bulk.status = BulkStatus::Running { current: 0, total };
@@ -118,8 +128,17 @@ pub(crate) fn bulk_next(state: &mut State) -> Task<Message> {
                 let token = token.clone();
                 let uuid = uuid.clone();
 
+                // Only the first lookup of a batch is sent right away; every
+                // later one waits out the rate-limit delay first.
+                let delay = (state.lookup.bulk.sent > 0).then_some(BULK_QUERY_DELAY);
+                state.lookup.bulk.sent += 1;
+
                 return Task::perform(
                     async move {
+                        if let Some(delay) = delay {
+                            tokio::time::sleep(delay).await;
+                        }
+
                         let request_imei = imei.clone();
                         let result = tokio::task::spawn_blocking(move || {
                             firmware::fetch_firmware(&request_imei, &token, &uuid)
