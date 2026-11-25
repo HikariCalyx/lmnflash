@@ -486,6 +486,30 @@ unpack-done = Purettu { $count } tiedostoa ({ $size }).
 unpack-locate = Näytä
 unpack-failed = Kuvan purkaminen ei onnistunut: { $error }
 
+# "Yhdistä sparsechunk" -valintaikkuna (tila 3).
+sparse-title = Yhdistä sparsechunk
+sparse-button = Yhdistä
+sparse-description = Yhdistää M-branded Smartphone -laiteohjelmistopaketin tiedostot super.img_sparsechunk.0, .1… takaisin yhdeksi kuvaksi, josta ne on pilkottu.
+sparse-select-files = Valitse osat…
+sparse-select-folder = Valitse tulostekansio…
+sparse-none-selected = Ei valittu
+sparse-files-chosen = { $count } tiedostoa valittu
+sparse-format = Yhdistä muotoon
+sparse-format-sparse = Yksi sparse-kuva, kuten se kirjoitetaan
+sparse-format-raw = Purettu raakakuva
+sparse-chunks = Osat ({ $count } tiedostoa, { $size })
+sparse-output = Tuloste: { $name } ({ $size })
+sparse-missing = Kaikkia osia ei ole valittu: { $numbers } puuttuu. Nämä lohkot jäävät tyhjiksi yhdistettyyn kuvaan.
+sparse-overwrites = Kansiossa on jo samanniminen tiedosto, ja se korvataan.
+sparse-start = Yhdistä
+sparse-listing = Luetaan osia…
+sparse-working = Yhdistetään…
+sparse-done = Yhdistettiin { $count } osaa tiedostoksi { $name } ({ $size }).
+sparse-locate = Näytä
+sparse-not-sparse = { $file } ei ole Androidin sparse-kuva, joten se ei ole laiteohjelmistopaketin sparsechunk.
+sparse-overlap = { $file } ja { $other } sisältävät samat lohkot, joten ne eivät ole saman kuvan osia.
+sparse-failed = Osien yhdistäminen ei onnistunut: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Pura

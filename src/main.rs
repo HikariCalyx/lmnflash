@@ -54,6 +54,8 @@ mod qboot;
 mod qfil;
 mod scatter;
 mod smartphone;
+mod sparse;
+mod sparse_merge;
 mod spd_script;
 mod tablet_bootloader;
 mod tablet_unlock;
@@ -1947,6 +1949,48 @@ impl UnpackState {
     }
 }
 
+/// State of the "Merge sparsechunk" feature (Mode 3, firmware-file tools).
+#[derive(Default)]
+struct SparseMergeState {
+    /// Whether the modal is open.
+    open: bool,
+    /// The chunk files chosen by the user, in the order the picker returned
+    /// them; the plan puts them in block order.
+    files: Vec<std::path::PathBuf>,
+    /// Where the merged image is written.
+    output: Option<std::path::PathBuf>,
+    /// Which image the chunks are merged into.
+    format: sparse::Format,
+    /// What merging them produces, once their headers were read.
+    plan: Option<sparse::Plan>,
+    /// `true` while those headers are being read.
+    listing: bool,
+    /// Why the picked files could not be read.
+    plan_error: Option<sparse::MergeError>,
+    /// Whether a file of the merged image's name is already in the output
+    /// folder, so the run would replace it. Worked out whenever the selection
+    /// changes rather than while drawing, which must not touch the disk.
+    overwrites: bool,
+    /// Id of the running merge, so events of an abandoned job are dropped.
+    job: u64,
+    /// `true` while the merged image is being written.
+    working: bool,
+    /// The chunk being read right now.
+    current: Option<String>,
+    /// Bytes of the merged image written so far, and how many there are.
+    done_bytes: u64,
+    total_bytes: u64,
+    /// How the run ended.
+    result: Option<Result<sparse::Summary, sparse::MergeError>>,
+}
+
+impl SparseMergeState {
+    /// Whether a job is running: the dialog must not be closed then.
+    fn busy(&self) -> bool {
+        self.listing || self.working
+    }
+}
+
 /// State of the "Unisoc PAC" package tool (Mode 3, firmware-file tools).
 #[derive(Default)]
 struct PacState {
@@ -3020,6 +3064,8 @@ struct State {
     decrypt: DecryptState,
     /// The "Unpack Image" feature of the firmware-decrypt mode (Mode 3).
     unpack: UnpackState,
+    /// The "Merge sparsechunk" feature of the firmware-decrypt mode (Mode 3).
+    sparse_merge: SparseMergeState,
     /// The "Unisoc PAC" feature of the firmware-decrypt mode (Mode 3).
     pac: PacState,
     /// The "Repack Package" feature of the firmware-decrypt mode (Mode 3).
@@ -3072,6 +3118,7 @@ impl Default for State {
             lookup: LookupState::default(),
             decrypt: DecryptState::default(),
             unpack: UnpackState::default(),
+            sparse_merge: SparseMergeState::default(),
             pac: PacState::default(),
             pac_repack: PacRepackState::default(),
             flash: SmartphoneFlashState::default(),
@@ -3900,6 +3947,39 @@ enum Message {
     /// Click on the dialog's empty space (swallowed, so it neither dismisses
     /// the dialog nor reaches the UI underneath).
     UnpackBackdropPressed,
+    /// Merge sparsechunk: ask for the chunk files to merge.
+    SparseMergePickFilesRequested,
+    /// Merge sparsechunk: the file picker closed (`None` = cancelled).
+    SparseMergeFilesPicked(Option<Vec<std::path::PathBuf>>),
+    /// Merge sparsechunk: the picked chunks' headers were read (the carried
+    /// paths tell a late answer for another selection apart).
+    SparseMergeInspected(
+        Vec<std::path::PathBuf>,
+        Result<sparse::Plan, sparse::MergeError>,
+    ),
+    /// Merge sparsechunk: ask for the folder the merged image is written to.
+    SparseMergePickFolderRequested,
+    /// Merge sparsechunk: the folder picker closed (`None` = cancelled).
+    SparseMergeFolderPicked(Option<std::path::PathBuf>),
+    /// Merge sparsechunk: which image the chunks are merged into.
+    SparseMergeFormatSelected(sparse::Format),
+    /// Merge sparsechunk: start merging the picked chunks.
+    SparseMergeStart,
+    /// Merge sparsechunk: show the output folder in the system's file manager.
+    SparseMergeLocate,
+    /// Merge sparsechunk: the output folder was handed to the file manager
+    /// (only logs a failure).
+    SparseMergeFolderOpened,
+    /// Merge sparsechunk: progress of the running merge.
+    SparseMergeEvent(u64, sparse::MergeEvent),
+    /// A background merge ended (only completes the task; the outcome arrives
+    /// through the event message above).
+    SparseMergeWorkerDone,
+    /// Merge sparsechunk: close the dialog.
+    SparseMergeCancel,
+    /// Click on the dialog's empty space (swallowed, so it neither dismisses
+    /// the dialog nor reaches the UI underneath).
+    SparseMergeBackdropPressed,
     /// Unisoc PAC: ask for the package file to unpack.
     PacPickFileRequested,
     /// Unisoc PAC: the file picker closed (`None` = cancelled).
@@ -4127,6 +4207,7 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
     let wireless = &state.flash.wireless;
     let portal = &state.flash.captive_portal;
     let unpack = &state.unpack;
+    let merge = &state.sparse_merge;
     let pac = &state.pac;
     let repack = &state.pac_repack;
     let animating = guided.logging_in
@@ -4163,6 +4244,8 @@ fn subscription(state: &State) -> iced::Subscription<Message> {
         || portal.busy()
         || unpack.listing
         || unpack.working
+        || merge.listing
+        || merge.working
         || pac.listing
         || pac.working
         || repack.reading
@@ -4397,6 +4480,7 @@ fn closes_overlay(message: &Message) -> bool {
             | Message::WirelessCancel
             | Message::CaptivePortalCancel
             | Message::UnpackCancel
+            | Message::SparseMergeCancel
             | Message::PacCancel
             | Message::PacRepackCancel
             | Message::DecryptCancel
@@ -4497,6 +4581,9 @@ const OVERLAY_CAPTIVE_PORTAL: u8 = 0xC2;
 /// The "Unpack Image" dialog; its low nibble is the step it shows (the setup
 /// form, or the running extraction and its result).
 const OVERLAY_UNPACK: u8 = 0xD0;
+/// The "Merge sparsechunk" dialog; its low nibble is the step it shows (the
+/// setup form with the chunk list, or the running merge and its result).
+const OVERLAY_SPARSE_MERGE: u8 = 0xD2;
 /// The "Unisoc PAC" dialog; its low nibble is the step it shows (the setup
 /// form with the file list, or the running extraction and its result). It
 /// shares the tablet-decrypt nibble, since the two dialogs are never open at
@@ -4716,6 +4803,18 @@ fn overlay_key(state: &State) -> u8 {
         };
 
         return OVERLAY_UNPACK + step;
+    }
+
+    if sparse_merge::is_open(state) {
+        // The setup form, and the running merge with its result.
+        let merge = &state.sparse_merge;
+        let step = if merge.working || merge.result.is_some() {
+            1
+        } else {
+            0
+        };
+
+        return OVERLAY_SPARSE_MERGE + step;
     }
 
     if decrypt::is_open(state) {
@@ -4968,6 +5067,7 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
         Message::DecryptFeaturePressed(feature) => match feature {
             decrypt_mode::DecryptFeature::TabletDecrypt => start_decrypt_dialog(state),
             decrypt_mode::DecryptFeature::UnpackImage => start_unpack_dialog(state),
+            decrypt_mode::DecryptFeature::MergeSparsechunk => start_sparse_merge_dialog(state),
             decrypt_mode::DecryptFeature::UnisocPac => start_pac_dialog(state),
             decrypt_mode::DecryptFeature::UnisocPacRepack => start_pac_repack_dialog(state),
         },
@@ -8861,6 +8961,209 @@ fn handle(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::UnpackBackdropPressed => Task::none(),
+        Message::SparseMergePickFilesRequested => {
+            if state.sparse_merge.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("sparse-select-files");
+
+            // A chunk's name ends in its number (`super.img_sparsechunk.12`),
+            // so there is no extension to filter on; the picker shows every
+            // file and takes as many of them as the user selects.
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_files()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::SparseMergeFilesPicked,
+            )
+        }
+        Message::SparseMergeFilesPicked(files) => {
+            let Some(files) = files else {
+                return Task::none();
+            };
+
+            if files.is_empty() {
+                return Task::none();
+            }
+
+            let merge = &mut state.sparse_merge;
+            if merge.busy() {
+                return Task::none();
+            }
+
+            // Another selection starts over: the old plan (and any result)
+            // belongs to other files.
+            merge.files = files.clone();
+            merge.plan = None;
+            merge.plan_error = None;
+            merge.result = None;
+            merge.listing = true;
+
+            // The folder the chunks came out of is where the merged image
+            // belongs most of the time, so it is filled in as long as the user
+            // has not picked one.
+            if merge.output.is_none() {
+                merge.output = files
+                    .first()
+                    .and_then(|file| file.parent())
+                    .map(std::path::Path::to_path_buf);
+            }
+
+            // The paths guard the answer: a selection made while an earlier
+            // one is still being read must not be overwritten by its result.
+            Task::perform(
+                async move {
+                    let picked = files.clone();
+                    let result = tokio::task::spawn_blocking(move || sparse::inspect(&picked))
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(sparse::MergeError::Read {
+                                file: String::new(),
+                                error: format!("background task failed: {error}"),
+                            })
+                        });
+
+                    (files, result)
+                },
+                |(files, result)| Message::SparseMergeInspected(files, result),
+            )
+        }
+        Message::SparseMergeInspected(files, result) => {
+            if state.sparse_merge.files != files {
+                return Task::none();
+            }
+
+            let merge = &mut state.sparse_merge;
+            merge.listing = false;
+
+            match result {
+                Ok(plan) => {
+                    merge.total_bytes = 0;
+                    merge.done_bytes = 0;
+                    merge.plan = Some(plan);
+                    merge.plan_error = None;
+                }
+                Err(error) => {
+                    merge.plan = None;
+                    merge.plan_error = Some(error);
+                }
+            }
+
+            refresh_sparse_merge_target(state);
+
+            Task::none()
+        }
+        Message::SparseMergePickFolderRequested => {
+            if state.sparse_merge.busy() {
+                return Task::none();
+            }
+
+            let title = state.l10n.tr("sparse-select-folder");
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        rfd::FileDialog::new().set_title(&title).pick_folder()
+                    })
+                    .await
+                    .unwrap_or(None)
+                },
+                Message::SparseMergeFolderPicked,
+            )
+        }
+        Message::SparseMergeFolderPicked(folder) => {
+            if let Some(folder) = folder {
+                state.sparse_merge.output = Some(folder);
+                // Another folder is another image to write, so the run that
+                // finished is no longer what the dialog is about: dropping its
+                // result is what frees the Merge button again.
+                state.sparse_merge.result = None;
+                refresh_sparse_merge_target(state);
+            }
+
+            Task::none()
+        }
+        Message::SparseMergeFormatSelected(format) => {
+            if state.sparse_merge.busy() {
+                return Task::none();
+            }
+
+            state.sparse_merge.format = format;
+            // The other shape of the same chunks is a second run, not a
+            // repeat of the one that just finished.
+            state.sparse_merge.result = None;
+            refresh_sparse_merge_target(state);
+
+            Task::none()
+        }
+        Message::SparseMergeStart => start_sparse_merge_job(state),
+        Message::SparseMergeLocate => {
+            // Only a finished run has an image to find; the button is drawn in
+            // that state.
+            let Some(directory) = state.sparse_merge.output.clone() else {
+                return Task::none();
+            };
+
+            Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || open::that(&directory))
+                        .await
+                        .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())))
+                },
+                |result| {
+                    if let Err(error) = result {
+                        eprintln!("failed to open the output folder: {error}");
+                    }
+
+                    Message::SparseMergeFolderOpened
+                },
+            )
+        }
+        Message::SparseMergeFolderOpened => Task::none(),
+        Message::SparseMergeEvent(job, event) => {
+            let merge = &mut state.sparse_merge;
+
+            // Stale events (a job the user left behind) are dropped.
+            if job != merge.job {
+                return Task::none();
+            }
+
+            match event {
+                sparse::MergeEvent::File { name, .. } => merge.current = Some(name),
+                sparse::MergeEvent::Progress { bytes, total } => {
+                    merge.done_bytes = merge.done_bytes.max(bytes);
+                    merge.total_bytes = merge.total_bytes.max(total);
+                }
+                sparse::MergeEvent::Finished(result) => {
+                    merge.working = false;
+                    merge.current = None;
+                    merge.result = Some(result);
+
+                    // The image is on disk now, so the folder holds a file of
+                    // that name: say so before a second run replaces it.
+                    refresh_sparse_merge_target(state);
+                }
+            }
+
+            Task::none()
+        }
+        Message::SparseMergeWorkerDone => Task::none(),
+        Message::SparseMergeCancel => {
+            // Never close the dialog while the chunks are read or the merged
+            // image is written.
+            if state.sparse_merge.busy() {
+                return Task::none();
+            }
+
+            state.sparse_merge = SparseMergeState::default();
+            Task::none()
+        }
+        Message::SparseMergeBackdropPressed => Task::none(),
         Message::PacPickFileRequested => {
             if state.pac.busy() {
                 return Task::none();
@@ -13223,6 +13526,89 @@ fn start_unpack_job(state: &mut State) -> Task<Message> {
     Task::batch([producer, consumer])
 }
 
+/// Opens the "Merge sparsechunk" dialog. Nothing is read yet: the dialog asks
+/// for the chunk files (whose headers are read as soon as they are picked),
+/// for the folder the merged image is written into, and for the shape it is
+/// written in.
+fn start_sparse_merge_dialog(state: &mut State) -> Task<Message> {
+    state.sparse_merge = SparseMergeState {
+        open: true,
+        ..SparseMergeState::default()
+    };
+
+    Task::none()
+}
+
+/// Whether the merged image would replace a file that is already in the
+/// output folder.
+///
+/// Reading a directory is work the view must not do, so the answer is worked
+/// out whenever the selection, the folder or the format changes — the three
+/// things the name and the place depend on.
+fn refresh_sparse_merge_target(state: &mut State) {
+    let merge = &mut state.sparse_merge;
+
+    merge.overwrites = match (&merge.plan, &merge.output) {
+        (Some(plan), Some(folder)) => folder.join(plan.output_name(merge.format)).exists(),
+        _ => false,
+    };
+}
+
+/// Merges the picked chunks on a worker thread, streaming the progress into the
+/// dialog.
+fn start_sparse_merge_job(state: &mut State) -> Task<Message> {
+    let files = state.sparse_merge.files.clone();
+    let Some(output) = state.sparse_merge.output.clone() else {
+        return Task::none();
+    };
+
+    let merge = &mut state.sparse_merge;
+    if merge.busy() || merge.plan.is_none() {
+        return Task::none();
+    }
+
+    let format = merge.format;
+
+    merge.working = true;
+    merge.job = merge.job.wrapping_add(1);
+    merge.current = None;
+    merge.done_bytes = 0;
+    merge.total_bytes = 0;
+    merge.result = None;
+
+    let job_id = merge.job;
+
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let failure_sender = sender.clone();
+    let emit = move |event| {
+        let _ = sender.unbounded_send(event);
+    };
+
+    let producer = Task::perform(
+        async move {
+            let worker =
+                tokio::task::spawn_blocking(move || sparse::merge(&files, &output, format, &emit));
+
+            // `merge` reports the outcome itself; only a worker that died
+            // without getting that far has to be turned into an event here, or
+            // the dialog would wait for one that never comes (the sender it
+            // held is gone with it).
+            if let Err(error) = worker.await {
+                let _ = failure_sender.unbounded_send(sparse::MergeEvent::Finished(Err(
+                    sparse::MergeError::Write(format!("background task failed: {error}")),
+                )));
+            }
+        },
+        |()| Message::SparseMergeWorkerDone,
+    );
+
+    let consumer = Task::run(receiver, move |event| {
+        Message::SparseMergeEvent(job_id, event)
+    });
+
+    Task::batch([producer, consumer])
+}
+
 /// Opens the "Unisoc PAC" dialog. Nothing is read yet: the dialog asks for the
 /// package (whose file table is listed as soon as it is picked) and for the
 /// folder the files are written into.
@@ -14967,6 +15353,12 @@ fn view(state: &State) -> Element<'_, Message> {
         return stack![base, animated_overlay(state, overlay)].into();
     }
 
+    // Merge sparsechunk dialog (chunk and output selection, the merged image
+    // it will write, progress) drawn over the whole window while it is open.
+    if let Some(overlay) = sparse_merge::overlay(state) {
+        return stack![base, animated_overlay(state, overlay)].into();
+    }
+
     // Tablet Firmware Decrypt dialog (directory, password, progress) drawn
     // over the whole window while it is open.
     if let Some(overlay) = decrypt::overlay(state) {
@@ -15651,6 +16043,33 @@ mod tests {
         // board shows what it found.
         assert!(state.flash.partition.listing);
         assert!(state.flash.partition.devices.is_empty());
+    }
+
+    /// The Merge sparsechunk tile opens its dialog, and its Cancel plays out
+    /// first, the way every other dialog's does: the card is still up while it
+    /// leaves, and the close runs when the transition ends. A Cancel that is
+    /// not held back (see [`closes_overlay`]) would make the card vanish
+    /// instead.
+    #[test]
+    fn the_merge_sparsechunk_dialog_plays_its_close_out() {
+        let mut state = State::default();
+
+        let _ = update(
+            &mut state,
+            Message::DecryptFeaturePressed(decrypt_mode::DecryptFeature::MergeSparsechunk),
+        );
+        assert!(sparse_merge::is_open(&state));
+
+        let _ = update(&mut state, Message::SparseMergeCancel);
+        assert!(state.pending_close.is_some());
+        assert!(sparse_merge::is_open(&state));
+
+        for _ in 0..20 {
+            let _ = update(&mut state, Message::TransitionTick);
+        }
+
+        assert!(!sparse_merge::is_open(&state));
+        assert!(state.pending_close.is_none());
     }
 
     /// The Partition Manager tile takes over the window, and its Exit button

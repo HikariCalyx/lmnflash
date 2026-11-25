@@ -486,6 +486,30 @@ unpack-done = { $count } 個のファイルを展開しました（{ $size }）�
 unpack-locate = 場所を開く
 unpack-failed = イメージを展開できませんでした: { $error }
 
+# 「sparsechunk を結合」ダイアログ（モード 3）。
+sparse-title = sparsechunk を結合
+sparse-button = 結合
+sparse-description = モ-スマホのファームウェアパッケージに含まれる super.img_sparsechunk.0、.1… を、分割前の 1 つのイメージに結合します。
+sparse-select-files = チャンクを選択…
+sparse-select-folder = 出力フォルダーを選択…
+sparse-none-selected = 未選択
+sparse-files-chosen = { $count } 個のファイルを選択
+sparse-format = 結合先
+sparse-format-sparse = 1 つの sparse イメージ（書き込み可能）
+sparse-format-raw = sparse を解除した raw イメージ
+sparse-chunks = チャンク（{ $count } 個のファイル、{ $size }）
+sparse-output = 出力: { $name }（{ $size }）
+sparse-missing = すべてのチャンクが選択されていません: { $numbers } がありません。結合後のイメージではそのブロックは空のままになります。
+sparse-overwrites = 同じ名前のファイルがすでにフォルダーにあります。置き換えられます。
+sparse-start = 結合
+sparse-listing = チャンクを読み込み中…
+sparse-working = 結合中…
+sparse-done = { $count } 個のチャンクを { $name }（{ $size }）に結合しました。
+sparse-locate = 場所を開く
+sparse-not-sparse = { $file } は Android の sparse イメージではないため、ファームウェアパッケージの sparsechunk ではありません。
+sparse-overlap = { $file } と { $other } は同じブロックを含むため、同じイメージのチャンクではありません。
+sparse-failed = チャンクを結合できませんでした: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = 展開

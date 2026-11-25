@@ -486,6 +486,30 @@ unpack-done = Udpackede { $count } filer ({ $size }).
 unpack-locate = Vis
 unpack-failed = Kunne ikke udpacke billedet: { $error }
 
+# "Flet sparsechunk"-dialogen (tilstand 3).
+sparse-title = Flet sparsechunk
+sparse-button = Flet
+sparse-description = Fletter filerne super.img_sparsechunk.0, .1 … i en M-branded Smartphone-firmwarepakke tilbage til det ene billede, de blev delt op fra.
+sparse-select-files = Vælg dele…
+sparse-select-folder = Vælg outputmappe…
+sparse-none-selected = Ikke valgt
+sparse-files-chosen = { $count } filer valgt
+sparse-format = Flet til
+sparse-format-sparse = Ét sparse-billede, som det flashes
+sparse-format-raw = Udpakket råbillede
+sparse-chunks = Dele ({ $count } filer, { $size })
+sparse-output = Output: { $name } ({ $size })
+sparse-missing = Ikke alle dele er valgt: { $numbers } mangler. De blokke står tomme i det flettede billede.
+sparse-overwrites = Der findes allerede en fil med det navn i mappen, og den bliver erstattet.
+sparse-start = Flet
+sparse-listing = Læser delene…
+sparse-working = Fletter…
+sparse-done = Flettede { $count } dele til { $name } ({ $size }).
+sparse-locate = Vis
+sparse-not-sparse = { $file } er ikke et Android sparse-billede og dermed ikke en sparsechunk fra en firmwarepakke.
+sparse-overlap = { $file } og { $other } indeholder de samme blokke og er dermed ikke dele af ét billede.
+sparse-failed = Kunne ikke flette delene: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Udpack

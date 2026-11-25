@@ -421,3 +421,61 @@ The directory table holds at most 64 entries and ends with an entry named
 boundary. An entry whose name would leave the chosen folder (a path separator,
 `.` or `..`) is refused instead of followed.
 
+## Merge sparsechunk
+
+A factory package does not carry `super.img` as one file: it is split into
+`super.img_sparsechunk.0`, `.1`, … because a bootloader can only take so much
+at once. The **Merge sparsechunk** card puts them back together.
+
+Every chunk is a complete Android sparse image of the *whole* partition — same
+block size, same block count — in which only its own slice carries data and
+every other block is a `DONT_CARE` run. That is why `flashfile.xml` writes all
+of them to the same `super` partition without the later ones wiping the earlier
+ones, and it is what makes merging them a matter of putting their runs back
+into one image:
+
+```text
+chunk.0  [ data 0…50   | ---- hole ---- ]
+chunk.1  [ -- hole --- | data 50…100    ]
+merged   [ data 0…50   | data 50…100    ]
+```
+
+Pressing the card's button opens a dialog that:
+
+1. Asks for the chunks. A chunk's name ends in its number, so there is no
+   extension to filter on: the picker lists every file and takes as many as are
+   selected. Their headers are read right away — the chunk tables only, no
+   payload — so the dialog lists what it will merge, and names the file it will
+   write with its size, before anything is written.
+2. Asks for the output folder, filled in with the folder the chunks came out
+   of.
+3. Asks which image to merge into:
+   * **One sparse image, as flashed** — `super.img`, the runs of every chunk
+     behind a single sparse header. This is the shape a bootloader takes.
+   * **Unsparsed raw image** — `super.img.unsparse`, the image those runs
+     describe, block for block, with every hole written as zeros. That is what
+     a partition tool (`lpunpack`, a loop mount) wants. The file is given its
+     final length up front and each run is written where it belongs, so the
+     holes cost no reading and no writing.
+
+The name is the chunks' own: what stands in front of `_sparsechunk` is the
+image they were split from, so a `system.img_sparsechunk.*` set merges into
+`system.img`. The chunks are merged in the order of the block they start at,
+not the order they were picked, and the merged sparse image's checksum field
+stays zero — it describes the whole image, and the ones the chunks carried
+describe only themselves.
+
+Two mistakes are caught before they turn into an image that is neither one
+thing nor the other:
+
+* chunks of **different images** (or the same chunk twice) describe the same
+  block, which two slices of one image never do, and are refused — as are
+  files that disagree about the block size, or that are not sparse images at
+  all;
+* a chunk that was **not selected** leaves its blocks empty, so the numbers
+  missing between the lowest and the highest picked one are named. That is a
+  warning rather than an error: merging a part of a set is still allowed.
+
+The dialog also says when a file of that name is already in the output folder,
+since it will be replaced.
+

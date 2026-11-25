@@ -488,6 +488,30 @@ unpack-done = Unpacked { $count } files ({ $size }).
 unpack-locate = Locate
 unpack-failed = Could not unpack the image: { $error }
 
+# "Merge sparsechunk" dialog (Mode 3).
+sparse-title = Merge sparsechunk
+sparse-button = Merge
+sparse-description = Merge the super.img_sparsechunk.0, .1, … files of a M-branded Smartphone firmware package back into the one image they were split from.
+sparse-select-files = Select chunks…
+sparse-select-folder = Select output folder…
+sparse-none-selected = Not selected
+sparse-files-chosen = { $count } files selected
+sparse-format = Merge into
+sparse-format-sparse = One sparse image, as flashed
+sparse-format-raw = Unsparsed raw image
+sparse-chunks = Chunks ({ $count } files, { $size })
+sparse-output = Output: { $name } ({ $size })
+sparse-missing = Not every chunk was selected: { $numbers } is missing. Those blocks stay empty in the merged image.
+sparse-overwrites = A file of that name is already in the folder and will be replaced.
+sparse-start = Merge
+sparse-listing = Reading the chunks…
+sparse-working = Merging…
+sparse-done = Merged { $count } chunks into { $name } ({ $size }).
+sparse-locate = Locate
+sparse-not-sparse = { $file } is not an Android sparse image, so it is not a sparsechunk of a firmware package.
+sparse-overlap = { $file } and { $other } carry the same blocks, so they are not chunks of one image.
+sparse-failed = Could not merge the chunks: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Unpack

@@ -486,6 +486,30 @@ unpack-done = Pakket ut { $count } filer ({ $size }).
 unpack-locate = Vis
 unpack-failed = Kunne ikke pakke ut bildet: { $error }
 
+# «Slå sammen sparsechunk»-dialogen (modus 3).
+sparse-title = Slå sammen sparsechunk
+sparse-button = Slå sammen
+sparse-description = Slår filene super.img_sparsechunk.0, .1 … i en M-branded Smartphone-fastvarepakke sammen til det ene bildet de ble delt opp fra.
+sparse-select-files = Velg deler…
+sparse-select-folder = Velg målmappe…
+sparse-none-selected = Ikke valgt
+sparse-files-chosen = { $count } filer valgt
+sparse-format = Slå sammen til
+sparse-format-sparse = Ett sparse-bilde, slik det flashes
+sparse-format-raw = Utpakket råbilde
+sparse-chunks = Deler ({ $count } filer, { $size })
+sparse-output = Utdata: { $name } ({ $size })
+sparse-missing = Ikke alle delene er valgt: { $numbers } mangler. De blokkene står tomme i det sammenslåtte bildet.
+sparse-overwrites = Det finnes allerede en fil med det navnet i mappen, og den blir erstattet.
+sparse-start = Slå sammen
+sparse-listing = Leser delene…
+sparse-working = Slår sammen…
+sparse-done = Slo sammen { $count } deler til { $name } ({ $size }).
+sparse-locate = Vis
+sparse-not-sparse = { $file } er ikke et Android sparse-bilde, og dermed ikke en sparsechunk fra en fastvarepakke.
+sparse-overlap = { $file } og { $other } inneholder de samme blokkene, og er dermed ikke deler av ett bilde.
+sparse-failed = Kunne ikke slå sammen delene: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Pakk ut

@@ -486,6 +486,30 @@ unpack-done = { $count }개 파일을 풀었습니다({ $size }).
 unpack-locate = 위치 열기
 unpack-failed = 이미지를 풀 수 없습니다: { $error }
 
+# "sparsechunk 병합" 대화상자(모드 3).
+sparse-title = sparsechunk 병합
+sparse-button = 병합
+sparse-description = 모 스마트폰 펌웨어 패키지의 super.img_sparsechunk.0, .1… 파일을 분할 전의 이미지 하나로 다시 병합합니다.
+sparse-select-files = 청크 선택…
+sparse-select-folder = 출력 폴더 선택…
+sparse-none-selected = 선택되지 않음
+sparse-files-chosen = { $count }개 파일 선택됨
+sparse-format = 병합 결과
+sparse-format-sparse = 하나의 sparse 이미지(플래시 가능)
+sparse-format-raw = sparse를 해제한 원본 이미지
+sparse-chunks = 청크({ $count }개 파일, { $size })
+sparse-output = 출력: { $name }({ $size })
+sparse-missing = 모든 청크가 선택되지 않았습니다: { $numbers }이(가) 없습니다. 병합된 이미지에서 해당 블록은 비어 있게 됩니다.
+sparse-overwrites = 같은 이름의 파일이 이미 폴더에 있어 대체됩니다.
+sparse-start = 병합
+sparse-listing = 청크 읽는 중…
+sparse-working = 병합 중…
+sparse-done = { $count }개 청크를 { $name }({ $size })(으)로 병합했습니다.
+sparse-locate = 위치 열기
+sparse-not-sparse = { $file }은(는) Android sparse 이미지가 아니므로 펌웨어 패키지의 sparsechunk가 아닙니다.
+sparse-overlap = { $file }과(와) { $other }은(는) 같은 블록을 담고 있어 하나의 이미지의 청크가 아닙니다.
+sparse-failed = 청크를 병합할 수 없습니다: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = 풀기

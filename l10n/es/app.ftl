@@ -486,6 +486,30 @@ unpack-done = { $count } archivos descomprimidos ({ $size }).
 unpack-locate = Mostrar
 unpack-failed = No se pudo descomprimir la imagen: { $error }
 
+# Diálogo "Combinar sparsechunk" (modo 3).
+sparse-title = Combinar sparsechunk
+sparse-button = Combinar
+sparse-description = Combina los archivos super.img_sparsechunk.0, .1… de un paquete de firmware M-branded Smartphone de nuevo en la única imagen de la que se dividieron.
+sparse-select-files = Seleccionar partes…
+sparse-select-folder = Seleccionar carpeta de destino…
+sparse-none-selected = No seleccionado
+sparse-files-chosen = { $count } archivos seleccionados
+sparse-format = Combinar en
+sparse-format-sparse = Una sola imagen sparse, tal como se flashea
+sparse-format-raw = Imagen sin comprimir (raw)
+sparse-chunks = Partes ({ $count } archivos, { $size })
+sparse-output = Salida: { $name } ({ $size })
+sparse-missing = No se han seleccionado todas las partes: falta { $numbers }. Esos bloques quedan vacíos en la imagen combinada.
+sparse-overwrites = Ya hay un archivo con ese nombre en la carpeta y se reemplazará.
+sparse-start = Combinar
+sparse-listing = Leyendo las partes…
+sparse-working = Combinando…
+sparse-done = { $count } partes combinadas en { $name } ({ $size }).
+sparse-locate = Mostrar
+sparse-not-sparse = { $file } no es una imagen sparse de Android, por lo que no es un sparsechunk de un paquete de firmware.
+sparse-overlap = { $file } y { $other } contienen los mismos bloques, por lo que no son partes de la misma imagen.
+sparse-failed = No se pudieron combinar las partes: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Descomprimir

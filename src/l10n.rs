@@ -929,6 +929,119 @@ mod tests {
         }
     }
 
+    /// Every "Merge sparsechunk" string must exist and interpolate in every
+    /// locale: the chunk list carries a count and a size, the output and done
+    /// lines a file name, and the two errors a user actually runs into name
+    /// the files they are about. A translation that names an argument
+    /// differently would leave a hole in the line (or reach `tr` with a
+    /// missing id, which is fatal in a release build).
+    #[test]
+    fn the_sparse_merge_dialog_renders_in_every_locale() {
+        const PLAIN: &[&str] = &[
+            "sparse-title",
+            "sparse-button",
+            "sparse-description",
+            "sparse-select-files",
+            "sparse-select-folder",
+            "sparse-none-selected",
+            "sparse-format",
+            "sparse-format-sparse",
+            "sparse-format-raw",
+            "sparse-overwrites",
+            "sparse-start",
+            "sparse-listing",
+            "sparse-working",
+            "sparse-locate",
+        ];
+
+        for language in Language::ALL {
+            let bundle = bundle_for(language);
+
+            for id in PLAIN {
+                let text = bundle.tr(id);
+
+                assert!(!text.trim().is_empty(), "{language:?}: {id}");
+                assert!(!text.contains('\u{2068}'), "{language:?}: {id}");
+            }
+
+            let chosen =
+                bundle.tr_with_args("sparse-files-chosen", &[("count", "16".to_owned())]);
+            assert!(chosen.contains("16"), "{language:?}: {chosen}");
+            assert!(!chosen.contains('\u{2068}'), "{language:?}: {chosen}");
+
+            let chunks = bundle.tr_with_args(
+                "sparse-chunks",
+                &[("count", "16".to_owned()), ("size", "4.2 GB".to_owned())],
+            );
+            assert!(chunks.contains("16"), "{language:?}: {chunks}");
+            assert!(chunks.contains("4.2 GB"), "{language:?}: {chunks}");
+            assert!(!chunks.contains('\u{2068}'), "{language:?}: {chunks}");
+
+            let output = bundle.tr_with_args(
+                "sparse-output",
+                &[
+                    ("name", "super.img".to_owned()),
+                    ("size", "4.2 GB".to_owned()),
+                ],
+            );
+            assert!(output.contains("super.img"), "{language:?}: {output}");
+            assert!(output.contains("4.2 GB"), "{language:?}: {output}");
+            assert!(!output.contains('\u{2068}'), "{language:?}: {output}");
+
+            let missing =
+                bundle.tr_with_args("sparse-missing", &[("numbers", "3, 7".to_owned())]);
+            assert!(missing.contains("3, 7"), "{language:?}: {missing}");
+            assert!(!missing.contains('\u{2068}'), "{language:?}: {missing}");
+
+            let done = bundle.tr_with_args(
+                "sparse-done",
+                &[
+                    ("count", "16".to_owned()),
+                    ("name", "super.img".to_owned()),
+                    ("size", "4.2 GB".to_owned()),
+                ],
+            );
+            assert!(done.contains("16"), "{language:?}: {done}");
+            assert!(done.contains("super.img"), "{language:?}: {done}");
+            assert!(done.contains("4.2 GB"), "{language:?}: {done}");
+            assert!(!done.contains('\u{2068}'), "{language:?}: {done}");
+
+            let not_sparse = bundle.tr_with_args(
+                "sparse-not-sparse",
+                &[("file", "super.img_sparsechunk.0".to_owned())],
+            );
+            assert!(
+                not_sparse.contains("super.img_sparsechunk.0"),
+                "{language:?}: {not_sparse}"
+            );
+            assert!(!not_sparse.contains('\u{2068}'), "{language:?}: {not_sparse}");
+
+            let overlap = bundle.tr_with_args(
+                "sparse-overlap",
+                &[
+                    ("file", "super.img_sparsechunk.0".to_owned()),
+                    ("other", "super.img_sparsechunk.1".to_owned()),
+                ],
+            );
+            assert!(
+                overlap.contains("super.img_sparsechunk.0")
+                    && overlap.contains("super.img_sparsechunk.1"),
+                "{language:?}: {overlap}"
+            );
+            assert!(!overlap.contains('\u{2068}'), "{language:?}: {overlap}");
+
+            let failed = bundle.tr_with_args(
+                "sparse-failed",
+                &[("error", "the chunk table is truncated".to_owned())],
+            );
+            assert!(
+                failed.contains("the chunk table is truncated"),
+                "{language:?}: {failed}"
+            );
+            assert!(!failed.contains('\u{2068}'), "{language:?}: {failed}");
+        }
+    }
+
     /// The "Unisoc PAC" package tool: the tile that opens it, its dialog, and
     /// the failure line, which carries the raw error.
     #[test]

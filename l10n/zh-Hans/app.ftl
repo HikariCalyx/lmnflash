@@ -486,6 +486,30 @@ unpack-done = 已解包 { $count } 个文件（{ $size }）。
 unpack-locate = 定位
 unpack-failed = 无法解包该镜像：{ $error }
 
+# “合并 sparsechunk”对话框（模式 3）。
+sparse-title = 合并 sparsechunk
+sparse-button = 合并
+sparse-description = 将 M 品牌智能手机固件包中的 super.img_sparsechunk.0、.1…… 等文件合并回拆分前的单个镜像。
+sparse-select-files = 选择分块…
+sparse-select-folder = 选择输出文件夹…
+sparse-none-selected = 未选择
+sparse-files-chosen = 已选择 { $count } 个文件
+sparse-format = 合并为
+sparse-format-sparse = 单个 sparse 镜像（可直接刷入）
+sparse-format-raw = 解除 sparse 的原始镜像
+sparse-chunks = 分块（{ $count } 个文件，{ $size }）
+sparse-output = 输出：{ $name }（{ $size }）
+sparse-missing = 并未选择全部分块：缺少 { $numbers }。合并后的镜像中这些块将保持为空。
+sparse-overwrites = 该文件夹中已存在同名文件，它将被替换。
+sparse-start = 合并
+sparse-listing = 正在读取分块…
+sparse-working = 正在合并…
+sparse-done = 已将 { $count } 个分块合并为 { $name }（{ $size }）。
+sparse-locate = 定位
+sparse-not-sparse = { $file } 不是 Android sparse 镜像，因此它不是固件包中的 sparsechunk。
+sparse-overlap = { $file } 与 { $other } 包含相同的块，因此它们不是同一个镜像的分块。
+sparse-failed = 无法合并这些分块：{ $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = 紫光展锐 PAC
 pac-unpack-button = 解包

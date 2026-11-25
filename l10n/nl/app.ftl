@@ -486,6 +486,30 @@ unpack-done = { $count } bestanden uitgepakt ({ $size }).
 unpack-locate = Tonen
 unpack-failed = Kan de image niet uitpakken: { $error }
 
+# Dialoogvenster "sparsechunk samenvoegen" (modus 3).
+sparse-title = sparsechunk samenvoegen
+sparse-button = Samenvoegen
+sparse-description = Voegt de bestanden super.img_sparsechunk.0, .1 … uit een M-branded Smartphone-firmwarepakket weer samen tot de ene image waaruit ze zijn opgesplitst.
+sparse-select-files = Delen selecteren…
+sparse-select-folder = Uitvoermap selecteren…
+sparse-none-selected = Niet geselecteerd
+sparse-files-chosen = { $count } bestanden geselecteerd
+sparse-format = Samenvoegen tot
+sparse-format-sparse = Één sparse-image, zoals die wordt geflasht
+sparse-format-raw = Uitgepakte raw-image
+sparse-chunks = Delen ({ $count } bestanden, { $size })
+sparse-output = Uitvoer: { $name } ({ $size })
+sparse-missing = Niet alle delen zijn geselecteerd: { $numbers } ontbreekt. Die blokken blijven leeg in de samengevoegde image.
+sparse-overwrites = Er staat al een bestand met die naam in de map en dat wordt vervangen.
+sparse-start = Samenvoegen
+sparse-listing = Delen worden gelezen…
+sparse-working = Samenvoegen…
+sparse-done = { $count } delen samengevoegd tot { $name } ({ $size }).
+sparse-locate = Tonen
+sparse-not-sparse = { $file } is geen Android sparse-image en dus geen sparsechunk uit een firmwarepakket.
+sparse-overlap = { $file } en { $other } bevatten dezelfde blokken en zijn dus geen delen van één image.
+sparse-failed = Kan de delen niet samenvoegen: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Uitpakken

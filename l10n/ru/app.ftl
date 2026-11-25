@@ -486,6 +486,30 @@ unpack-done = Распаковано файлов: { $count } ({ $size }).
 unpack-locate = Показать
 unpack-failed = Не удалось распаковать образ: { $error }
 
+# Диалог «Объединить sparsechunk» (режим 3).
+sparse-title = Объединить sparsechunk
+sparse-button = Объединить
+sparse-description = Объединяет файлы super.img_sparsechunk.0, .1… из пакета прошивки M-branded Smartphone обратно в один образ, на который они были разбиты.
+sparse-select-files = Выбрать части…
+sparse-select-folder = Выбрать папку назначения…
+sparse-none-selected = Не выбрано
+sparse-files-chosen = Выбрано файлов: { $count }
+sparse-format = Объединить в
+sparse-format-sparse = Один sparse-образ, как при прошивке
+sparse-format-raw = Распакованный образ (raw)
+sparse-chunks = Части ({ $count } файлов, { $size })
+sparse-output = Результат: { $name } ({ $size })
+sparse-missing = Выбраны не все части: отсутствует { $numbers }. В объединённом образе эти блоки останутся пустыми.
+sparse-overwrites = Файл с таким именем уже есть в папке и будет заменён.
+sparse-start = Объединить
+sparse-listing = Чтение частей…
+sparse-working = Объединение…
+sparse-done = { $count } частей объединены в { $name } ({ $size }).
+sparse-locate = Показать
+sparse-not-sparse = { $file } не является образом Android sparse, то есть это не sparsechunk из пакета прошивки.
+sparse-overlap = { $file } и { $other } содержат одни и те же блоки, то есть это части разных образов.
+sparse-failed = Не удалось объединить части: { $error }
+
 # "Unisoc PAC" package tool (Mode 3).
 pac-title = Unisoc PAC
 pac-unpack-button = Распаковать
