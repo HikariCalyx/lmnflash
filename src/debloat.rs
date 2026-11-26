@@ -30,7 +30,8 @@ pub struct Bloatware {
 /// A carrier's app is a product name that reads the same in every language, so
 /// it is data rather than a translation — the same reasoning as the carrier
 /// brands in [`crate::carrier`]. The Lenovo/Motorola and the Chinese apps have
-/// names worth translating and keep an FTL id instead.
+/// names worth translating, and so do the operator telemetry components (their
+/// vendor is spelled differently per language), so those keep an FTL id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Label {
     /// An FTL message id, rendered in the UI language.
@@ -69,7 +70,10 @@ impl Bloatware {
 ///
 /// The carrier apps come from the *Universal Android Debloater* carriers list
 /// (github.com/MuntashirAkon/android-debloat-list), which marks them as safe to
-/// delete; apps whose name is only the package id there are shown by it.
+/// delete; apps whose name is only the package id there are shown by it. The
+/// operator telemetry components at the end come from *TelemetryCleaner*
+/// (github.com/Eynnzerr/TelemetryCleaner) and are named after the vendor that
+/// ships them.
 pub const BLOATWARE: &[Bloatware] = &[
     translated("com.zui.browser", "bloatware-app-browser"),
     translated("com.lenovo.menu_assistant", "bloatware-app-tianxi-agent"),
@@ -388,6 +392,27 @@ pub const BLOATWARE: &[Bloatware] = &[
         "bloatware-app-wild-rift-global",
     ),
     translated("com.tencent.lolm", "bloatware-app-lol-cn"),
+    // Carrier terminal-management components that Chinese OEM firmware
+    // preinstalls: they run in the background, collect device and app data for
+    // the operator, and have no app icon. Each vendor ships its own build of
+    // the same component, so the vendor is part of the name.
+    translated("cn.nubia.register", "bloatware-app-register-application-nubia"),
+    translated("com.coloros.regservice", "bloatware-app-regservice-coloros"),
+    translated("com.hihonor.android.AutoRegSms", "bloatware-app-autoregsms-honor"),
+    translated("com.hihonor.android.UEInfoCheck", "bloatware-app-ueinfocheck-honor"),
+    translated("com.hihonor.regservice", "bloatware-app-regservice-honor"),
+    translated("com.huawei.android.AutoRegSms", "bloatware-app-autoregsms-huawei"),
+    translated("com.huawei.android.UEInfoCheck", "bloatware-app-ueinfocheck-huawei"),
+    translated("com.huawei.regservice", "bloatware-app-regservice-huawei"),
+    translated("com.meizu.regservice", "bloatware-app-regservice-meizu"),
+    translated("com.miui.analytics", "bloatware-app-analytics-xiaomi"),
+    translated("com.miui.dmregservice", "bloatware-app-regservice-xiaomi"),
+    translated("com.miui.misightservice", "bloatware-app-misight-service"),
+    translated("com.mobiletools.systemhelper", "bloatware-app-systemhelper"),
+    translated("com.oppo.ctautoregist", "bloatware-app-ctautoregist"),
+    translated("com.vivo.devicereg", "bloatware-app-device-management-vivo"),
+    translated("com.xiaomi.registration", "bloatware-app-autoregistration-xiaomi"),
+    translated("com.xiaomi.security.onetrack", "bloatware-app-security-onetrack"),
 ];
 
 /// What `adb devices` says a connected device is doing.

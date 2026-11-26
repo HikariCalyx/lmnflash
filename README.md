@@ -282,7 +282,7 @@ handler, so the built-in WebView is still used then.
 
 ## Remove System Bloatware
 
-The **Remove System Bloatware** tile removes apps that Lenovo and Motorola
+The **Remove System Bloatware** tile removes apps that OEMs and carriers
 preinstall on their phones and tablets. It works on any Android device with
 **USB debugging** enabled — fastboot is not involved.
 
@@ -294,11 +294,16 @@ vendors' QuickApp engines), the apps that come with operator builds — the ~200
 entries marked as safe to delete in the *Universal Android Debloater*
 [carriers list](https://github.com/MuntashirAkon/android-debloat-list) (AT&T,
 Verizon, Sprint, T-Mobile, Rogers, Bell, Orange, SFR, Bouygues, Telekom, EE,
-NTT Docomo, …) — and the store apps and games that get bundled with them (Temu,
-Genshin Impact, PUBG Mobile, Honor of Kings, Arena of Valor, Onmyoji, Delta
-Force, League of Legends: Wild Rift, …). A carrier app's name is a product name
-and is shown the way that list spells it; a game is named per region and
-language (Genshin Impact / 原神), so those names are translated.
+NTT Docomo, …) — the carrier terminal-management components that Chinese OEM
+firmware preinstalls in the background (SystemHelper, RegService, AutoRegSms,
+UEInfoCheck, …), taken from
+[TelemetryCleaner](https://github.com/Eynnzerr/TelemetryCleaner) — and the
+store apps and games that get bundled with them (Temu, Genshin Impact, PUBG
+Mobile, Honor of Kings, Arena of Valor, Onmyoji, Delta Force, League of
+Legends: Wild Rift, …). A carrier app's name is a product name and is shown the
+way that list spells it; a game is named per region and language (Genshin
+Impact / 原神), and a component is named after the vendor that ships it (Huawei
+/ 华为), so those names are translated.
 
 Pressing the tile's button opens a dialog that:
 
